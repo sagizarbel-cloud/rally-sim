@@ -1,0 +1,441 @@
+extends Node3D
+## M0 bootstrap. Builds the whole scene in code (robust + version-controllable):
+## input map, lighting/sky, a flat ground plane, the vehicle, chase camera, and HUD.
+## Later milestones swap the flat ground for terrain (M5) and a deformable patch (M3).
+
+const GROUND_SIZE := 4000.0
+
+var _chase_cam: Camera3D
+var _cockpit_cam: Camera3D        # driver's-eye view (rigidly attached to the car)
+var _dash_cam: Camera3D           # dash-mounted forward view (rigidly attached)
+var _hood_cam: Camera3D           # bonnet view (rigidly attached to the car)
+var _rear_cam: Camera3D           # rear-facing camera feeding the cockpit rear-view mirror overlay
+var _mirror_layer: CanvasLayer    # the mirror panel; shown only in cockpit view
+var _cam_mode := 0                # 0 = chase, 1 = cockpit, 2 = dash, 3 = bonnet
+var _car                          # the vehicle (untyped so get_wheels() resolves dynamically)
+var _stage                        # RallyStage, for the base surface type (skid marks are asphalt-only)
+var _sun: DirectionalLight3D      # M10: the sun, cycled by time-of-day
+var _env: Environment
+var _sky_mat: ProceduralSkyMaterial
+var _tod := 0                     # time-of-day preset index
+
+const TOD := [
+	{"name": "NOON",    "rot": Vector3(-72, -40, 0),  "col": Color(1.0, 0.98, 0.95), "energy": 1.25, "top": Color(0.34, 0.50, 0.86), "horizon": Color(0.72, 0.82, 0.95), "ambient": 0.95},
+	{"name": "MORNING", "rot": Vector3(-28, -72, 0),  "col": Color(1.0, 0.90, 0.74), "energy": 1.05, "top": Color(0.40, 0.55, 0.85), "horizon": Color(0.86, 0.86, 0.84), "ambient": 0.85},
+	{"name": "EVENING", "rot": Vector3(-13, -118, 0), "col": Color(1.0, 0.58, 0.32), "energy": 1.15, "top": Color(0.28, 0.32, 0.58), "horizon": Color(0.95, 0.58, 0.35), "ambient": 0.6},
+	{"name": "NIGHT",   "rot": Vector3(-46, -30, 0),  "col": Color(0.55, 0.65, 0.95), "energy": 0.30, "top": Color(0.02, 0.03, 0.09), "horizon": Color(0.08, 0.11, 0.20), "ambient": 0.4},
+]
+var _tracks: Array = []           # pool of tire-mark quads (laid only on wheelspin, asphalt only)
+var _track_idx := 0
+var _mark_accum := 0.0
+var _dust: Array = []             # per-wheel dirt CPUParticles3D, emit on wheelspin
+
+func _ready() -> void:
+	Engine.max_fps = 144
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)    # smooth 60 on the built-in 60Hz panel (no tearing)
+	_setup_input()
+	_build_environment()
+	var stage = _build_stage()                   # untyped so get_spawn() resolves dynamically
+	_stage = stage
+	var car: RigidBody3D = _build_car()
+	_car = car
+	car.surface_source = stage                   # per-surface traction (asphalt grips > dirt > grass)
+	car.spawn_transform = stage.get_spawn()      # start on the road
+	car.respawn()
+	_build_wear(car, stage)                      # M6: surface degradation wraps grip_at (corners + braking zones)
+	_build_cameras(car)
+	_build_tracks()
+	_build_dust()
+	var hud := _build_hud(car)
+	_build_component_hud(car)
+	_build_pacenotes(car, stage)
+	var tt := _build_timetrial(car, stage)
+	hud.time_trial = tt                          # HUD shows the active circuit's lap/last/best
+	_build_tuning(car)
+	_build_rearview(car)
+	_build_reactive_patch(car)
+	_build_sound(car, stage)
+
+func _build_tracks() -> void:
+	# a recycled pool of dark quads dropped under the wheels as the car moves
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.10, 0.07, 0.04, 0.55)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var quad := PlaneMesh.new(); quad.size = Vector2(0.26, 0.95)
+	for i in range(600):
+		var mi := MeshInstance3D.new()
+		mi.mesh = quad
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.visible = false
+		add_child(mi)
+		_tracks.append(mi)
+
+func _drop_track(pos: Vector3, nrm: Vector3, fwd: Vector3) -> void:
+	var mi: MeshInstance3D = _tracks[_track_idx]
+	_track_idx = (_track_idx + 1) % _tracks.size()
+	var y := nrm.normalized()
+	var zc := fwd - y * fwd.dot(y)
+	zc = zc.normalized() if zc.length() > 0.01 else Vector3.FORWARD
+	var xc := y.cross(zc).normalized()
+	zc = xc.cross(y).normalized()
+	mi.global_transform = Transform3D(Basis(xc, y, zc), pos + y * 0.02)
+	mi.visible = true
+
+func _build_dust() -> void:
+	# one dirt-spray emitter per wheel; positioned at the contact and emitting only on wheelspin
+	var mesh := QuadMesh.new(); mesh.size = Vector2(0.28, 0.28)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.56, 0.48, 0.34, 0.75)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mesh.material = mat
+	for i in range(4):
+		var p := CPUParticles3D.new()
+		p.mesh = mesh
+		p.emitting = false
+		p.amount = 18
+		p.lifetime = 0.6
+		p.direction = Vector3(0, 1, 0)
+		p.spread = 45.0
+		p.initial_velocity_min = 1.8
+		p.initial_velocity_max = 4.5
+		p.gravity = Vector3(0, -14, 0)
+		p.scale_amount_min = 0.5
+		p.scale_amount_max = 1.4
+		p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(p)
+		_dust.append(p)
+
+func _physics_process(delta: float) -> void:
+	if _car == null:
+		return
+	if Input.is_action_just_pressed("time_of_day"):
+		_tod = (_tod + 1) % TOD.size()
+		_apply_tod(_tod)
+	if _rear_cam != null:                                 # rear-view: back by the rear window (behind the seats), looking out
+		var rb: Transform3D = _car.global_transform
+		_rear_cam.look_at_from_position(rb * Vector3(0, 0.82, 0.78), rb * Vector3(0, 0.5, 25.0), rb.basis.y)
+
+	# tire marks + dirt spray ONLY when a wheel is spinning (slip) - shows wheelspin, even in place
+	_mark_accum += delta
+	var lay := _mark_accum > 0.04
+	if lay:
+		_mark_accum = 0.0
+	var car_fwd: Vector3 = -_car.global_transform.basis.z
+	var wheels: Array = _car.get_wheels()
+	for i in range(wheels.size()):
+		var w = wheels[i]
+		var spinning: bool = w.contact and w.slip > 0.35
+		if i < _dust.size():
+			var p: CPUParticles3D = _dust[i]
+			p.emitting = spinning
+			if spinning:
+				p.global_position = w.contact_point + Vector3.UP * 0.12
+		# skid marks only on ASPHALT (base grip > 1.2); dirt/gravel shows spin via particles + wear line
+		if spinning and lay and _stage != null and _stage.grip_at(w.contact_point.x, w.contact_point.z) > 1.2:
+			_drop_track(w.contact_point, w.contact_normal, car_fwd)
+
+func _build_sound(car: Node3D, stage) -> void:
+	var snd: Node = load("res://scripts/sound.gd").new()
+	snd.name = "Sound"
+	add_child(snd)
+	snd.car = car
+	snd.world = self       # for the interior (cockpit/dash) muffle
+	snd.stage = stage      # base surface type for the tyre-audio split (independent of wear)
+
+func _build_pacenotes(car: Node3D, stage) -> void:
+	var pn: CanvasLayer = load("res://scripts/pace_notes.gd").new()
+	pn.name = "PaceNotes"
+	pn.car = car
+	pn.stage = stage        # reads the road geometry to detect + call corners
+	add_child(pn)
+
+func _build_component_hud(car: Node3D) -> void:
+	var cl := CanvasLayer.new()
+	cl.name = "ComponentHUD"
+	cl.layer = 3
+	var ch: Control = load("res://scripts/component_hud.gd").new()
+	ch.car = car                 # top-down schematic: tyre + engine temps, punctures, wear
+	cl.add_child(ch)
+	add_child(cl)
+
+func _build_wear(car: Node3D, stage) -> void:
+	var wn: Node = load("res://scripts/wear.gd").new()
+	wn.name = "Wear"
+	wn.car = car
+	wn.stage = stage
+	add_child(wn)
+	car.surface_source = wn   # grip queries now flow through wear (which wraps stage.grip_at)
+
+func _build_timetrial(car: Node3D, stage) -> Node3D:
+	var tt: Node3D = load("res://scripts/time_trial.gd").new()
+	tt.name = "TimeTrial"
+	tt.car = car            # records the best lap + replays a ghost to chase
+	tt.stage = stage        # for get_spawn_for() when toggling circuits
+	add_child(tt)
+	return tt
+
+func _build_reactive_patch(car: Node3D) -> void:
+	# small deformable dirt patch in the CENTRE (M3 reactive terrain). It sits on the stage's flat
+	# centre disc (bed 0.15 above the graded ground), so the wheels dig ruts / kick berms there.
+	var patch: Node = load("res://scripts/terrain.gd").new()
+	patch.name = "ReactivePatch"
+	patch.zone_center = Vector3(0, 0, 0)          # set BEFORE add_child so its _ready() uses them
+	patch.track_center = Vector3(0, 0, 0)
+	patch.zone_size = 150.0                        # bigger centre dirt area (+20 m each side)
+	add_child(patch)
+	patch.vehicle = car                            # feeds get_wheels()/velocity for the dig model
+
+func _build_stage() -> Node:
+	# M5 procedural rally stage (elevated terrain + winding road). Replaces the old flat
+	# ground / test course / deformable dirt field (those remain in the repo for reference).
+	var stage: Node = load("res://scripts/stage.gd").new()
+	stage.name = "Stage"
+	add_child(stage)
+	return stage
+
+func _build_tuning(car: Node) -> void:
+	var panel: CanvasLayer = load("res://scripts/tuning_panel.gd").new()
+	panel.name = "TuningPanel"
+	panel.vehicle = car
+	add_child(panel)
+
+func _build_course() -> void:
+	var course: Node3D = load("res://scripts/course.gd").new()
+	course.name = "Course"
+	add_child(course)
+
+# ---------------------------------------------------------------------------
+# Input (defined in code so it's self-contained and works headless).
+# Keyboard + Xbox/PS gamepad. WASD/arrows + triggers/left-stick.
+# ---------------------------------------------------------------------------
+func _setup_input() -> void:
+	_add_keys("throttle",   [KEY_W, KEY_UP])
+	_add_keys("brake",      [KEY_S, KEY_DOWN])
+	_add_keys("steer_left", [KEY_A, KEY_LEFT])
+	_add_keys("steer_right",[KEY_D, KEY_RIGHT])
+	_add_keys("handbrake",  [KEY_SPACE])
+	_add_keys("reset",      [KEY_R])
+	_add_keys("camera_toggle", [KEY_C])
+	_add_keys("tuning_toggle", [KEY_TAB])
+	_add_keys("shift_up",   [KEY_E])
+	_add_keys("shift_down", [KEY_Q])
+	_add_keys("clutch",     [KEY_SHIFT])  # A1: clutch pedal, held = disengaged (manual-clutch mode)
+	_add_keys("ignition",   [KEY_I])      # A2: starter button - re-fires a stalled engine
+	_add_keys("hud_bigger",  [KEY_EQUAL, KEY_KP_ADD])
+	_add_keys("hud_smaller", [KEY_MINUS, KEY_KP_SUBTRACT])
+	_add_keys("drive_mode",  [KEY_T])
+	_add_keys("circuit_toggle", [KEY_B])
+	_add_keys("puncture_test", [KEY_P])   # debug: puncture a tyre to test the flat visual + vibration
+	_add_keys("time_of_day", [KEY_L])     # cycle noon/morning/evening/night
+
+	# Gamepad: RT throttle, LT brake, left stick X for steer.
+	_add_axis("throttle",    JOY_AXIS_TRIGGER_RIGHT, 1.0)
+	_add_axis("brake",       JOY_AXIS_TRIGGER_LEFT,  1.0)
+	_add_axis("steer_left",  JOY_AXIS_LEFT_X, -1.0)
+	_add_axis("steer_right", JOY_AXIS_LEFT_X,  1.0)
+	_add_button("handbrake", JOY_BUTTON_A)
+	_add_button("reset",     JOY_BUTTON_Y)
+	_add_button("camera_toggle", JOY_BUTTON_B)
+	_add_button("circuit_toggle", JOY_BUTTON_X)
+	_add_button("shift_up",   JOY_BUTTON_RIGHT_SHOULDER)
+	_add_button("shift_down", JOY_BUTTON_LEFT_SHOULDER)
+	_add_button("drive_mode",    JOY_BUTTON_BACK)     # View button: AWD/RWD/FWD
+	_add_button("tuning_toggle", JOY_BUTTON_START)    # Menu button: tuning panel
+	_add_button("hud_bigger",    JOY_BUTTON_DPAD_UP)
+	_add_button("hud_smaller",   JOY_BUTTON_DPAD_DOWN)
+
+	# analog deadzones: triggers rest at 0 (small dz), sticks drift a little (a touch more)
+	InputMap.action_set_deadzone("throttle", 0.06)
+	InputMap.action_set_deadzone("brake", 0.06)
+	InputMap.action_set_deadzone("steer_left", 0.12)
+	InputMap.action_set_deadzone("steer_right", 0.12)
+
+func _ensure(action: String) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action, 0.2)
+
+func _add_keys(action: String, keys: Array) -> void:
+	_ensure(action)
+	for k in keys:
+		var e := InputEventKey.new()
+		e.physical_keycode = k
+		InputMap.action_add_event(action, e)
+
+func _add_axis(action: String, axis: JoyAxis, value: float) -> void:
+	_ensure(action)
+	var e := InputEventJoypadMotion.new()
+	e.axis = axis
+	e.axis_value = value
+	InputMap.action_add_event(action, e)
+
+func _add_button(action: String, button: JoyButton) -> void:
+	_ensure(action)
+	var e := InputEventJoypadButton.new()
+	e.button_index = button
+	InputMap.action_add_event(action, e)
+
+# ---------------------------------------------------------------------------
+# Scene construction
+# ---------------------------------------------------------------------------
+func _build_environment() -> void:
+	_sun = DirectionalLight3D.new()
+	_sun.shadow_enabled = true
+	add_child(_sun)
+
+	_env = Environment.new()
+	_env.background_mode = Environment.BG_SKY
+	var sky := Sky.new()
+	_sky_mat = ProceduralSkyMaterial.new()
+	sky.sky_material = _sky_mat
+	_env.sky = sky
+	_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	var we := WorldEnvironment.new()
+	we.environment = _env
+	add_child(we)
+	_apply_tod(_tod)
+
+func _apply_tod(i: int) -> void:
+	var p: Dictionary = TOD[i]
+	_sun.rotation_degrees = p["rot"]
+	_sun.light_color = p["col"]
+	_sun.light_energy = p["energy"]
+	_sky_mat.sky_top_color = p["top"]
+	_sky_mat.sky_horizon_color = p["horizon"]
+	_env.ambient_light_energy = p["ambient"]
+
+func _build_ground() -> void:
+	var body := StaticBody3D.new()
+	body.name = "Ground"
+	body.collision_layer = 1
+	body.collision_mask = 1 | 2 | 4
+
+	var col := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(GROUND_SIZE, 1.0, GROUND_SIZE)
+	col.shape = box
+	col.position = Vector3(0, -0.5, 0)
+	body.add_child(col)
+
+	var mesh := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(GROUND_SIZE, 1.0, GROUND_SIZE)
+	mesh.mesh = bm
+	mesh.position = Vector3(0, -0.5, 0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.34, 0.31, 0.27)  # dirt-ish
+	mesh.material_override = mat
+	body.add_child(mesh)
+
+	# faint reference grid (both axes) so motion + distance read clearly
+	var gmat := StandardMaterial3D.new()
+	gmat.albedo_color = Color(0.46, 0.43, 0.38)
+	for i in range(-20, 21):
+		for axis in range(2):
+			var line := MeshInstance3D.new()
+			var lb := BoxMesh.new()
+			lb.size = Vector3(0.2, 0.02, GROUND_SIZE) if axis == 0 else Vector3(GROUND_SIZE, 0.02, 0.2)
+			line.mesh = lb
+			line.position = Vector3(i * 100.0, 0.02, 0) if axis == 0 else Vector3(0, 0.02, i * 100.0)
+			line.material_override = gmat
+			body.add_child(line)
+
+	add_child(body)
+
+func _build_car() -> RigidBody3D:
+	var VehicleScript := load("res://scripts/vehicle_m2.gd")
+	var car: RigidBody3D = VehicleScript.new()
+	car.name = "Vehicle"
+	add_child(car)
+	return car
+
+func _build_cameras(car: Node3D) -> void:
+	_chase_cam = load("res://scripts/chase_camera.gd").new()
+	_chase_cam.name = "ChaseCamera"
+	add_child(_chase_cam)
+	_chase_cam.target = car
+
+	# Both interior cams are rigidly bolted to the car (roll/pitch with it) for speed feel.
+	# Cockpit: driver's eye (LHD -> left), higher seat, close to the wheel/dash.
+	_cockpit_cam = Camera3D.new()
+	_cockpit_cam.name = "CockpitCamera"
+	_cockpit_cam.position = Vector3(-0.35, 0.72, 0.16)
+	_cockpit_cam.rotation_degrees = Vector3(-10, 0, 0)
+	_cockpit_cam.fov = 85.0
+	car.add_child(_cockpit_cam)
+
+	# Dash: centred, on top of the dashboard looking forward (for a future gauge readout).
+	_dash_cam = Camera3D.new()
+	_dash_cam.name = "DashCamera"
+	_dash_cam.position = Vector3(-0.35, 0.82, 0.08)
+	_dash_cam.rotation_degrees = Vector3(-12, 0, 0)
+	_dash_cam.fov = 86.0
+	car.add_child(_dash_cam)
+
+	# Bonnet: sits at the base of the windshield looking forward OVER the hood + scoop.
+	_hood_cam = Camera3D.new()
+	_hood_cam.name = "HoodCamera"
+	_hood_cam.position = Vector3(0.0, 0.62, -0.85)
+	_hood_cam.rotation_degrees = Vector3(-10, 0, 0)
+	_hood_cam.fov = 104.0
+	car.add_child(_hood_cam)
+
+	_apply_camera()
+
+func _apply_camera() -> void:
+	_chase_cam.current = (_cam_mode == 0)
+	_cockpit_cam.current = (_cam_mode == 1)
+	_dash_cam.current = (_cam_mode == 2)
+	_hood_cam.current = (_cam_mode == 3)
+	if _mirror_layer != null:
+		_mirror_layer.visible = (_cam_mode == 1 or _cam_mode == 2)   # mirror in cockpit + dash views
+
+func _process(_delta: float) -> void:
+	if Input.is_action_just_pressed("camera_toggle"):
+		_cam_mode = (_cam_mode + 1) % 4
+		_apply_camera()
+
+func _build_hud(car: Node3D) -> CanvasLayer:
+	var hud: CanvasLayer = load("res://scripts/hud.gd").new()
+	hud.name = "HUD"
+	add_child(hud)
+	hud.car = car
+	return hud
+
+func _build_rearview(_car_ref: Node3D) -> void:
+	# In-cockpit rear-view mirror, drawn as a 2D SubViewportContainer overlay (the container path
+	# renders reliably; a ViewportTexture on a 3D quad renders black on Metal). Top-centre of the
+	# screen, mirror-flipped, and shown only in cockpit view.
+	_mirror_layer = CanvasLayer.new()
+	_mirror_layer.name = "MirrorOverlay"
+	_mirror_layer.visible = (_cam_mode == 1 or _cam_mode == 2)
+	add_child(_mirror_layer)
+	# dark mirror housing behind the glass
+	var frame := ColorRect.new()
+	frame.color = Color(0.03, 0.03, 0.04)
+	frame.anchor_left = 0.5; frame.anchor_right = 0.5
+	frame.offset_left = -86; frame.offset_right = 286       # shifted right of centre
+	frame.offset_top = 8; frame.offset_bottom = 120
+	_mirror_layer.add_child(frame)
+	var cont := SubViewportContainer.new()
+	cont.stretch = true
+	cont.anchor_left = 0.5; cont.anchor_right = 0.5
+	cont.offset_left = -80; cont.offset_right = 280         # 360 wide, shifted right
+	cont.offset_top = 12; cont.offset_bottom = 116          # 104 tall
+	cont.pivot_offset = Vector2(180, 52)                    # flip around the panel centre...
+	cont.scale = Vector2(-1, 1)                             # ...so the mirror image is left-right reversed
+	_mirror_layer.add_child(cont)
+	var vp := SubViewport.new()
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	vp.own_world_3d = false                                 # share the MAIN world (real geometry)
+	cont.add_child(vp)
+	_rear_cam = Camera3D.new()
+	_rear_cam.fov = 72.0
+	_rear_cam.far = 600.0
+	vp.add_child(_rear_cam)
+	_rear_cam.make_current()

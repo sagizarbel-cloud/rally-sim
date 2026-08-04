@@ -1,0 +1,88 @@
+# Rally Sim — Roadmap & Working Notes
+
+_Last updated: 2026-07-28. Living document — future sessions should read this first, then verify against current code._
+
+Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt**, built procedurally in code, grounded in real vehicle-dynamics literature. Design philosophy: **improve realism and fun through physical functions, not by tuning magic-number constants.**
+
+**ACTIVE PLAN (2026-08-02): `docs/PLAN-drivetrain-suspension.md`** — phased, self-contained execution plan: 120 Hz tick + virtual pedals, then drivetrain arc (engine inertia/clutch/neutral, emergent engine braking, Salisbury + selectable diffs + centre coupling, shift model + assists, handbrake), then suspension arc (derived setup, digressive dampers, bump stops, relaxation length). Execute it phase-by-phase before picking other milestones.
+
+---
+
+## Where the project is (systems in place)
+
+- **Vehicle** (`scripts/vehicle_m2.gd`): RigidBody3D + raycast suspension. Full **slip-ratio drivetrain** (per-wheel ω, Magic-Formula longitudinal via slip ratio + lateral via slip angle, **combined-slip friction ellipse**, load-sensitive grip `_mu_load`, viscous LSD, centre diff, AWD/RWD/FWD, manual 6-speed + reverse). Anti-roll bars, camber, emergent weight transfer.
+- **Stage** (`scripts/stage.gd`): procedural rolling-hill heightmap. Three concentric circuits + a drag strip, all centred at origin: **dirt rally loop** `_road(θ)=168+42·sin3θ+24·sin5θ`, **outer asphalt ring** `_asphalt_r(θ)` (~300, Monte-Carlo-inspired winding, abrupt shoulder + kerb), **centre deformable dirt patch** (radius 55), **~1.4 km drag strip** spur. Per-surface grip `grip_at()`: asphalt 1.45 > dirt 1.0 > grass 0.8.
+- **Audio** (`scripts/sound.gd`): steady engine drone loop pitched by rpm (ceiling **derived from redline**, not a constant); surface-aware tyre rumble + slide; cabin low-pass muffle in interior views. Raw-WAV parser bypasses Godot's truncating importer.
+- **HUD** (`scripts/hud.gd`): rev bar, shift light, G-meter, per-wheel Fz/slipR/slipA/grip; reads lap timing from the time-trial node. In-cabin rev bar on the binnacle.
+- **Co-driver pace notes** (`scripts/pace_notes.gd`): corners detected procedurally from road curvature + elevation → rally notes (dir, severity 1–6, long/tightens/opens/crest/into), **spoken via OS TTS** + on-screen. Dirt loop only for now.
+- **Time-trial ghost** (`scripts/time_trial.gd`): best-lap recording + translucent ghost, **3 concentric circuits** (`[B]` toggles + respawns), per-circuit best, live time delta, survives respawn.
+- **Rear-view mirror** (2D SubViewport overlay — ViewportTexture is black on 3D/Metal). Real directional-light cast shadow.
+
+**Flagship deformable terrain** (`scripts/terrain.gd`): GPU height-displacement + per-tile HeightMapShape3D collider, speed-independent Bekker dig + wheelspin excavation + berms. **Working, but currently only on the centre patch — not wired to the main stage.**
+
+## Already solid — do NOT redo
+- Core cornering physics is **mature**: combined-slip Pacejka + friction ellipse + load sensitivity already implemented (`vehicle_m2.gd:605-616`). Do not propose "add a friction ellipse" — refine, don't rebuild.
+- Engine-audio approach is settled (steady loop + pitch). The future upgrade is a multi-sample rpm crossfade, gated on the user supplying labeled steady-rpm clips. See `[[rally-sim-engine-audio]]`.
+
+---
+
+## Milestones (prioritized)
+
+### Tier 1 — Rally depth (highest payoff; reuses tech already built)
+
+**M6 — Surface degradation on the stage.** Repeated runs wear the line at corners so grip evolves and a racing line emerges.
+- **Phase 1 — DONE (2026-07-28..29), `scripts/wear.gd`:** VISUAL + GRIP only (no 3D deformation — that's Phase 2). **Mark ownership by surface (design call 2026-07-29):** DIRT rally loop = wear line (this system) + dust particles, NO skid marks; ASPHALT ring = skid marks (`world.gd _drop_track`) only, NO wear line; centre deformable dirt = real ruts, NO skid marks. Skid marks are gated in `world.gd _physics_process` by `_stage.grip_at() > 1.2` (asphalt-only; base grip, not wear-modified). Wear field on the dirt loop over **corners + braking zones** (`curv_min` 0.018, `brake_dist`; ~23%, ~5.9k cells). Wheel work (slip + slip angle) accumulates along the wheel's contact SEGMENT (bridges bumps/air-gaps up to 5 m → continuous line, no interval dashing). Node **wraps `grip_at()`** (vehicle `surface_source`) so the swept line gains grip (`wear_grip` +0.25). MultiMesh overlay: **road-aligned, cell-sized quads** (unit plane scaled/oriented per cell), `lat_bins=24`/`arc_samples=1080` (~0.4 m lateral), dark worn-dirt tint. `sound.gd` takes `stage` so the tyre-audio split uses BASE grip. Wear persists across respawn.
+- **v1/v2 TODO (from user):** replace the grid-cell quads with a **track-aligned textured trail** (a decal following the actual driven path), not grid-aligned cells.
+- **Phase 2 — next:** validate/tune the feel (grip direction + magnitude), then drive real geometry ruts from the same wear field (reuse `terrain.gd`), and consider whole-loop coverage once feel + perf are proven.
+- Tunables on the Wear node: `curv_min` (coverage), `brake_dist`, `wear_rate`, `wear_full`, `wear_grip` (sign/magnitude), `lat_extent`.
+
+**M7 — Tyre & consumables. — DONE (2026-07-29), `vehicle_m2.gd`.** Per-wheel **temperature + wear + puncture**, folded into the Magic-Formula `mu` (both `mux` sites × `w.tyre_grip`). Temp: friction-power heating + airflow cooling; grip peaks at `optimal_temp` (85°C→1.0), falls to `cold_grip` (**0.95** — gentle; 0.80 stranded the car on grass since it multiplies with grass_grip 0.8) cold and `overheat_grip` (0.80) hot. Wear: accumulates from tyre work (faster when hot), grip → `worn_grip` (0.70) at 100%. Puncture: wear-blowout always; hard-hit puncture gated by `impact_punctures` (**false by default** — the Fz proxy is unreliable because the anti-roll bars inflate `Fz` past the 20000 suspension clamp, up to ~40000, so respawn landings were puncturing). Grip → `puncture_grip` (0.35). A cleaner hard-hit trigger (e.g. suspension bottom-out) is TODO before re-enabling. `tyre_wear_rate` 0.006→0.002 (slower, ~15 min hard stint to blow). Punctured tyre gets a **deflated visual** (`puncture_flat` — squash vertically + sit lower on the rim) and a **speed-scaled vertical jitter** at that corner (`puncture_shake`, feels like little bumps). **`[P]` debug key** punctures the next intact tyre (R resets) to test the visual/vibration. Punctured tyre also plays a low procedural flap/rumble (`sound.gd _make_puncture`, louder+faster with speed). **Component HUD** (`scripts/component_hud.gd`, top-right, player-facing, separate from the debug text): top-down car schematic — 4 wheel rects + an engine square, each coloured by temperature (blue→green→yellow→orange→red; RED = flat tyre), tyres darken from the bottom with wear. Engine now has a temperature gauge (`_engine_temp`, heats with rpm×throttle / cools with airflow, exposed via `get_engine().temp`; **visual-only, no power penalty yet**). Diff / other components: overlay is structured to add them once modeled. Reset (R) = fresh tyres. HUD shows per-wheel temp/wear/PUNCTURE; tuning panel (Tab) exposes optimal_temp/heat/cool/wear rates/worn_grip/cold_grip/puncture_load; `tyres_enabled` master toggle. NOT drive-tested — thermal balance (heat vs cool rates) needs tuning by driving; note the cold-start grip penalty (0.80 until warmed). Compound choice deferred. No rock objects, so hard-hit puncture uses an Fz spike as the proxy.
+
+**M8 — Damage model. DONE v1 (2026-07-30), `vehicle_m2.gd`.** Impact detection = a crash-level HORIZONTAL deceleration spike (`impact_threshold` 45 m/s²; braking/cornering/landings stay below — landings are vertical, excluded). `_damage` 0..1 accumulates by severity (`damage_gain`). Consequences: **power loss** (`damage_power_loss` ×engine torque), **grip loss** (`damage_grip_loss` ×mu at all 3 mux/muy sites), **steering pull** (`damage_steer_pull` × `_pull_dir`, direction = the side the last big hit came from). Repaired on respawn (R). Component HUD shows a **DAMAGE %** bar (green→red). Tuning-panel sliders added. **Cosmetic mesh deform = future** (big job). Test by ramming a roadside post.
+
+### Tier 2 — Game loop / immersion
+
+**M9 — Pace notes everywhere. DONE v1 (2026-07-30), `pace_notes.gd`.** Refactored single-route → a list of routes; builds notes for the **dirt loop AND the asphalt ring**, and each frame picks whichever circuit you're on (nearest centreline within `on_route_dist`), calling ITS corners. Asphalt uses `curv_min_asph` 0.003 (big radius) + `asph_sev_scale` 0.30 (its big-radius corners are FAST → scale radius down for severity). NB the asphalt ring is near-convex, so its corners are all one direction (correct) — a series of right-handers of varying severity. Centre skid-pad has no notes (constant curvature). **Not yet done:** sector/"finish" calls, real voice samples (still OS TTS).
+
+**M10 — Stage structure & splits. DONE v1 (2026-07-30).** (1) **Sector splits** (`time_trial.gd`): each lap split into 3 sectors by angle (θ thirds); mid-lap boundaries at θ=TAU/3, 2·TAU/3 record sectors 0,1, finish records sector 2. Per-circuit best sectors (`_best_sector`); each boundary flashes `S# time ±delta` coloured **purple = personal-best sector**, red = slower. The live position-based delta-vs-ghost already existed. (2) **Time-of-day** (`world.gd`): `[L]` cycles NOON/MORNING/EVENING/NIGHT presets (sun angle/colour/energy + sky top/horizon + ambient), applied to the stored `_sun`/`_env`/`_sky_mat`. **Not done: multi-stage sequence** (a stage-manager loading different stage configs in order — a bigger structural job, deferred).
+
+**M11 — Dust & smoke visuals.** Surface-aware particles (brown dust on dirt, grey tyre smoke on tarmac wheelspin) driven by the slip you already compute, plus longer-lasting skid marks. Makes the tuned physics **visible**. Effort **S–M.**
+
+**M12 — Rivals / medals / multiple ghosts.** Target times, medals, best + last ghost together. Effort **S–M.**
+
+### Tier 3 — Physics refinements & tech
+
+**Driven-wheel traction & torque delivery fix. DONE (2026-08-01), `vehicle_m2.gd`.** Root cause of runaway FWD wheelspin was threefold (NOT a post-peak curve collapse — the old curve held 91% of peak force at 375% slip): (1) fixed `Bx=10` put the longitudinal grip peak at **40% slip on every surface**, so full drive force *required* huge wheelspin; (2) a 0→1 throttle step delivered full gear-multiplied crank torque **in one physics tick** (~2000 N·m/front wheel vs a ~1160 N·m grip cap), and because engine rpm follows the driven wheels, spin climbed the torque curve 338→500 N·m (positive feedback until the limiter); (3) the explicit-Euler spin ODE was unstable for lightly-loaded wheels at low speed (chatter). Fixes, all physical: **Bx is now derived** from `peak_slip_tarmac` (0.14) / `peak_slip_gravel` (0.28) via the MF peak condition, blended per wheel by surface grip (worn dirt line drifts toward tarmac shape — packed line is emergent); **driveline torque delivery** is a first-order state `_t_drive` (`torque_rise_time` 0.25 s = clutch bite/intake/halfshaft windup, `torque_fall_time` 0.06 s so a lift restores grip immediately); **engine breathing** anchors WOT torque at `idle_torque_frac` (0.45) at idle instead of the old 68%; the spin ODE is **semi-implicit** (analytic `_mf_slope` linearises the tyre; LSD + brake stiffness included) — stable at any B/gear/speed; reflected engine inertia now **weighted by torque share** (AWD had 2× the physical value). Optional **traction control** (`tc_enabled`, default OFF, Tab-panel checkbox) trims torque toward `tc_slip_target` — an aid on top, not a crutch. New Tab sliders: peak slips, rise/fall times, idle torque, TC target. NOTE: at 500 N·m a FWD still out-torques front grip in 2nd–3rd on dirt at WOT (real for WRC power); for a true 205-GTI power-down feel drop Peak torque to ~250–300 on the existing slider — a car-spec choice, not a model nerf. Feel NOT yet drive-tested.
+
+**M13 — Aero downforce + self-aligning torque.** Downforce for high-speed grip on the asphalt ring; SAT for steering feel (and an FFB foundation). Effort **S–M.**
+
+**M14 — Force feedback** (gated on a wheel — see Q4). Effort **M.**
+
+**M15 — Physics tick 120 + calculated suspension from weight distribution.** Community norm for stable raycast vehicles is ≥120 Hz (currently default 60). Cheap stability win **but it changes vehicle feel → requires a re-tune**; keep functions-over-constants (derive spring/damper from mass + distribution). Effort **S + re-tune.**
+
+**M16 — Replay camera / photo mode.** Reuses the ghost's transform-recording infrastructure. Effort **S–M.**
+
+---
+
+## Prepared decision questions (for the next session)
+
+1. **Direction:** rally depth first (Tier 1) or game-loop/immersion (Tier 2)? _Recommendation: M6 surface degradation — signature feature, revives the flagship terrain._
+2. **M6 scope:** carve ruts around the **whole loop**, or only **corners + braking zones** (cheaper, higher impact-per-metre)?
+3. **M7 scope:** full temperature + wear + punctures, or just **wear → grip** to start?
+4. **Hardware:** do you have a **racing wheel**? (Gates M14 FFB priority and shapes M13 SAT work.)
+5. **Audio:** will you provide **labeled steady-rpm clips** (idle / mid / high) so we can do the multi-sample engine crossfade?
+
+## Ready-to-paste kickoff prompts
+
+- **M6:** "Start M6 surface degradation. Wire the deformable terrain (`terrain.gd`) to the dirt rally loop so repeated runs carve ruts that feed into `grip_at()`. Read `docs/ROADMAP.md`. First propose whole-loop vs corners-only and a perf plan (tile streaming along the corridor), then implement and verify headless."
+- **M7:** "Start M7 tyre model. Add tyre temperature + wear that evolve the friction-ellipse `mu` over a stage, plus punctures on hard hits. Expose the new params in the tuning panel (Tab)."
+- **M11:** "Start M11 dust & smoke. Upgrade the particle/skid-mark system to be surface-aware (dust on dirt, smoke on tarmac wheelspin), intensity driven by per-wheel slip, with longer-lasting marks."
+
+## Working patterns (how to get good results in this repo)
+
+- **Verify headless:** `"/Users/sgyzrbl/Downloads/Godot.app/Contents/MacOS/Godot" --headless --path ~/rally-sim --quit-after N 2>&1 | grep -iE "error|SCRIPT ERROR|Parse Error"`. Windowed run is only needed for TTS / audio / `frame_post_draw`. For geometry, add a temporary probe print, validate, then remove it.
+- **Functions over constants** (`[[prefer-functions-over-constants]]`): e.g. redline-derived engine-pitch ceiling, load-sensitive grip, per-mode CoM shift. Always prefer a physical function to a tuned magic number.
+- **Audio samples** (`[[rally-sim-engine-audio]]`): convert with `afconvert -f WAVE -d LEI16@22050 -c 1 in.mp3 out.wav`; check steadiness with an RMS + zero-cross-rate bucket dump; want **steady loops**, not sweeps/blips; the raw-WAV parser in `sound.gd` bypasses Godot's importer (which truncates).
+- **GDScript gotchas:** `:=` cannot infer from a Variant (untyped `stage.*` calls) → use `var x: Type = …`; unshaded `StandardMaterial3D` ignores emission (toggle `albedo_color`); macOS has no `timeout` (use `--quit-after N`).
+- **Geometry trick:** the three circuits are concentric, so they share the θ=0 finish ray and are disambiguated by disjoint radius bands (see `time_trial.gd` RMIN/RMAX).
+- **User workflow:** the user drives each change and gives feel feedback; prefers iterative milestones, live tuning sliders (Tab), and fun over strict realism where they conflict. Take control of their PC as little as possible — prefer headless verification.
