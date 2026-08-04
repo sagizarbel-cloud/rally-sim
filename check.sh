@@ -2,7 +2,8 @@
 # Headless compile/parse gate for the rally-sim Godot project.
 # No-ops instantly when no .gd files changed since the last clean check (so it's cheap to run every turn).
 set -u
-GODOT="/Users/sgyzrbl/Downloads/Godot.app/Contents/MacOS/Godot"
+# Override with:  GODOT=/path/to/godot ./check.sh   (default = this Mac's install)
+GODOT="${GODOT:-/Users/sgyzrbl/Downloads/Godot.app/Contents/MacOS/Godot}"
 PROJ="/Users/sgyzrbl/rally-sim"
 MARKER="$PROJ/.last_check"
 cd "$PROJ" || exit 0
