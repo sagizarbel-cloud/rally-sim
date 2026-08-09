@@ -237,21 +237,28 @@ func _setup_input() -> void:
 	_add_keys("diff_preset_2", [KEY_2, KEY_KP_2])   # swappable mid-drive for back-to-back
 	_add_keys("diff_preset_3", [KEY_3, KEY_KP_3])   # comparison on the same corner
 
-	# Gamepad: RT throttle, LT brake, left stick X for steer.
-	_add_axis("throttle",    JOY_AXIS_TRIGGER_RIGHT, 1.0)
-	_add_axis("brake",       JOY_AXIS_TRIGGER_LEFT,  1.0)
-	_add_axis("steer_left",  JOY_AXIS_LEFT_X, -1.0)
+	# --- Gamepad: Assetto-Corsa-style rally layout (PS4 DualShock 4 names in comments;
+	# Godot's A/B/X/Y are SDL positions, so on a DS4 they read Cross/Circle/Square/Triangle).
+	# Driving lives on triggers + shoulders + face buttons; everything utility sits on the
+	# d-pad, the menu buttons and the stick clicks so nothing important is a thumb-slip away.
+	_add_axis("throttle",    JOY_AXIS_TRIGGER_RIGHT, 1.0)      # R2
+	_add_axis("brake",       JOY_AXIS_TRIGGER_LEFT,  1.0)      # L2
+	_add_axis("steer_left",  JOY_AXIS_LEFT_X, -1.0)            # left stick
 	_add_axis("steer_right", JOY_AXIS_LEFT_X,  1.0)
-	_add_button("handbrake", JOY_BUTTON_A)
-	_add_button("reset",     JOY_BUTTON_Y)
-	_add_button("camera_toggle", JOY_BUTTON_B)
-	_add_button("circuit_toggle", JOY_BUTTON_X)
-	_add_button("shift_up",   JOY_BUTTON_RIGHT_SHOULDER)
-	_add_button("shift_down", JOY_BUTTON_LEFT_SHOULDER)
-	_add_button("drive_mode",    JOY_BUTTON_BACK)     # View button: AWD/RWD/FWD
-	_add_button("tuning_toggle", JOY_BUTTON_START)    # Menu button: tuning panel
-	_add_button("hud_bigger",    JOY_BUTTON_DPAD_UP)
-	_add_button("hud_smaller",   JOY_BUTTON_DPAD_DOWN)
+	_add_button("shift_up",   JOY_BUTTON_RIGHT_SHOULDER)       # R1
+	_add_button("shift_down", JOY_BUTTON_LEFT_SHOULDER)        # L1
+	_add_button("handbrake",  JOY_BUTTON_A)                    # Cross - rally standard
+	_add_button("clutch",     JOY_BUTTON_X)                    # Square (hold = disengaged)
+	_add_button("ignition",   JOY_BUTTON_B)                    # Circle - starter button
+	_add_button("camera_toggle", JOY_BUTTON_Y)                 # Triangle
+	_add_button("circuit_toggle", JOY_BUTTON_DPAD_LEFT)
+	_add_button("time_of_day",    JOY_BUTTON_DPAD_RIGHT)
+	_add_button("hud_bigger",     JOY_BUTTON_DPAD_UP)
+	_add_button("hud_smaller",    JOY_BUTTON_DPAD_DOWN)
+	_add_button("drive_mode",    JOY_BUTTON_BACK)     # Share: AWD/RWD/FWD
+	_add_button("tuning_toggle", JOY_BUTTON_START)    # Options: tuning panel
+	_add_button("reset",             JOY_BUTTON_RIGHT_STICK)   # R3 - deliberate, never a slip
+	_add_button("diff_preset_next",  JOY_BUTTON_TOUCHPAD)      # touchpad click: cycle 1/2/3
 
 	# analog deadzones: triggers rest at 0 (small dz), sticks drift a little (a touch more)
 	InputMap.action_set_deadzone("throttle", 0.06)

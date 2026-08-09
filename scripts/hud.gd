@@ -41,19 +41,31 @@ func _process(delta: float) -> void:
 	_g_lon = lerpf(_g_lon, accel.dot(fwd) / 9.81, 0.25)
 	_g_lat = lerpf(_g_lat, accel.dot(right) / 9.81, 0.25)
 
+	var eng := {}
+	if car.has_method("get_engine"):
+		eng = car.get_engine()
+
 	var lines := PackedStringArray()
 	if car.has_method("get_engine"):
 		lines.append("RALLY SIM - M2  (slip-ratio drivetrain)     fps %d" % Engine.get_frames_per_second())
 	else:
 		lines.append("RALLY SIM - M1  (raycast wheels + brush tire)     fps %d" % Engine.get_frames_per_second())
+	# which input device is actually live - a pad that Godot can't see simply won't be listed
+	var pads := Input.get_connected_joypads()
+	if pads.is_empty():
+		lines.append("input     keyboard   (no gamepad detected)")
+	else:
+		lines.append("input     %s" % Input.get_joy_name(pads[0]))
 	lines.append("")
 	lines.append("speed     %7.1f km/h   (fwd %7.1f)" % [speed_kmh, fwd_kmh])
-	lines.append("throttle  %4.2f   brake %4.2f   steer %+4.2f" % [
-		Input.get_action_strength("throttle"),
-		Input.get_action_strength("brake"),
+	# pedal travel as the PHYSICS sees it (shaped from keys, or straight through from triggers)
+	lines.append("throttle  %4.2f   brake %4.2f   clutch %4.2f   steer %+4.2f" % [
+		float(eng.get("throttle", Input.get_action_strength("throttle"))),
+		float(eng.get("brake", Input.get_action_strength("brake"))),
+		float(eng.get("clutch", 0.0)),
 		steer])
 	if car.has_method("get_engine"):
-		var e: Dictionary = car.get_engine()
+		var e: Dictionary = eng
 		var g := int(e["gear"])
 		var gtxt := "N"                      # A1 gear map: -1 = R, 0 = N, 1..6 forward
 		if g == -1:

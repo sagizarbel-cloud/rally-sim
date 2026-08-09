@@ -648,9 +648,9 @@ func apply_diff_preset(i: int) -> void:
 		if k != "name":
 			set(k, p[k])
 
-func diff_preset_name() -> String:
-	# report which preset the CURRENT values match, so the HUD can't claim a preset the user
-	# has since tuned away from with the Tab sliders
+func diff_preset_index() -> int:
+	# which preset the CURRENT values match (-1 = none), so nothing can claim a preset the
+	# user has since tuned away from with the Tab sliders
 	for i in range(DIFF_PRESETS.size()):
 		var p: Dictionary = DIFF_PRESETS[i]
 		var same := true
@@ -661,8 +661,14 @@ func diff_preset_name() -> String:
 				same = false
 				break
 		if same:
-			return "[%d]%s" % [i + 1, str(p["name"])]
-	return "CUSTOM"
+			return i
+	return -1
+
+func diff_preset_name() -> String:
+	var i := diff_preset_index()
+	if i < 0:
+		return "CUSTOM"
+	return "[%d]%s" % [i + 1, str(DIFF_PRESETS[i]["name"])]
 
 func _diff_transfer(dtype: int, dw: float, t_axle: float, power: bool, visc: float, pre_nm: float, p_ramp: float, c_ramp: float, imp: float) -> Vector2:
 	# A3: one axle differential. Returns (transfer torque, d/d(omega) slope for the implicit update).
@@ -838,10 +844,13 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_just_pressed("drive_mode"):
 		_drive_mode = (_drive_mode + 1) % 3
 		_apply_mode()
-	# [1]/[2]/[3]: swap the whole differential setup mid-drive for back-to-back comparison
+	# [1]/[2]/[3] (or the pad's touchpad click to cycle): swap the whole differential setup
+	# mid-drive for back-to-back comparison on the same corner
 	for pi in range(DIFF_PRESET_KEYS.size()):
 		if Input.is_action_just_pressed(DIFF_PRESET_KEYS[pi]):
 			apply_diff_preset(pi)
+	if Input.is_action_just_pressed("diff_preset_next"):
+		apply_diff_preset((diff_preset_index() + 1) % DIFF_PRESETS.size())   # CUSTOM (-1) -> [1]
 	var eff_split := torque_split
 	if _drive_mode == 1: eff_split = 1.0
 	elif _drive_mode == 2: eff_split = 0.0
@@ -1149,4 +1158,6 @@ func get_wheels() -> Array[Wheel]:
 	return _wheels
 
 func get_engine() -> Dictionary:
-	return {"rpm": _engine_rpm, "gear": _gear, "speed_kmh": linear_velocity.length() * 3.6, "mode": MODE_NAMES[_drive_mode], "temp": _engine_temp, "damage": _damage, "clutch": _clutch, "stalled": _stalled}
+	# pedals are the SHAPED states physics actually uses (analog triggers bypass the shaping),
+	# so a HUD reading them shows real pedal travel rather than the raw key/axis
+	return {"rpm": _engine_rpm, "gear": _gear, "speed_kmh": linear_velocity.length() * 3.6, "mode": MODE_NAMES[_drive_mode], "temp": _engine_temp, "damage": _damage, "clutch": _clutch, "stalled": _stalled, "throttle": _throttle_pedal, "brake": _brake_pedal}

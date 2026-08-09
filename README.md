@@ -23,12 +23,40 @@ engine + input + camera + HUD loop. The real vehicle model arrives in M1–M4.
 4. (Optional) Confirm the Jolt backend is active: **Project → Project Settings → Physics → 3D → Physics Engine** should read **Jolt Physics**. If it says "Godot Physics", the project still runs — just re-select Jolt.
 
 ## Controls
+
+Gamepad layout follows the Assetto Corsa rally convention (pedals on the triggers, gearbox on
+the shoulders, handbrake on the south face button). Button names below are **DualShock 4**;
+on an Xbox pad read Cross/Circle/Square/Triangle as A/B/X/Y.
+
+**Driving**
+
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Throttle | W / ↑ | Right Trigger |
-| Brake / Reverse | S / ↓ | Left Trigger |
-| Steer | A / D or ← / → | Left Stick X |
-| Reset car | R | Y |
+| Throttle | W / ↑ | R2 |
+| Brake | S / ↓ | L2 |
+| Steer | A / D or ← / → | Left stick |
+| Shift up | E | R1 |
+| Shift down (R–N–1..6) | Q | L1 |
+| Clutch (hold) | Left Shift | Square |
+| Handbrake | Space | Cross |
+| Ignition / starter | I | Circle |
+
+**Setup & views**
+
+| Action | Keyboard | Gamepad |
+|---|---|---|
+| Drive mode AWD/RWD/FWD | T | Share |
+| Diff preset open/viscous/rally | 1 / 2 / 3 | Touchpad click (cycles) |
+| Tuning panel | Tab | Options |
+| Camera | C | Triangle |
+| Circuit | B | D-pad left |
+| Time of day | L | D-pad right |
+| HUD size | − / + | D-pad up/down |
+| Reset car | R | R3 (right stick click) |
+
+Analog triggers bypass the virtual-pedal input shaping (which exists to make binary keys
+behave like a foot), so a gamepad gives direct pedal travel. The HUD's `input` line names the
+detected pad — if it reads `no gamepad detected`, Godot isn't seeing the controller.
 
 ## Project layout
 ```
