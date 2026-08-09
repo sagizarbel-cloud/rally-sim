@@ -68,7 +68,10 @@ func _process(delta: float) -> void:
 		if bool(e.get("stalled", false)):
 			shift = "   ** STALLED - [I] ignition **"
 		lines.append("gear  %s   rpm %5.0f %s%s" % [gtxt, rpm, _rev_bar(frac), shift])
-		lines.append("drive %s        G  lon %+4.2f  lat %+4.2f" % [str(e["mode"]), _g_lon, _g_lat])
+		var diff_txt := ""
+		if car.has_method("diff_preset_name"):
+			diff_txt = "  diff %-9s" % car.diff_preset_name()
+		lines.append("drive %s%s   G  lon %+4.2f  lat %+4.2f" % [str(e["mode"]), diff_txt, _g_lon, _g_lat])
 	if time_trial != null:
 		var ti: Dictionary = time_trial.active_info()
 		lines.append("%-12s lap %s  last %s  best %s" % [ti["name"], _fmt_time(ti["lap"]), _fmt_time(ti["last"]), _fmt_time(ti["best"])])
@@ -85,7 +88,7 @@ func _process(delta: float) -> void:
 			names[i], grounded, w.Fz / 1000.0, w.slip, rad_to_deg(w.slip_angle), w.temp, w.tyre_wear * 100.0, tail])
 
 	lines.append("")
-	lines.append("[W/S] gas/brake  [A/D] steer  [Q/E] gears (R-N-1..6)  [Shift] clutch  [T] AWD/RWD/FWD  [Space] handbrake  [C] cam  [B] circuit  [L] time  [P] test puncture  [Tab] tune  [-/+] hud  [R] reset")
+	lines.append("[W/S] gas/brake  [A/D] steer  [Q/E] gears (R-N-1..6)  [Shift] clutch  [I] ignition  [T] AWD/RWD/FWD  [1/2/3] diff open/visc/rally  [Space] handbrake  [C] cam  [B] circuit  [L] time  [P] test puncture  [Tab] tune  [-/+] hud  [R] reset")
 	_label.text = "\n".join(lines)
 
 func _fmt_time(t: float) -> String:

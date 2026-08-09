@@ -216,6 +216,41 @@ const BLIP_BAND := 40.0         # rad/s: throttle feathers off across this band 
 const DIFF_BAND := 1.0          # rad/s: smoothing width of a diff clutch's Coulomb transfer torque
 const DIFF_OPEN_FRICTION := 5.0 # N*m: parasitic spider-gear friction of an OPEN diff
 const DIFF_LOCKED_CAP := 10000.0 # N*m: "infinite" preload that implements LOCKED via the clutch path
+# A3 evaluation presets ([1]/[2]/[3]): three points spanning the diff character range, so the
+# difference can be felt corner-to-corner instead of reconstructed from single slider drags.
+# Drive mode ([T]) is deliberately NOT part of a preset - the two axes stay independent, so
+# any preset can be tried in AWD / RWD / FWD (the centre entries only bite in AWD).
+const DIFF_PRESET_KEYS := ["diff_preset_1", "diff_preset_2", "diff_preset_3"]
+const DIFF_PRESETS := [
+	# [1] OPEN: no lock anywhere. The reference for what a diff DOES - the unloaded inside
+	# wheel takes the torque and spins, so a hairpin exit washes wide.
+	{"name": "OPEN",
+		"front_diff_type": 0, "rear_diff_type": 0,
+		"front_visc": 0.0, "rear_visc": 0.0,
+		"front_preload": 0.0, "rear_preload": 0.0,
+		"front_power_ramp": 0.0, "rear_power_ramp": 0.0,
+		"front_coast_ramp": 0.0, "rear_coast_ramp": 0.0,
+		"centre_coupling": 0.0, "centre_preload": 0.0},
+	# [2] VISCOUS: speed-sensing lock only - this is the pre-A3 car, the familiar baseline.
+	{"name": "VISCOUS",
+		"front_diff_type": 1, "rear_diff_type": 1,
+		"front_visc": 90.0, "rear_visc": 90.0,
+		"front_preload": 0.0, "rear_preload": 0.0,
+		"front_power_ramp": 0.0, "rear_power_ramp": 0.0,
+		"front_coast_ramp": 0.0, "rear_coast_ramp": 0.0,
+		"centre_coupling": 0.0, "centre_preload": 0.0},
+	# [3] RALLY: torque-sensing Salisbury plates + a coupled centre - a gravel car's setup.
+	# Rear locks hard on power (traction, throttle-steering) and part-opens on coast; the front
+	# runs a LOW power ramp on purpose (front lock fights the steering) but real coast lock for
+	# entry stability. Centre coupling migrates torque to whichever axle still has grip.
+	{"name": "RALLY",
+		"front_diff_type": 2, "rear_diff_type": 2,
+		"front_visc": 0.0, "rear_visc": 0.0,
+		"front_preload": 60.0, "rear_preload": 120.0,
+		"front_power_ramp": 0.25, "rear_power_ramp": 0.70,
+		"front_coast_ramp": 0.35, "rear_coast_ramp": 0.35,
+		"centre_coupling": 120.0, "centre_preload": 60.0},
+]
 
 class Wheel:
 	var pos: Vector3
@@ -604,6 +639,31 @@ func _engine_torque(rpm: float) -> float:
 		shape = clampf(1.0 - 0.55 * (x - 1.0) * (x - 1.0), 0.35, 1.0)
 	return peak_torque * shape
 
+func apply_diff_preset(i: int) -> void:
+	# A3 evaluation: stamp one preset's values over the diff exports (see DIFF_PRESETS)
+	if i < 0 or i >= DIFF_PRESETS.size():
+		return
+	var p: Dictionary = DIFF_PRESETS[i]
+	for k in p:
+		if k != "name":
+			set(k, p[k])
+
+func diff_preset_name() -> String:
+	# report which preset the CURRENT values match, so the HUD can't claim a preset the user
+	# has since tuned away from with the Tab sliders
+	for i in range(DIFF_PRESETS.size()):
+		var p: Dictionary = DIFF_PRESETS[i]
+		var same := true
+		for k in p:
+			if k == "name":
+				continue
+			if not is_equal_approx(float(get(k)), float(p[k])):
+				same = false
+				break
+		if same:
+			return "[%d]%s" % [i + 1, str(p["name"])]
+	return "CUSTOM"
+
 func _diff_transfer(dtype: int, dw: float, t_axle: float, power: bool, visc: float, pre_nm: float, p_ramp: float, c_ramp: float, imp: float) -> Vector2:
 	# A3: one axle differential. Returns (transfer torque, d/d(omega) slope for the implicit update).
 	# dw = left omega - right omega; positive transfer takes torque FROM the faster left wheel.
@@ -778,6 +838,10 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_just_pressed("drive_mode"):
 		_drive_mode = (_drive_mode + 1) % 3
 		_apply_mode()
+	# [1]/[2]/[3]: swap the whole differential setup mid-drive for back-to-back comparison
+	for pi in range(DIFF_PRESET_KEYS.size()):
+		if Input.is_action_just_pressed(DIFF_PRESET_KEYS[pi]):
+			apply_diff_preset(pi)
 	var eff_split := torque_split
 	if _drive_mode == 1: eff_split = 1.0
 	elif _drive_mode == 2: eff_split = 0.0

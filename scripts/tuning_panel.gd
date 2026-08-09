@@ -6,6 +6,7 @@ extends CanvasLayer
 var vehicle
 var _panel: PanelContainer
 var _defaults := {}
+var _ctls: Array = []      # cached slider/checkbox controls (built once in _ready)
 
 # label, property, min, max, step, value-formatter
 # Specs for BOTH M1 and M2 params. In _ready, only the ones the loaded car actually
@@ -134,7 +135,28 @@ func _ready() -> void:
 	reset.pressed.connect(_reset)
 	vbox.add_child(reset)
 
+	_ctls = _all_sliders(self)   # cached once: used by Reset and the live re-sync below
 	_panel.visible = false   # hidden until Tab (CanvasLayer itself has no 'visible')
+
+func _process(_delta: float) -> void:
+	# Keep the widgets showing what the car ACTUALLY has: code can change these properties
+	# behind the panel's back (e.g. the [1]/[2]/[3] diff presets). Without this the sliders
+	# would sit at stale positions and shove the old value back the moment one was touched.
+	if not _panel.visible:
+		return
+	for ctl in _ctls:
+		if not ctl.has_meta("prop"):
+			continue
+		var prop: String = ctl.get_meta("prop")
+		var cur = vehicle.get(prop)
+		if cur == null:
+			continue
+		if ctl is HSlider:
+			if not is_equal_approx(ctl.value, float(cur)):
+				ctl.value = float(cur)      # fires value_changed -> refreshes the label too
+		elif ctl is CheckButton:
+			if ctl.button_pressed != bool(cur):
+				ctl.button_pressed = bool(cur)
 
 func _add_row(vbox: VBoxContainer, label: String, prop: String, mn: float, mx: float, step: float, fmt: Callable) -> void:
 	var top := HBoxContainer.new()
@@ -171,7 +193,7 @@ func _add_toggle(vbox: VBoxContainer, label: String, prop: String) -> void:
 	btn.set_meta("prop", prop)
 
 func _reset() -> void:
-	for ctl in _all_sliders(self):
+	for ctl in _ctls:
 		if not ctl.has_meta("prop"):
 			continue
 		var prop: String = ctl.get_meta("prop")

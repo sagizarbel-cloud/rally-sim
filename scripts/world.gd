@@ -233,6 +233,9 @@ func _setup_input() -> void:
 	_add_keys("circuit_toggle", [KEY_B])
 	_add_keys("puncture_test", [KEY_P])   # debug: puncture a tyre to test the flat visual + vibration
 	_add_keys("time_of_day", [KEY_L])     # cycle noon/morning/evening/night
+	_add_keys("diff_preset_1", [KEY_1, KEY_KP_1])   # A3: OPEN / VISCOUS / RALLY diff setups,
+	_add_keys("diff_preset_2", [KEY_2, KEY_KP_2])   # swappable mid-drive for back-to-back
+	_add_keys("diff_preset_3", [KEY_3, KEY_KP_3])   # comparison on the same corner
 
 	# Gamepad: RT throttle, LT brake, left stick X for steer.
 	_add_axis("throttle",    JOY_AXIS_TRIGGER_RIGHT, 1.0)
