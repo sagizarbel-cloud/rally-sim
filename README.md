@@ -81,25 +81,25 @@ rally-sim/
   main.tscn              Minimal root scene -> scripts/world.gd
   check.sh               Headless compile gate; must print "Godot check clean"
   scripts/
-    world.gd             Bootstrap: input map, sky + time of day, stage, car, cameras, HUDs
-    vehicle_m2.gd        The car: tires, driveline, differentials, consumables, damage
-    stage.gd             Procedural stage: 3 circuits + drag strip, per-surface grip
-    terrain.gd           GPU height-displaced deformable dirt (centre patch)
-    wear.gd              Racing-line surface wear -> visual trail + grip
-    time_trial.gd        Lap timing, ghosts and sector splits, per circuit
-    pace_notes.gd        Corner detection from road curvature, spoken via OS TTS
-    sound.gd             Engine drone pitched by rpm, surface-aware tire audio
-    hud.gd               Telemetry overlay
-    component_hud.gd     Car schematic: tire temps/wear, engine temp, damage
-    tuning_panel.gd      Live tuning sliders (Tab)
-    chase_camera.gd      Smoothed follow camera
-    vehicle.gd           M0 placeholder drive — superseded, kept for reference
-    course.gd            Flat test course — superseded by stage.gd, kept for reference
+	world.gd             Bootstrap: input map, sky + time of day, stage, car, cameras, HUDs
+	vehicle_m2.gd        The car: tires, driveline, differentials, consumables, damage
+	stage.gd             Procedural stage: 3 circuits + drag strip, per-surface grip
+	terrain.gd           GPU height-displaced deformable dirt (centre patch)
+	wear.gd              Racing-line surface wear -> visual trail + grip
+	time_trial.gd        Lap timing, ghosts and sector splits, per circuit
+	pace_notes.gd        Corner detection from road curvature, spoken via OS TTS
+	sound.gd             Engine drone pitched by rpm, surface-aware tire audio
+	hud.gd               Telemetry overlay
+	component_hud.gd     Car schematic: tire temps/wear, engine temp, damage
+	tuning_panel.gd      Live tuning sliders (Tab)
+	chase_camera.gd      Smoothed follow camera
+	vehicle.gd           M0 placeholder drive — superseded, kept for reference
+	course.gd            Flat test course — superseded by stage.gd, kept for reference
   docs/
-    ROADMAP.md           Authoritative living state: milestones, decisions, patterns
-    PLAN-drivetrain-suspension.md
-                         Active phased plan: drivetrain arc, then suspension arc
-    DESIGN.md            Literature compilation, model choices, license plan
+	ROADMAP.md           Authoritative living state: milestones, decisions, patterns
+	PLAN-drivetrain-suspension.md
+						 Active phased plan: drivetrain arc, then suspension arc
+	DESIGN.md            Literature compilation, model choices, license plan
 ```
 
 ## How it's built

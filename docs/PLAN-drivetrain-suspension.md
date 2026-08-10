@@ -579,6 +579,10 @@ plumbing), `tuning_panel.gd`.
 2. Prune dead code/exports/panel rows: `_t_drive` remnants, `engine_brake` constant,
    `lsd_lock` (replaced per-axle), `rear_grip_cut`, `brake_force`, old suspension
    constants — grep the panel `_specs` against the vehicle's actual properties.
+   **KEEP the [1]/[2]/[3] differential presets** (`DIFF_PRESETS`, `apply_diff_preset`,
+   `diff_preset_index/name`, the keyboard + touchpad bindings, the HUD readout): the user
+   asked for them to stay as a permanent setup-comparison tool, not a temporary eval aid.
+   Re-bake their values if later phases change what "rally" should mean, but don't delete.
 3. Run the FULL end-to-end verification (§8) with the user.
 4. Update `docs/ROADMAP.md`: mark M15 done, record the drivetrain/suspension state, note
    the `w.bottomed` puncture-trigger option, retire superseded notes (e.g. the Tier-3
@@ -671,7 +675,9 @@ User drive-through, all in one session, keyboard:
 - [x] Phase 0 — 120 Hz + virtual pedals — DONE 2026-08-02: user confirms top speed, throttle ramp, and 120 Hz all feel correct/more concrete; steady physics 1.84 ms/tick (huge M1 headroom).
 - [x] A1 — Engine inertia + clutch + neutral — DONE 2026-08-03: headless probe PASS (N coast-down 3000→988 rpm, N WOT →7150/7200); user drove the checklist and verdict is "feels good".
 - [x] A2 — Engine braking + auto-blip — implemented 2026-08-03 (`./check.sh` clean; headless probe PASS: 2s coast 20→ in 3rd drops 4.29 m/s vs 3.74 in N (overrun drag reaches the axles); blipped 3→2 dips clutch to 0.00, lands 14 rpm off the computed target, re-locks; jolt A/B 0.3s post-shift: 0.28 m/s lost blipped vs 1.10 raw; probe removed). Note: `engine_brake` constant already deleted during A1's rewrite; shifts now break the clutch lock so the ratio jump resolves through the plates. First drive feedback 2026-08-04: engine braking too weak in 3rd + no felt tuck → friction anchors raised to competition-spec 25/90 N·m (probe: in-gear coast extra 0.55→0.90 m/s per 2s); added [I] ignition starter (stabs clutch + 1.2s anti-stall grace so a worst-case 1st-gear restart survives, probe PASS). Eager lift-off ROTATION beyond this is A3's coast-ramp territory. Re-drive verdict 2026-08-04: engine braking "good now, feels comfortable" at 25/90; lift-off tuck accepted as A3 coast-ramp territory. A2 DONE.
-- [ ] A3 — Differentials — implemented 2026-08-04 (`./check.sh` clean; headless probe PASS: airborne pair split 20 rad/s after 0.25s → OPEN 18.2 / VISCOUS 0.00 / LOCKED 0.00; AWD launch 14.7 m/s, reverse −9.3 m/s, centre 150/80 stable. Found+fixed: saturated-Coulomb chatter on LOCKED — transfer torque now impulse-capped at the one-substep pair equaliser, same for the centre. Ramp power/coast selected by sign of engine-side torque `t_gb` → reverse-safe. Defaults VISCOUS 90/90 + centre 0/0 = pre-A3 feel; probe removed). Stall-restart report re-checked same day: all four paths (detect / Shift-hold / release pull-away / bump-start) PASS headless on current build — user's failures were on the pre-`[I]`/pre-grace build. AWAITING user drive checklist verdict.
+- [x] A3 — Differentials — DONE 2026-08-05: user drove the [3] RALLY preset and reports it
+  "feels good"; presets stay in the game as a permanent A/B tool (see §5 B5 — do NOT prune).
+  Implemented 2026-08-04 (`./check.sh` clean; headless probe PASS: airborne pair split 20 rad/s after 0.25s → OPEN 18.2 / VISCOUS 0.00 / LOCKED 0.00; AWD launch 14.7 m/s, reverse −9.3 m/s, centre 150/80 stable. Found+fixed: saturated-Coulomb chatter on LOCKED — transfer torque now impulse-capped at the one-substep pair equaliser, same for the centre. Ramp power/coast selected by sign of engine-side torque `t_gb` → reverse-safe. Defaults VISCOUS 90/90 + centre 0/0 = pre-A3 feel; probe removed). Stall-restart report re-checked same day: all four paths (detect / Shift-hold / release pull-away / bump-start) PASS headless on current build — user's failures were on the pre-`[I]`/pre-grace build. AWAITING user drive checklist verdict.
 - [ ] A4 — Shift model + assists
 - [ ] A5 — Handbrake refinement
 - [ ] B1 — Derived suspension setup
