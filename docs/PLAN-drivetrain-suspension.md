@@ -681,7 +681,38 @@ User drive-through, all in one session, keyboard:
   reads properly now that the rear coast ramp carries it — so coast lock was the right
   diagnosis, and no further tyre/suspension work is owed on that specific complaint.
   Implemented 2026-08-04 (`./check.sh` clean; headless probe PASS: airborne pair split 20 rad/s after 0.25s → OPEN 18.2 / VISCOUS 0.00 / LOCKED 0.00; AWD launch 14.7 m/s, reverse −9.3 m/s, centre 150/80 stable. Found+fixed: saturated-Coulomb chatter on LOCKED — transfer torque now impulse-capped at the one-substep pair equaliser, same for the centre. Ramp power/coast selected by sign of engine-side torque `t_gb` → reverse-safe. Defaults VISCOUS 90/90 + centre 0/0 = pre-A3 feel; probe removed). Stall-restart report re-checked same day: all four paths (detect / Shift-hold / release pull-away / bump-start) PASS headless on current build — user's failures were on the pre-`[I]`/pre-grace build. AWAITING user drive checklist verdict.
-- [ ] A4 — Shift model + assists
+- [ ] A4 — Shift model + assists — implemented 2026-08-10, **awaiting drive verdict**
+  (`./check.sh` clean; headless probe PASS on all four areas, then removed).
+  **Shift model:** a request now starts a `shift_time` (0.18 s) manoeuvre instead of swapping the
+  ratio in a tick — the auto-clutch dips, the dogs take the new gear at MID-dip, the plates feed
+  back in. Probe: swap lands 0.09 s after the request with the clutch already at 0.00, home again
+  0.27 s later. This EXTENDS the A2 path rather than duplicating it — the mid-dip swap is where
+  A2's `_clutch_locked = false` / `_blip_t` / `_clutch = 0.0` now fire, so the heel-toe ordering
+  (plates open BEFORE the new ratio bites) is preserved by construction; probe confirms a blipped
+  5th→4th at 40 m/s still re-locks. A fresh request while the box is busy is ignored.
+  **Overrev guard:** decided by the COMPUTED post-shift rpm (driven-wheel speed through the new
+  ratio), not by shift direction — so it catches N→1st and selecting R at speed as well as the
+  4th→2nd grab. Probe at 40 m/s: 5th→4th allowed (5694 rpm), 3rd→2nd refused with the guard on,
+  allowed with it off for +0.110 damage through the M8 accumulator.
+  **Launch assist:** both numbers derived. Slip target = the surface's peak-grip slip under the
+  driven wheels (the same blend that derives `Bx`); launch rpm = the grip-limited wheel torque at
+  that peak, carried at the clutch's own design margin (`clutch_margin`) and reflected through the
+  gearing + motoring drag, inverted through the torque curve. Emergent result: dirt 2850 rpm /
+  0.28 slip, asphalt 4300 rpm / 0.14. The throttle governs the revs; the clutch is A1's schedule
+  with its bite point computed instead of fixed, trimmed on measured wheelspin. Probe (4 s
+  standing start): dirt 45.7 m vs 40.5 m raw, asphalt 48.2 m vs 38.6 m raw — an aid over a crude
+  pedal-to-the-floor launch, not a physics shortcut (it only sets throttle and engagement).
+  NOTE for the drive test: the baseline it beat is the WORST manual technique; whether a practised
+  manual-clutch launch still matches it is a feel question only the user can settle.
+  **Stability assist:** reference yaw from the bicycle model, with the wheelbase read off the wheel
+  mounts and `K_us` derived live from axle load over the tyre model's own cornering stiffness
+  (so it moves with weight transfer and the drive-mode CoM bias). Excess yaw is trimmed with outer-
+  front brake through the existing pedal brake path (inheriting its semi-implicit slope), impulse-
+  capped per substep per A3, and ceilinged at the torque that would just LOCK that tyre — braking
+  past lock would cost the lateral grip the correction depends on. Probe: an induced 1.60 rad/s
+  spin at 25 m/s decays to 0.17 rad/s in 1 s vs 0.30 raw, peak correction 2154 N·m.
+  New Tab rows: `shift_time`, `overrev_guard`, `launch_assist`, `stability_assist`,
+  `stability_gain`, `stability_margin`. All new state resets in `respawn()`.
 - [ ] A5 — Handbrake refinement
 - [ ] B1 — Derived suspension setup
 - [ ] B2 — Damper model

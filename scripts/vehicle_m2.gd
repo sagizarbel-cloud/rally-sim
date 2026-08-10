@@ -106,6 +106,27 @@ class_name VehicleM2
 # A2: on a downshift the auto-clutch dips while a throttle blip spins the engine to the
 # COMPUTED post-shift target (wheel speed through the new gear) - heel-toe, automated.
 @export var auto_blip := true
+# A4: a shift is an EVENT, not a teleport. shift_time is the whole manoeuvre: the auto-clutch
+# dips, the dogs take the new ratio at the middle of the dip (so the plates are already open
+# when it bites - the A2 heel-toe ordering), then the clutch feeds back in, blipping on a
+# downshift. In manual-clutch mode the box still takes shift_time but the pedal is the driver's.
+@export var shift_time := 0.18
+# Money-shift guard: refuse an engagement whose COMPUTED post-shift engine speed would be past
+# redline - the wheels are the boss once the plates are back in, so a 5th->2nd grab (or dropping
+# into 1st at speed) would spin the crank to pieces. OFF = the overrev is allowed and costs
+# mechanical damage through the existing M8 accumulator.
+@export var overrev_guard := true
+# --- A4 assists. Both default OFF: raw physics stays the tested baseline (anti-stall is the
+# only assist that ships on). ---
+# Launch assist: at a standstill in 1st it holds the engine at the COMPUTED peak-slip launch rpm
+# and slips the clutch to keep the driven wheels at the surface's peak-grip slip ratio. It is
+# the automation of manual clutch+throttle technique, not a separate physics path.
+@export var launch_assist := false
+# Stability assist (ESC): reference yaw rate from the bicycle model, corrected with a dab of
+# outer-front brake. Both the wheelbase and the understeer gradient are read off the car.
+@export var stability_assist := false
+@export var stability_gain := 4000.0      # N*m of corrective brake torque per rad/s of excess yaw
+@export var stability_margin := 0.20      # rad/s of yaw allowed BEYOND the bicycle-model reference
 
 # --- Gearbox / AWD ---
 @export var gear_ratios := [3.4, 2.25, 1.65, 1.3, 1.05, 0.86]
@@ -185,6 +206,12 @@ var _stalled := false               # A1: engine dead; restart via clutch-hold o
 var _restart_t := 0.0               # A1: seconds the clutch has been held while stalled (starter timer)
 var _blip_t := 0.0                  # A2: seconds left of the current downshift rev-match blip
 var _ign_grace := 0.0               # A2: anti-stall grace after an [I] restart (the driver's reflex)
+var _shift_t := 0.0                 # A4: seconds left of the current shift manoeuvre
+var _shift_to := 1                  # A4: the gear the box is moving into
+var _shift_pending := false         # A4: true until the ratio actually swaps (at mid-dip)
+var _shift_down := false            # A4: this shift is a downshift (blip when it engages)
+var _launch := false                # A4: launch assist is live (arms at rest, drops out once hooked up)
+var _esc := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])   # A4: per-wheel stability-assist brake torque (N*m)
 var _tc_scale := 1.0                # traction-control torque trim (1.0 = no trim)
 var _engine_temp := 20.0            # M7: engine temperature (C) for the component HUD
 var _damage := 0.0                  # M8: chassis damage 0 = pristine .. 1 = wrecked
@@ -216,6 +243,9 @@ const BLIP_BAND := 40.0         # rad/s: throttle feathers off across this band 
 const DIFF_BAND := 1.0          # rad/s: smoothing width of a diff clutch's Coulomb transfer torque
 const DIFF_OPEN_FRICTION := 5.0 # N*m: parasitic spider-gear friction of an OPEN diff
 const DIFF_LOCKED_CAP := 10000.0 # N*m: "infinite" preload that implements LOCKED via the clutch path
+# A4 launch-assist numerics: the rpm the assist holds is COMPUTED (see _launch_setup); this is
+# only the proportional band its throttle controller closes over, as a fraction of that rpm.
+const LAUNCH_RPM_BAND := 0.08
 # A3 evaluation presets ([1]/[2]/[3]): three points spanning the diff character range, so the
 # difference can be felt corner-to-corner instead of reconstructed from single slider drags.
 # Drive mode ([T]) is deliberately NOT part of a preset - the two axes stay independent, so
@@ -639,6 +669,77 @@ func _engine_torque(rpm: float) -> float:
 		shape = clampf(1.0 - 0.55 * (x - 1.0) * (x - 1.0), 0.35, 1.0)
 	return peak_torque * shape
 
+func _rpm_for_torque(t_need: float) -> float:
+	# invert _engine_torque on its LOW branch: the lowest rpm that can actually deliver t_need.
+	# (Past peak_torque_rpm there is no more torque to find, so it saturates there.)
+	var s := clampf(t_need / maxf(peak_torque, 1.0), 0.0, 1.0)
+	if s <= idle_torque_frac:
+		return idle_rpm
+	var x_idle := idle_rpm / maxf(peak_torque_rpm, 1.0)
+	var k_low := (1.0 - idle_torque_frac) / maxf((1.0 - x_idle) * (1.0 - x_idle), 0.0001)
+	var x := 1.0 - sqrt(maxf(1.0 - s, 0.0) / k_low)
+	return clampf(x * peak_torque_rpm, idle_rpm, peak_torque_rpm)
+
+func _driven_avg(split: float) -> Vector2:
+	# (signed average spin of the torque-receiving wheels, how many they are) - the gearbox's
+	# wheel-side speed, and the divisor the slipping clutch's slope is shared across
+	var s := 0.0
+	var n := 0.0
+	for w in _wheels:
+		var sh: float = (1.0 - split) if w.steer else split
+		if sh > 0.001:
+			s += w.omega
+			n += 1.0
+	return Vector2(s / maxf(n, 1.0), n)
+
+func _launch_setup(split: float, ratio: float, t_fric: float) -> Vector2:
+	# A4 launch assist targets, BOTH derived: (target driven-wheel slip ratio, launch rpm).
+	# The slip target is the surface's peak-grip slip under the driven wheels - the same
+	# tarmac/gravel blend that derives the Pacejka Bx, so "launch at peak slip" means exactly
+	# that. The launch rpm is then the engine speed that can hold the wheels there WITHOUT sagging:
+	# the grip-limited wheel torque (the Magic Formula's D at that peak) reflected up through the
+	# gearing, carrying the same design margin the clutch itself is sized with (clutch_margin -
+	# at the bare minimum-torque rpm the engine has zero reserve, so the first bite of load drags
+	# the revs down and the launch bogs), plus the engine's own motoring drag, inverted through
+	# the torque curve. Grippier surface -> more torque to hold -> higher launch rpm, saturating
+	# at peak_torque_rpm because past the peak there is no more torque to find.
+	var sr := 0.0
+	var t_wheel := 0.0
+	var n := 0.0
+	for w in _wheels:
+		var sh: float = (1.0 - split) if w.steer else split
+		if sh <= 0.001:
+			continue
+		n += 1.0
+		var sg := 1.0
+		if w.contact and surface_source != null:
+			sg = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+		sr += lerpf(peak_slip_gravel, peak_slip_tarmac, clampf((sg - 1.15) / 0.25, 0.0, 1.0))
+		var mux := _mu_load(mu_long, w.Fz) * sg * w.tyre_grip * (1.0 - damage_grip_loss * _damage)
+		t_wheel += mux * w.Fz * wheel_radius
+	var t_need := clutch_margin * t_wheel / maxf(absf(ratio) * driveline_eff, 0.001) + t_fric
+	return Vector2(maxf(sr / maxf(n, 1.0), 0.02), _rpm_for_torque(t_need))
+
+func _understeer_gradient() -> float:
+	# K_us [s^2/m] for the bicycle-model reference yaw rate psi_dot = v*delta / (L + K_us*v^2):
+	# axle load over axle cornering stiffness, front minus rear. The stiffness is the tyre
+	# model's OWN slope at zero slip angle (Ca = dFy/dalpha|0 = D*C*B), so the reference bends
+	# with load transfer, load sensitivity and the drive-mode CoM bias instead of being a number.
+	var wf := 0.0
+	var wr := 0.0
+	var cf := 0.0
+	var cr := 0.0
+	for w in _wheels:
+		var fz: float = maxf(w.Fz, 1.0)
+		var ca: float = _mu_load(mu_lat, fz) * fz * Cy * By
+		if w.steer:
+			wf += fz
+			cf += ca
+		else:
+			wr += fz
+			cr += ca
+	return (wf / maxf(cf, 1.0) - wr / maxf(cr, 1.0)) / 9.81
+
 func apply_diff_preset(i: int) -> void:
 	# A3 evaluation: stamp one preset's values over the diff exports (see DIFF_PRESETS)
 	if i < 0 or i >= DIFF_PRESETS.size():
@@ -811,35 +912,6 @@ func _physics_process(delta: float) -> void:
 		if w.contact:
 			apply_force(w.contact_normal * w.Fz, info[w]["off"])
 
-	# --- gearbox (manual: E up, Q down). A1: _gear -1 = reverse, 0 = NEUTRAL, 1..N = forward ---
-	var shifted := false
-	var downshifted := false
-	if Input.is_action_just_pressed("shift_up") and _gear < gear_ratios.size():
-		_gear += 1
-		shifted = true
-	if Input.is_action_just_pressed("shift_down") and _gear > -1:
-		_gear -= 1
-		shifted = true
-		downshifted = true
-	var reverse := _gear == -1
-	var neutral := _gear == 0
-	var gr := 0.0                    # engine:wheel gear ratio (0 in neutral = no coupling)
-	if reverse:
-		gr = reverse_ratio
-	elif _gear > 0:
-		gr = gear_ratios[_gear - 1]
-	if shifted:
-		# A2: a ratio swap is a real speed mismatch - break the kinematic lock so the clutch
-		# resolves it: engine drags to the new speed THROUGH the plates (the downshift jolt),
-		# instead of teleporting rpm for free. The blip below revs it there smoothly instead.
-		_clutch_locked = false
-		if downshifted and auto_blip and not manual_clutch and _gear > 0 and linear_velocity.length() > 3.0:
-			# heel-toe event order: the foot is ALREADY down when the new ratio engages, so the
-			# plates are open at the swap - otherwise their drag out-races the blip and the revs
-			# get ground up through the wheels (the exact jolt the blip exists to avoid)
-			_blip_t = BLIP_TIME
-			_clutch = 0.0
-
 	# drive mode: AWD uses torque_split, RWD forces all-rear, FWD forces all-front
 	if Input.is_action_just_pressed("drive_mode"):
 		_drive_mode = (_drive_mode + 1) % 3
@@ -855,6 +927,65 @@ func _physics_process(delta: float) -> void:
 	if _drive_mode == 1: eff_split = 1.0
 	elif _drive_mode == 2: eff_split = 0.0
 
+	# --- gearbox (manual: E up, Q down). A1: _gear -1 = reverse, 0 = NEUTRAL, 1..N = forward.
+	# A4: the swap is no longer instant. A request starts a shift_time manoeuvre - the auto-clutch
+	# dips (below), the dogs take the new ratio at the MIDDLE of the dip, then the plates feed back
+	# in. The box is busy until the timer runs out, so a fresh request is ignored. ---
+	var req := 0
+	if Input.is_action_just_pressed("shift_up") and _gear < gear_ratios.size():
+		req = 1
+	if Input.is_action_just_pressed("shift_down") and _gear > -1:
+		req = -1
+	if req != 0 and _shift_t <= 0.0:
+		var to_gear := _gear + req
+		# money-shift guard: once the plates are back in the WHEELS set engine speed, so ask what
+		# the crank would be doing on the new ratio. Catches the 5th->2nd grab and dropping N->1st
+		# (or selecting R) at speed alike - it is the predicted rpm that decides, not the direction.
+		var to_gr := 0.0
+		if to_gear == -1:
+			to_gr = reverse_ratio
+		elif to_gear > 0:
+			to_gr = gear_ratios[to_gear - 1]
+		var rpm_after := absf(_driven_avg(eff_split).x) * to_gr * final_drive * 60.0 / TAU
+		var over := (rpm_after - redline_rpm) / maxf(redline_rpm, 1.0)
+		if over <= 0.0 or not overrev_guard:
+			if over > 0.0:
+				# allowed money shift: valve float and bearing abuse, scaled by how far past
+				# redline the crank is thrown (a doubled redline = one full-severity hit)
+				_damage = clampf(_damage + clampf(over, 0.0, 1.0) * damage_gain, 0.0, 1.0)
+			_shift_t = maxf(shift_time, 0.001)
+			_shift_to = to_gear
+			_shift_pending = true
+			_shift_down = req < 0
+	if _shift_t > 0.0:
+		_shift_t = maxf(_shift_t - delta, 0.0)
+		if _shift_pending and _shift_t <= shift_time * 0.5:
+			_gear = _shift_to               # mid-dip: the dogs engage the new ratio...
+			_shift_pending = false
+			# ...and the speed mismatch resolves through the plates instead of teleporting rpm for
+			# free (A2). The blip revs the engine there smoothly; without it, the jolt is felt.
+			_clutch_locked = false
+			if _shift_down and auto_blip and not manual_clutch and _gear > 0 and speed > 3.0:
+				# heel-toe event order: the foot is ALREADY down when the new ratio engages, so the
+				# plates are open at the swap - otherwise their drag out-races the blip and the revs
+				# get ground up through the wheels (the exact jolt the blip exists to avoid)
+				_blip_t = BLIP_TIME
+				_clutch = 0.0
+	var reverse := _gear == -1
+	var neutral := _gear == 0
+	var gr := 0.0                    # engine:wheel gear ratio (0 in neutral = no coupling)
+	if reverse:
+		gr = reverse_ratio
+	elif _gear > 0:
+		gr = gear_ratios[_gear - 1]
+
+	# motoring-friction line T_fric(w) = c0 + c1*w fit through the two physical anchor points
+	var w_idle := idle_rpm * TAU / 60.0
+	var w_red := redline_rpm * TAU / 60.0
+	var fric_c1 := (engine_brake_redline - engine_brake_idle) / maxf(w_red - w_idle, 1.0)
+	var fric_c0 := engine_brake_idle - fric_c1 * w_idle
+	var ratio := gr * final_drive                        # engine:wheel ratio (0 in neutral)
+
 	# --- clutch engagement (A1). Manual: LEFT SHIFT is the pedal (held = open). Auto: engagement
 	# is scheduled from rpm - it feeds in between idle and bite_rpm, so a launch slips the clutch
 	# and SELF-BALANCES (revs sink -> capacity sinks) the way a driver's foot does. Anti-stall
@@ -863,17 +994,81 @@ func _physics_process(delta: float) -> void:
 	var rpm_pre := _omega_e * 60.0 / TAU
 	_blip_t = maxf(_blip_t - delta, 0.0)
 	_ign_grace = maxf(_ign_grace - delta, 0.0)
+	# A4 launch assist: arms at a standstill in 1st on throttle. It hands back the moment the
+	# driver brakes, lifts or changes gear - and, once rolling, as soon as the launch is over:
+	# either the plates have stopped slipping or the wheels alone would already spin the crank
+	# past the launch rpm (from there the assist would only be cutting a pedal the driver wants
+	# open). Both are the physical end of a launch, not a cutout speed.
+	var ls := Vector2.ZERO           # (target driven slip ratio, computed launch rpm)
+	if launch_assist and not manual_clutch:
+		ls = _launch_setup(eff_split, ratio, maxf(fric_c0 + fric_c1 * _omega_e, 0.0))
+		var gb_rpm := absf(_driven_avg(eff_split).x * ratio) * 60.0 / TAU
+		if not _launch and _gear == 1 and speed < 1.0 and throttle > 0.05 and brake < 0.05:
+			_launch = true
+		elif _launch and (_gear != 1 or throttle < 0.05 or brake > 0.05 \
+				or (speed > slip_ref_speed and (_clutch_locked or gb_rpm >= ls.y))):
+			_launch = false
+	else:
+		_launch = false
+	var launch_sr := maxf(ls.x, 0.02)
+	var launch_rpm := maxf(ls.y, idle_rpm)
 	var c_target: float
 	if manual_clutch:
 		c_target = 1.0 - Input.get_action_strength("clutch")
 	else:
 		c_target = clampf((rpm_pre - idle_rpm) / maxf(bite_rpm - idle_rpm, 1.0), 0.0, 1.0)
-		if _blip_t > 0.0:
-			c_target = 0.0           # A2: hold the clutch in while the blip matches revs
+		if _launch:
+			# Launch assist adds ONE limit on top of the proven rpm schedule above: trim the plates
+			# on measured wheelspin - fully home at or below the surface's peak-grip slip, fully
+			# open at twice it, so the proportional band IS the target and there is no constant to
+			# tune. The throttle governor (in the driveline loop) owns the revs, the trim owns the
+			# torque; between them the driven wheels sit at peak slip, which is peak force.
+			var kd := 0.0
+			var kn := 0.0
+			for w in _wheels:
+				var shl: float = (1.0 - eff_split) if w.steer else eff_split
+				if shl > 0.001:
+					kd += absf(w.kappa)
+					kn += 1.0
+			# the plates also WAIT for the revs and then self-balance on them (A1's schedule with
+			# its bite point computed instead of fixed): capacity arrives as the engine reaches the
+			# launch rpm and eases off the moment loading it drags the revs back down.
+			var revved := clampf((rpm_pre - idle_rpm) / maxf(launch_rpm - idle_rpm, 1.0), 0.0, 1.0)
+			c_target = minf(revved, clampf(2.0 - (kd / maxf(kn, 1.0)) / launch_sr, 0.0, 1.0))
+		if _blip_t > 0.0 or _shift_t > 0.0:
+			c_target = 0.0           # A2 blip / A4 shift dip: plates open while the ratio changes
 	if anti_stall or not manual_clutch or _ign_grace > 0.0:
 		c_target = minf(c_target, clampf((rpm_pre - idle_rpm * 0.55) / (idle_rpm * 0.35), 0.0, 1.0))
 	var c_rate := CLUTCH_OUT_RATE if c_target < _clutch else CLUTCH_IN_RATE
 	_clutch = move_toward(_clutch, c_target, c_rate * delta)
+
+	# --- A4 stability assist (ESC, default OFF). The reference is the bicycle model's yaw rate,
+	# psi_dot = v*delta / (L + K_us*v^2), with BOTH terms read off the car: the wheelbase from the
+	# wheel mounts and the understeer gradient from live axle load over the tyre model's own
+	# cornering stiffness (_understeer_gradient). Yaw beyond that reference by more than
+	# stability_margin is trimmed with a dab of brake on the OUTER FRONT wheel of the rotation -
+	# fed through the same brake path the pedal uses, so it inherits that path's semi-implicit
+	# treatment, and impulse-capped per substep below so it can never drive a wheel backwards. ---
+	for ei in range(_esc.size()):
+		_esc[ei] = 0.0
+	var v_fwd := linear_velocity.dot(-global_transform.basis.z)
+	if stability_assist and absf(v_fwd) > slip_ref_speed:
+		var yaw := angular_velocity.dot(up)
+		var wheelbase := absf(_wheels[2].pos.z - _wheels[0].pos.z)
+		var yaw_ref := v_fwd * steer_angle / maxf(wheelbase + _understeer_gradient() * v_fwd * v_fwd, 0.5)
+		var excess := absf(yaw) - absf(yaw_ref) - stability_margin
+		if excess > 0.0:
+			var oi := 1 if yaw > 0.0 else 0     # outer front wheel of the rotation (+yaw = turning left)
+			var ow: Wheel = _wheels[oi]
+			if ow.contact:
+				# ceiling is the torque that would just LOCK this tyre: past it the wheel stops
+				# rolling and the friction ellipse takes its lateral grip away - the opposite of
+				# help. So the aid brakes up to the limit of the contact patch and no further.
+				var sg := 1.0
+				if surface_source != null:
+					sg = surface_source.grip_at(ow.contact_point.x, ow.contact_point.z)
+				var t_lock := _mu_load(mu_long, ow.Fz) * sg * ow.tyre_grip * ow.Fz * wheel_radius
+				_esc[oi] = clampf(stability_gain * excess, 0.0, minf(t_lock, brake_torque))
 
 	# --- TWO-INERTIA DRIVELINE (A1): the engine integrates its own spin; the clutch couples it
 	# to the gearbox. Slipping: T_clutch = capacity * tanh(dw/band) drives the wheels while its
@@ -887,26 +1082,15 @@ func _physics_process(delta: float) -> void:
 	var u_star := _mf_peak_u(Cx, Ex)
 	var bx_tarmac := u_star / maxf(peak_slip_tarmac, 0.02)
 	var bx_gravel := u_star / maxf(peak_slip_gravel, 0.02)
-	# motoring-friction line T_fric(w) = c0 + c1*w fit through the two physical anchor points
-	var w_idle := idle_rpm * TAU / 60.0
-	var w_red := redline_rpm * TAU / 60.0
-	var fric_c1 := (engine_brake_redline - engine_brake_idle) / maxf(w_red - w_idle, 1.0)
-	var fric_c0 := engine_brake_idle - fric_c1 * w_idle
-	var ratio := gr * final_drive                        # engine:wheel ratio (0 in neutral)
 	var t_cap := _clutch * clutch_margin * peak_torque   # torque the clutch plates can carry
 	var fx_sum := {}
 	for wj in _wheels:
 		fx_sum[wj] = 0.0
 	for _s in range(drive_substeps):
 		# wheel-side coupling speed: signed average spin of the torque-receiving wheels
-		var dsum := 0.0
-		var dn := 0.0
-		for wj in _wheels:
-			var sh := (1.0 - eff_split) if wj.steer else eff_split
-			if sh > 0.001:
-				dsum += wj.omega
-				dn += 1.0
-		var wavg := dsum / maxf(dn, 1.0)
+		var da := _driven_avg(eff_split)
+		var wavg := da.x
+		var dn := da.y
 		var omega_gb := wavg * ratio * gsign     # engine-side speed of the gearbox input
 		if neutral:
 			_clutch_locked = false
@@ -933,6 +1117,11 @@ func _physics_process(delta: float) -> void:
 		var t_target := 0.0
 		if not _stalled:
 			var idle_thr := clampf((idle_rpm - rpm) / (idle_rpm * 0.15), 0.0, 1.0)
+			# A4: while launching, the assist OWNS the pedal - it holds the COMPUTED launch rpm,
+			# so unlike the idle/blip demands (which can only ask for more) it also cuts.
+			var thr_cmd := throttle
+			if _launch:
+				thr_cmd = clampf((launch_rpm - rpm) / maxf(launch_rpm * LAUNCH_RPM_BAND, 1.0), 0.0, 1.0)
 			var blip_thr := 0.0
 			if _blip_t > 0.0:
 				if _omega_e >= omega_gb:
@@ -941,7 +1130,7 @@ func _physics_process(delta: float) -> void:
 					# proper heel-toe order: only blip once the plates are OPEN, so the spin-up
 					# torque never drags the wheels (the engine revs faster than the clutch moves)
 					blip_thr = clampf((omega_gb - _omega_e) / BLIP_BAND, 0.0, 1.0)
-			t_target = _engine_torque(rpm) * maxf(throttle, maxf(idle_thr, blip_thr)) * rev_cut * (1.0 - damage_power_loss * _damage) * _tc_scale
+			t_target = _engine_torque(rpm) * maxf(thr_cmd, maxf(idle_thr, blip_thr)) * rev_cut * (1.0 - damage_power_loss * _damage) * _tc_scale
 		_t_comb += (t_target - _t_comb) * clampf(dt_sub / maxf(intake_tau, dt_sub), 0.0, 1.0)
 		# motoring friction always opposes rotation (a dead engine still compresses and rubs)
 		var t_fric := maxf(fric_c0 + fric_c1 * _omega_e, 0.0)
@@ -1031,6 +1220,10 @@ func _physics_process(delta: float) -> void:
 			var t_brk := brake_torque * brake
 			if handbrake > 0.0 and not w.steer:
 				t_brk += brake_torque * handbrake_strength
+			if _esc[i] > 0.0:
+				# A4 stability assist: impulse-capped at the one-substep stopping impulse, so the
+				# correction can arrest this wheel but never spin it backwards (the A3 pattern)
+				t_brk += minf(_esc[i], absf(w.omega) * wheel_inertia / dt_sub)
 			var t_resist := (t_brk + roll_resist * Fz * wheel_radius) * dirf
 			if absf(w.omega) < 0.6:
 				k_stiff += 2.0 * (t_brk + roll_resist * Fz * wheel_radius)    # slope of dirf near omega=0
@@ -1143,6 +1336,10 @@ func respawn() -> void:
 	_omega_e = idle_rpm * TAU / 60.0; _t_comb = 0.0; _tc_scale = 1.0            # A1: engine state
 	_clutch = 0.0; _clutch_locked = false; _stalled = false; _restart_t = 0.0   # A1: clutch state
 	_blip_t = 0.0; _ign_grace = 0.0                                            # A2: blip + starter grace
+	_shift_t = 0.0; _shift_to = 1; _shift_pending = false; _shift_down = false  # A4: shift manoeuvre
+	_launch = false                                                            # A4: launch assist
+	for i in range(_esc.size()):
+		_esc[i] = 0.0                                                          # A4: stability assist
 	_throttle_pedal = 0.0; _brake_pedal = 0.0   # Phase 0: virtual pedals
 	_damage = 0.0; _pull_dir = 0.0; _prev_vel = Vector3.ZERO   # M8: repaired on respawn
 	for w in _wheels:

@@ -49,6 +49,13 @@ var _specs := [
 	["Anti-stall (M2)",      "anti_stall",             0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
 	["Manual clutch (M2)",   "manual_clutch",          0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
 	["Auto blip (M2)",       "auto_blip",              0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
+	# A4: shift model + the two new assists
+	["Shift time (M2)",      "shift_time",             0.05,     0.60,  0.01, func(v): return "%.2f s" % v],
+	["Overrev guard (M2)",   "overrev_guard",          0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
+	["Launch assist (M2)",   "launch_assist",          0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
+	["Stability assist (M2)","stability_assist",       0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
+	["Stability gain (M2)",  "stability_gain",       500.0,  10000.0, 250.0,  func(v): return "%d Nm/(rad/s)" % int(v)],
+	["Stability margin (M2)","stability_margin",       0.05,     0.80,  0.05, func(v): return "%.2f rad/s" % v],
 	["Traction control (M2)","tc_enabled",             0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
 	["TC slip target (M2)",  "tc_slip_target",         0.10,     0.80,  0.05, func(v): return "%.2f" % v],
 	["FWD front bias (M2)",  "fwd_bias",               0.0,      0.8,   0.05, func(v): return "%.2f m" % v],
