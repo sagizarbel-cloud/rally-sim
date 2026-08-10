@@ -31,6 +31,13 @@ feel-verification instrument this project has._
   New keys go there.
 - After finishing a phase, update the phase's checkbox in §9 of this file and add a
   one-line status note (date + what the user's drive test concluded).
+- **Probe harness pattern** (A4, reusable): a probe that must simulate DRIVER INPUT is a
+  `Node` with a `_physics_process` state machine using `Input.action_press/release`, added
+  by a temporary block in `world.gd` `_ready()` (gated on an env var) and then
+  `move_child(probe, 0)` — it MUST sit before the car in the tree, because
+  `is_action_just_pressed` only reports true on the same physics frame as the press, and
+  the car reads its input in tree order. Run it with a large `--quit-after`; the probe
+  calls `get_tree().quit()` when done. Delete the script AND the `world.gd` block after.
 
 ---
 
