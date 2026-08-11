@@ -390,6 +390,14 @@ func _build_revbar() -> void:
 	light.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(light)
 
+func _build_cluster() -> void:
+	# in-cabin gauge cluster (analog tacho + speedo + numeric gear) - see scripts/dashboard.gd.
+	# It reads the car through get_engine(), so it needs no wiring beyond this reference.
+	var dash: Node3D = load("res://scripts/dashboard.gd").new()
+	dash.name = "GaugeCluster"
+	dash.car = self
+	add_child(dash)
+
 func _build_body() -> void:
 	# Physics collision stays a single box; all the detail below is cosmetic (forward = -Z).
 	var col := CollisionShape3D.new()
@@ -398,6 +406,7 @@ func _build_body() -> void:
 	_build_shell()
 	_build_cockpit()
 	_build_revbar()
+	_build_cluster()
 	# NOTE: no in-cabin 3D mirror quad -- a ViewportTexture renders black on a 3D surface on Metal.
 	# The functional rear-view is drawn as a 2D SubViewportContainer overlay in world.gd instead.
 
