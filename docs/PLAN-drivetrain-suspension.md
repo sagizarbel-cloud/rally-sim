@@ -735,10 +735,32 @@ User drive-through, all in one session, keyboard:
   small excess trims and twice the margin lifts fully) — the first thing a driver or a real ESC
   does. This is a deliberate extension of §5's brake-only wording, made because brake-only could
   not meet §5's own acceptance criterion ("big dirt slides get visibly tamed").
-  Probe (counter-steered 25 deg power slide, 1.2 rad/s, 25 m/s, 3rd gear): assist OFF the slide
-  ESCALATES to 1.95 rad/s and stays there (a spin); ON it peaks at 1.22 and decays to 0.49 rad/s.
-  Idle and rev-match demands are deliberately exempt from the cut, so the assist can never stall
-  the engine or block a blip. AWAITING the user's re-drive of the stability item only.
+  **The engine-torque withholding was WRONG and has been reverted** — user re-drive same day:
+  "when turning rpm gets severely handicapped, to the point that if I play with the wheel while
+  pressing full throttle the car almost comes to a stop and loses all power". Root cause: the
+  intervention was gated on `|err| > margin` with no sign test, and a cornering car normally yaws
+  LESS than its reference (plain understeer), so the large opposite-signed error fired the assist
+  through every ordinary corner. Three fixes, all probe-verified:
+  1. **Oversteer gate** — only act when the error runs the SAME way the car is rotating
+     (`err * yaw > 0`). This alone fixes the reported power loss.
+  2. **Grip-ceilinged reference** — `yaw_ref` is now clamped to `mu*g/v` (mu averaged live over the
+     contacting tyres, so it falls with speed and surface). The bicycle term is the KINEMATIC
+     no-slip yaw rate and this car's balance makes `K_us ≈ 0`, so at road speeds it asked for a
+     yaw rate no tyre could hold and every real slide still read as "under reference". The grip
+     ceiling is what makes the reference mean anything.
+  3. **Counter-steer standoff** — the aid stands down once the driver is already correcting
+     (`steer_angle * yaw >= 0` to act). MEASURED FINDING, worth keeping: braking a saturated outer
+     front during opposite lock makes the slide WORSE (probe: 1.23 rad/s vs 0.55 with the assist
+     off). Opposite lock works through the front tyres' lateral force, whose moment arm about the
+     CoM is the front-axle distance 1.35 m, against the brake's half-track 0.82 m — so trading
+     lateral for longitudinal at a tyre already on its friction circle gives up more yaw authority
+     than it buys. This is also why the torque cut looked like it helped in the first probe: that
+     scenario held opposite lock from frame zero, and neither actuator was really working.
+  Final probe: full-throttle full-lock cornering — assist ON 52.4 km/h / 0.56 rad/s yaw vs OFF
+  40.9 km/h / 0.95 (the aid now COSTS nothing and keeps the car pointed); counter-steered slide —
+  ON 0.58 vs OFF 0.55 (no longer interferes); rotation building before opposite lock — ON 0.61 vs
+  OFF 1.06 rad/s (the regime the aid owns, and it clearly catches it). The assist touches brakes
+  only; engine demand is untouched. AWAITING the user's re-drive of the stability item only.
 - [ ] A5 — Handbrake refinement
 - [ ] B1 — Derived suspension setup
 - [ ] B2 — Damper model
