@@ -53,6 +53,10 @@ The user wants the DRIVING FEEL deepened, in this order:
 2. **Arc B — Suspension & weight transfer**: body roll / left-right transition rhythm
    ("Scandinavian-flick-ability") and bump absorption / road texture. Jumps and landings
    are acceptable as-is.
+3. **Arc C — Steering feel & force feedback** (added 2026-08-05 at the user's request, so
+   the work is planned and committed BEFORE a wheel is bought/connected): self-aligning
+   torque as a real computed signal, a proper wheel input path, and FFB output. Ordering
+   here is driven by hardware arrival rather than dependency — see §5 Arc C.
 
 Preceded by **Phase 0: the 120 Hz physics tick** (roadmap M15) so everything new is built
 and tuned once, on the stable foundation.
@@ -261,9 +265,18 @@ twice as often.
 | B3 | B | Bump stops + honest load path (`w.bottomed` for M7) | S |
 | B4 | B | Lateral relaxation length + surface-derived `By` + CoM height | M |
 | B5 | B | Bake defaults, prune dead tunables, end-to-end verification | S |
+| C1 | C | Self-aligning torque — the FFB signal (no hardware needed) | M |
+| C2 | C | Wheel input path: lock, ratio, pedals, shifter | M |
+| C3 | C | FFB output layer (**research spike first** — see §7) | L |
 
 Every phase: `./check.sh` clean → user drives the checklist → user verdict recorded →
 next phase. Every phase leaves the car fully keyboard-drivable.
+
+**Arc C is the exception to "strictly in order."** Its sequence is set by when a wheel
+physically arrives, not by dependency: C1 needs no hardware and belongs after B4 (it builds
+on the relaxed slip angle), while C2 and C3 cannot be tested at all without the wheel in
+hand. If a wheel arrives mid-Arc-B, pull C2 forward the same day — an untested input path
+is the difference between a usable wheel and an unusable one — and leave C1/C3 in place.
 
 ---
 
@@ -602,6 +615,109 @@ plumbing), `tuning_panel.gd`.
 
 ---
 
+### Phase C1 — Self-aligning torque: the steering signal (no hardware required)
+
+**Files:** `vehicle_m2.gd` (lateral force site, after B4's relaxation length), `hud.gd`,
+`tuning_panel.gd`.
+
+This is the half of "force feedback" that is REAL PHYSICS and buildable today. What a driver
+feels through a wheel is not "the car" — it is the torque the front tyres exert about their
+steering axis. Getting this right is worth doing even if no wheel ever arrives: it is the
+roadmap's M13 SAT, it can drive a controller-rumble cue, and it is the exact signal C3 would
+send to a motor.
+
+1. **Pneumatic + mechanical trail.** Lateral force acts BEHIND the contact centre by the
+   pneumatic trail `t_p`; caster adds mechanical trail `t_m`. Per front wheel:
+   `Mz = Fy · (t_p + t_m)`, summed and divided by the steering ratio to get rack torque.
+2. **The trail must COLLAPSE as the tyre saturates.** This is the whole point: pneumatic
+   trail shrinks toward zero as slip angle approaches peak, so the wheel goes LIGHT just
+   before the front washes out. That lightening is the most informative cue in a sim —
+   more than raw force. Model `t_p = t_p0 · (1 − |α_rel| / α_peak)` clamped at 0 (α_peak is
+   already available from B4's `peak_alpha_*`), or the Pacejka Mz form if it proves cleaner.
+3. Exports + Tab rows: `trail_pneumatic` (m, ~0.03), `trail_mechanical` (m, ~0.02 from
+   caster), `steer_ratio` (~15:1), `sat_gain` (output scaling, 0..2).
+4. Expose `get_steer_torque()` (N·m at the rack) and show it on the HUD. Optionally drive
+   gamepad rumble from |torque| as a poor-man's cue — `Input.start_joy_vibration()` is
+   rumble, NOT force feedback, and must not be described as FFB anywhere.
+5. **Headless probe:** sweep slip angle 0 → 2×peak at constant load and print the torque
+   curve. It MUST rise, peak BEFORE the lateral-force peak, then fall — if it rises
+   monotonically the trail collapse is wrong and the signal is worthless for feel.
+
+**Compile gate:** `./check.sh` clean.
+**User checklist (works on keyboard/pad — no wheel needed):**
+- [ ] HUD steering torque rises with cornering load, then drops distinctly as the front
+  starts to push wide — visible a beat BEFORE the car actually washes out.
+- [ ] Torque is near zero at a standstill and on a straight, and reverses sign with
+  steering direction.
+- [ ] Gravel vs tarmac differ (they have different peak slip angles).
+
+### Phase C2 — Wheel input path (gated: needs the wheel in hand)
+
+**Files:** `world.gd` (input map + device detection), `vehicle_m2.gd` (steering block),
+`hud.gd`, `README.md`.
+
+A wheel is not a big analog stick — the existing steering path would actively fight it.
+`_steer` ramps toward the target (built for binary keys) and `steer_speed_falloff` reduces
+lock at speed; both are compensations for input devices that have no self-centring and no
+range. A real wheel supplies its own, so it must bypass them.
+
+1. Detect a wheel (Godot exposes it as a joypad; identify by name/axis count and by a
+   rotation range far beyond a thumbstick's). Store a `_wheel_mode` flag.
+2. Steering in wheel mode: **direct, unfiltered mapping** — no `steer_rate` ramp, no
+   `steer_return_rate`, no speed falloff. Add `wheel_range_deg` (the wheel's physical
+   rotation, e.g. 900) and map it onto the car's `max_steer_deg` through `steer_ratio` so
+   the ratio is PHYSICAL rather than a normalised 0..1 fudge.
+3. Pedals: separate axes for throttle / brake / clutch (wheels report these independently);
+   they already bypass the virtual-pedal shaping via the analog path from Phase 0. Add
+   per-axis calibration (rest point + full travel) — cheap, and unusable without it if the
+   pedals report inverted or half-range, which is common.
+4. Shifter: H-pattern (each gear is a button), sequential, or paddles — map to the existing
+   `shift_up`/`shift_down` plus optional direct-to-gear actions. A handbrake axis if present.
+5. **Keyboard and the DS4 must keep working unchanged** — this is an added path, not a
+   replacement, and it is the regression risk of the whole phase.
+
+**Compile gate:** `./check.sh` clean, plus a headless probe printing the detected device
+name, axis count and live axis values (the same approach that verified the DS4 bindings).
+**User checklist:**
+- [ ] Wheel steers the car 1:1 with no lag, no snap-back, and full lock reachable.
+- [ ] Pedals read full 0..1 travel (HUD pedal line), clutch included.
+- [ ] Shifter selects gears including R and N; handbrake works.
+- [ ] Unplug the wheel: keyboard and DS4 still drive correctly.
+
+### Phase C3 — FFB output (gated: **spike before committing to this phase**)
+
+**Files:** a new `scripts/ffb.gd` output layer + whatever the spike concludes.
+
+**Read §7's FFB risk entry before starting.** Godot 4 has NO built-in force-feedback API —
+`Input.start_joy_vibration()` is rumble only. This phase therefore begins as a
+research spike, not an implementation, and it is entirely legitimate for it to conclude
+"not feasible on this machine without engine work."
+
+1. **Spike (timebox it).** Prove that Godot 4.4 on Apple Silicon can emit a single constant
+   force to the connected wheel. Candidate routes, cheapest first:
+   - a GDExtension wrapping SDL_Haptic (macOS routes it through the ForceFeedback
+     framework) — note the existing community plugin is **GDNative**, i.e. the Godot 3 API,
+     so it needs porting, and supports constant force only;
+   - a small external bridge process that owns the device and takes torque over a socket;
+   - vendor SDKs, if the specific wheel has macOS support at all.
+   Deliverable: the wheel physically pushes back, or a written "no, because…".
+2. Only if the spike succeeds: map C1's rack torque → constant force with `ffb_gain`
+   (master, 0..1), a slew-rate clamp, and a hard output clamp.
+3. **Safety, non-negotiable:** zero the output on pause, focus loss, respawn, stall and
+   quit. A wheel commanded to full torque with nobody holding it can hurt someone or
+   damage itself — the "zero on every exit path" test comes BEFORE any feel tuning.
+4. Layer road texture on top once Arc B exists: suspension velocity and `w.bottomed` give
+   kerb/washboard/bottoming cues that are far more convincing than SAT alone.
+5. If the spike fails: C1's signal still drives the HUD and rumble; record the finding in
+   ROADMAP.md so no future session re-litigates it, and park C3.
+
+**Compile gate:** `./check.sh` clean.
+**User checklist:**
+- [ ] Wheel goes light exactly when the front starts to wash out (the C1 cue, now felt).
+- [ ] Kerbs, ruts and bottoming come through as texture, distinct from cornering load.
+- [ ] `ffb_gain` from 0 → 1 scales cleanly with no oscillation or clipping.
+- [ ] Every exit path (pause, alt-tab, respawn, quit) leaves the wheel limp.
+
 ## 6. What must NOT break (regression surface)
 
 - **The tyre model core** (`_mf`, `_mf_slope`, `_mf_peak_u`, friction ellipse, `_mu_load`,
@@ -656,6 +772,24 @@ plumbing), `tuning_panel.gd`.
   mitigation is a higher `ride_freq` until B3 lands.
 - **Assists masking physics bugs:** all assists land LAST in their arc (A4) and default
   OFF (except anti-stall) — raw physics is always the tested baseline first.
+- **FFB may simply not be reachable from Godot on this Mac (C3).** Verified 2026-08-05:
+  Godot 4 ships **no** force-feedback API — `Input.start_joy_vibration()` is rumble
+  (weak/strong motors), which is a different thing and must never be labelled FFB. The
+  engine proposal to add constant/spring/damper/friction effects is still open
+  ([godot-proposals#8309](https://github.com/godotengine/godot-proposals/issues/8309)),
+  and the main community workaround
+  ([Dechode/Godot-FFB-SDL](https://github.com/Dechode/Godot-FFB-SDL)) is a **GDNative**
+  (Godot 3 API) SDL2 wrapper supporting constant force only, with no documented macOS
+  support; a downstream example needed rebuilding for Godot 4.4 and broke again on 4.5's
+  SDL3 switch ([FFB example](https://cairerocha.itch.io/godot-force-feedback-example-ffb)).
+  Stack that on top of patchy macOS/Apple-Silicon driver support for consumer wheels and
+  C3 is genuinely uncertain. **De-risk by ordering:** C1 (the physics signal) delivers
+  standalone value with zero hardware, C2 makes a wheel usable even with dead FFB, and C3
+  starts as a timeboxed spike whose honest outcome may be "no". Do not buy hardware on the
+  assumption that C3 will work.
+- **An FFB wheel is a physical actuator.** Unlike everything else in this plan, a bug here
+  moves a real object with real force. Output clamps, slew limiting and zero-on-every-exit
+  come before feel tuning, not after.
 
 ## 8. End-to-end verification (after B5)
 
@@ -831,3 +965,6 @@ User drive-through, all in one session, keyboard:
 - [ ] B3 — Bump stops
 - [ ] B4 — Relaxation length + By + CoM
 - [ ] B5 — Bake, prune, end-to-end
+- [ ] C1 — Self-aligning torque (no hardware needed; do after B4)
+- [ ] C2 — Wheel input path (needs a wheel; pull forward the day one arrives)
+- [ ] C3 — FFB output (spike first — may honestly conclude "not feasible", see §7)
