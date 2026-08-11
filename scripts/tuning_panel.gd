@@ -75,6 +75,7 @@ var _specs := [
 	["Brake torque (M2)",    "brake_torque",        1000.0,   6000.0, 100.0,  func(v): return "%d Nm" % int(v)],
 	["Handbrake torque (M2)","handbrake_torque",    1000.0,   8000.0, 100.0,  func(v): return "%d Nm" % int(v)],
 	["HB opens centre (M2)", "handbrake_opens_centre", 0.0,     1.0,   1.0,  func(v): return "ON" if v else "OFF"],
+	["Slide friction (M2)",  "slide_friction",         0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
 	# chassis / grip (shared)
 	["Car weight",           "mass",                 700.0,   2500.0,   25.0, func(v): return "%d kg" % int(v)],
 	["Grip - lateral",       "mu_lat",                 0.6,      2.2,   0.05, func(v): return "%.2f" % v],

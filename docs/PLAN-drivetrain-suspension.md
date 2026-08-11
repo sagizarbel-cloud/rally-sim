@@ -788,6 +788,22 @@ User drive-through, all in one session, keyboard:
   their Tab rows are gone (both were M1-only; `world.gd` only ever loads `vehicle_m2.gd`, so those
   rows were unreachable). New Tab row: `handbrake_opens_centre`. NOTE for B5: other dead "(M1)"
   rows remain in `_specs` (`engine_power`, `launch_boost`) — they belong to B5's prune, not here.
+  **First drive verdict 2026-08-11: REJECTED** — "felt good beforehand, now way too strong, most
+  times just slows the car and [kills] the swing". Root cause found, and it is the tyre model, not
+  the handbrake: **the friction ellipse only RESCALES the Fx:Fy ratio the two independent Magic
+  Formula curves produce, it never CORRECTS it.** Invisible until a wheel truly lets go — at slip
+  ratio −1 the longitudinal curve is saturated while the lateral curve still reads a modest slip
+  angle, so the ellipse returns a force far too lateral for a locked tyre. Measured on a locked
+  rear at ~10° of slip: **1740 N of lateral force where opposing the slip velocity gives ~460 N —
+  nearly 4× too much grip.** That is precisely what `rear_grip_cut = 0.2` was standing in for
+  (1740 × 0.2 ≈ 350 N ≈ the true 460 N), which is why deleting it made the car brake instead of
+  rotate. Fixed per §5's own instruction ("the fix is in the tyre/ellipse maths, not a grip
+  multiplier"): past the ellipse, a tyre's force DIRECTION is handed over to its slip velocity,
+  blended in over `SLIDE_BAND` of utilisation and capped by the ellipse's own radius along that
+  direction (so the tyre stays anisotropic). Export `slide_friction` (default ON, Tab toggle) for
+  A/B. Probe, same handbrake pull: yaw **0.60 → 0.90 rad/s** and rear slip angle **24° → 44°**
+  (rotation ×1.5), while straight-line braking is unchanged to the decimal (44.7 km/h lost either
+  way) — the correction only touches tyres that have genuinely let go. AWAITING re-drive.
 - [ ] B1 — Derived suspension setup
 - [ ] B2 — Damper model
 - [ ] B3 — Bump stops

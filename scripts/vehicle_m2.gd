@@ -183,6 +183,10 @@ class_name VehicleM2
 # Rally hydraulic handbrakes disengage the centre diff so the rears can lock without dragging the
 # front axle (and the whole drivetrain) with them - the reason an AWD car can rotate on the lever.
 @export var handbrake_opens_centre := true
+# Sliding tyres take their force DIRECTION from the slip velocity once past the friction ellipse
+# (see the gross-sliding block in the force pass). Physically this should always be on; it is an
+# export so it can be A/B'd against the old behaviour in one drive.
+@export var slide_friction := true
 
 # --- Steering / aero ---
 @export var max_steer_deg := 34.0
@@ -250,6 +254,9 @@ const BLIP_BAND := 40.0         # rad/s: throttle feathers off across this band 
 const DIFF_BAND := 1.0          # rad/s: smoothing width of a diff clutch's Coulomb transfer torque
 const DIFF_OPEN_FRICTION := 5.0 # N*m: parasitic spider-gear friction of an OPEN diff
 const DIFF_LOCKED_CAP := 10000.0 # N*m: "infinite" preload that implements LOCKED via the clutch path
+# A5: how far past the friction ellipse a tyre must be before its force direction is fully handed
+# over to the slip velocity (blend width in units of ellipse utilisation, not a feel tunable).
+const SLIDE_BAND := 0.5
 # A4 launch-assist numerics: the rpm the assist holds is COMPUTED (see _launch_setup); this is
 # only the proportional band its throttle controller closes over, as a fraction of that rpm.
 const LAUNCH_RPM_BAND := 0.08
@@ -1352,6 +1359,31 @@ func _physics_process(delta: float) -> void:
 		if e > 1.0:
 			Fx /= e
 			Fy /= e
+			# GROSS SLIDING (A5): a sliding tyre's friction opposes its SLIP VELOCITY. It does not
+			# keep whatever Fx:Fy ratio two independently-evaluated Magic Formula curves happened to
+			# produce - the ellipse only rescales that ratio, it never corrects it. The difference is
+			# invisible until a wheel really lets go: at slip ratio -1 the longitudinal curve is
+			# saturated while the lateral curve still reads a modest slip angle, so the ellipse hands
+			# back a force far too lateral for a locked tyre. Measured on a locked rear at ~10 deg of
+			# slip: 1740 N of lateral force where opposing the slip velocity gives ~460 N, i.e. it
+			# kept nearly 4x the grip it should. THAT is what the old rear_grip_cut = 0.2 constant
+			# was standing in for. Blending the direction toward the slip velocity is the physical
+			# version, so a locked rear axle lets go on its own and the handbrake rotates the car
+			# instead of merely scrubbing speed.
+			if slide_friction and Fz > 1.0:
+				var vsx := w.omega * wheel_radius - v_long     # contact-patch slip velocity,
+				var vsy := -v_lat                              # signed like Fx / Fy above
+				var vm := sqrt(vsx * vsx + vsy * vsy)
+				if vm > 0.2:                                   # below this it is not sliding, it is parked
+					var dx := vsx / vm
+					var dy := vsy / vm
+					# the ellipse's own radius along that direction, so the tyre stays anisotropic
+					var ex := dx / maxf(mux, 0.01)
+					var ey := dy / maxf(muy, 0.01)
+					var cap := Fz / maxf(sqrt(ex * ex + ey * ey), 0.001)
+					var slide := clampf((e - 1.0) / SLIDE_BAND, 0.0, 1.0)
+					Fx = lerpf(Fx, cap * dx, slide)
+					Fy = lerpf(Fy, cap * dy, slide)
 		w.util = minf(e, 1.0)
 		w.slip = clampf(absf((w.omega * wheel_radius - v_long) / maxf(absf(v_long), slip_ref_speed)), 0.0, 3.0)
 		apply_force(fwd_v * Fx + right_v * Fy, off_v)
