@@ -14,9 +14,12 @@ extends Node3D
 
 var car                                   # the vehicle (untyped so get_engine() resolves dynamically)
 
-@export var cluster_pos := Vector3(-0.35, 0.665, -0.235)   # driver's side (LHD), clear of the wheel rim
+@export var cluster_pos := Vector3(-0.35, 0.582, -0.205)   # driver's side (LHD), LOW on the dash: the
+                                                           # pod must stay under the horizon so it never
+                                                           # eats the road in cockpit view
 @export var cluster_tilt := -24.0         # deg about X: the screen aims at the cockpit camera
-@export var screen_size := Vector2(0.300, 0.168)
+@export var screen_size := Vector2(0.300, 0.158)   # trimmed to the content: dead margin here
+                                                  # is screen area stolen from the road ahead
 @export var dial_radius := 0.062
 @export var dial_gap := 0.072              # centre-to-centre half-spacing of the two dials
 @export var dial_y := -0.016               # dials sit low on the screen, clearing the shift strip
@@ -152,7 +155,7 @@ func _ready() -> void:
 	if car != null:
 		red_from = float(car.redline_rpm) * float(car.shift_light_frac)
 	# pod + screen
-	_box(Vector3(screen_size.x + 0.030, screen_size.y + 0.026, 0.012), Vector3(0, 0, -0.008), C_POD)
+	_box(Vector3(screen_size.x + 0.026, screen_size.y + 0.016, 0.012), Vector3(0, 0, -0.008), C_POD)
 	_box(Vector3(screen_size.x, screen_size.y, 0.004), Vector3(0, 0, 0.0), C_SCREEN)
 	# tacho left, speedo right
 	_tach_needle = _build_dial(-dial_gap, int(_rpm_max / 1000.0), 1000.0, _rpm_max, red_from)
