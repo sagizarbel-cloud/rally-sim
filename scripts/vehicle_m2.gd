@@ -1051,14 +1051,25 @@ func _physics_process(delta: float) -> void:
 	# treatment, and impulse-capped per substep below so it can never drive a wheel backwards. ---
 	for ei in range(_esc.size()):
 		_esc[ei] = 0.0
+	var esc_cut := 0.0               # fraction of engine demand the assist withholds
 	var v_fwd := linear_velocity.dot(-global_transform.basis.z)
 	if stability_assist and absf(v_fwd) > slip_ref_speed:
 		var yaw := angular_velocity.dot(up)
 		var wheelbase := absf(_wheels[2].pos.z - _wheels[0].pos.z)
 		var yaw_ref := v_fwd * steer_angle / maxf(wheelbase + _understeer_gradient() * v_fwd * v_fwd, 0.5)
-		var excess := absf(yaw) - absf(yaw_ref) - stability_margin
+		# the error is SIGNED - comparing magnitudes would let opposite lock raise the intervention
+		# threshold, which is backwards: a slide is counter-steered, so the reference points the
+		# other way and every bit of yaw in the slide direction is error, not allowance.
+		var err := yaw - yaw_ref
+		var excess := absf(err) - stability_margin
 		if excess > 0.0:
-			var oi := 1 if yaw > 0.0 else 0     # outer front wheel of the rotation (+yaw = turning left)
+			# Brake alone runs out of authority in a developed slide: that tyre is already on its
+			# friction circle, so braking it ROTATES its force vector rather than adding one. The
+			# other half of the correction - and the first thing a driver or a real ESC does - is
+			# to stop feeding the slide, so withhold engine demand over the same band (the margin
+			# is the band, so a small excess trims and twice the margin lifts fully).
+			esc_cut = clampf(excess / maxf(stability_margin, 0.01), 0.0, 1.0)
+			var oi := 1 if err > 0.0 else 0     # front wheel whose drag yaws the car back (+err = rotating left)
 			var ow: Wheel = _wheels[oi]
 			if ow.contact:
 				# ceiling is the torque that would just LOCK this tyre: past it the wheel stops
@@ -1130,7 +1141,7 @@ func _physics_process(delta: float) -> void:
 					# proper heel-toe order: only blip once the plates are OPEN, so the spin-up
 					# torque never drags the wheels (the engine revs faster than the clutch moves)
 					blip_thr = clampf((omega_gb - _omega_e) / BLIP_BAND, 0.0, 1.0)
-			t_target = _engine_torque(rpm) * maxf(thr_cmd, maxf(idle_thr, blip_thr)) * rev_cut * (1.0 - damage_power_loss * _damage) * _tc_scale
+			t_target = _engine_torque(rpm) * maxf(thr_cmd * (1.0 - esc_cut), maxf(idle_thr, blip_thr)) * rev_cut * (1.0 - damage_power_loss * _damage) * _tc_scale
 		_t_comb += (t_target - _t_comb) * clampf(dt_sub / maxf(intake_tau, dt_sub), 0.0, 1.0)
 		# motoring friction always opposes rotation (a dead engine still compresses and rubs)
 		var t_fric := maxf(fric_c0 + fric_c1 * _omega_e, 0.0)

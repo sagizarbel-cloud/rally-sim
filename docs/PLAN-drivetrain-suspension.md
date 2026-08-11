@@ -720,6 +720,25 @@ User drive-through, all in one session, keyboard:
   spin at 25 m/s decays to 0.17 rad/s in 1 s vs 0.30 raw, peak correction 2154 N·m.
   New Tab rows: `shift_time`, `overrev_guard`, `launch_assist`, `stability_assist`,
   `stability_gain`, `stability_margin`. All new state resets in `respawn()`.
+  **User drive verdict 2026-08-11:** upshifts "okay"; overrev guard off works (~12% damage per
+  money shift); launch assist works AND is easy to match manually — so it passes the "must not be
+  strictly superior" bar. Stability assist FAILED its item: "not that noticeable at slides,
+  although I do feel its effect". Two causes found and fixed, then re-probed:
+  (1) **Real bug** — the yaw error was compared as MAGNITUDES (`|yaw| - |yaw_ref|`). A slide is
+  counter-steered, so the bicycle-model reference points the *other way* and its magnitude is
+  large, which RAISED the intervention threshold exactly when the car was sideways. A 1.2 rad/s
+  slide on opposite lock read as 0.2 rad/s of excess instead of 2.0. The error is now signed.
+  (2) **Brake-only authority is physically capped**: in a developed slide the outer front tyre is
+  already on its friction circle, so braking it rotates its force vector rather than adding one —
+  the probe showed the correction saturating at the tyre's lock limit while yaw barely moved. The
+  assist now also withholds engine demand over the same band (`stability_margin` IS the band, so a
+  small excess trims and twice the margin lifts fully) — the first thing a driver or a real ESC
+  does. This is a deliberate extension of §5's brake-only wording, made because brake-only could
+  not meet §5's own acceptance criterion ("big dirt slides get visibly tamed").
+  Probe (counter-steered 25 deg power slide, 1.2 rad/s, 25 m/s, 3rd gear): assist OFF the slide
+  ESCALATES to 1.95 rad/s and stays there (a spin); ON it peaks at 1.22 and decays to 0.49 rad/s.
+  Idle and rev-match demands are deliberately exempt from the cut, so the assist can never stall
+  the engine or block a blip. AWAITING the user's re-drive of the stability item only.
 - [ ] A5 — Handbrake refinement
 - [ ] B1 — Derived suspension setup
 - [ ] B2 — Damper model
