@@ -53,10 +53,13 @@ The user wants the DRIVING FEEL deepened, in this order:
 2. **Arc B — Suspension & weight transfer**: body roll / left-right transition rhythm
    ("Scandinavian-flick-ability") and bump absorption / road texture. Jumps and landings
    are acceptable as-is.
-3. **Arc C — Steering feel & force feedback** (added 2026-08-05 at the user's request, so
-   the work is planned and committed BEFORE a wheel is bought/connected): self-aligning
-   torque as a real computed signal, a proper wheel input path, and FFB output. Ordering
-   here is driven by hardware arrival rather than dependency — see §5 Arc C.
+3. **Arc C — Surface texture, steering feel & force feedback** (added 2026-08-05, extended
+   2026-08-11 at the user's request): first make the wheels actually FEEL the surface they
+   are on, then self-aligning torque as a real computed signal, then a proper wheel input
+   path and FFB output. The user's reasoning for that order is sound and worth recording:
+   force feedback can only transmit what the physics already contains, and today the road
+   is geometrically smooth, so an FFB wheel would faithfully reproduce nothing. Ordering
+   within the arc is driven by hardware arrival rather than dependency — see §5 Arc C.
 
 Preceded by **Phase 0: the 120 Hz physics tick** (roadmap M15) so everything new is built
 and tuned once, on the stable foundation.
@@ -265,18 +268,29 @@ twice as often.
 | B3 | B | Bump stops + honest load path (`w.bottomed` for M7) | S |
 | B4 | B | Lateral relaxation length + surface-derived `By` + CoM height | M |
 | B5 | B | Bake defaults, prune dead tunables, end-to-end verification | S |
-| C1 | C | Self-aligning torque — the FFB signal (no hardware needed) | M |
-| C2 | C | Wheel input path: lock, ratio, pedals, shifter | M |
-| C3 | C | FFB output layer (**research spike first** — see §7) | L |
+| C1 | C | **Surface roughness the wheels feel** (washboard + tarmac detail) | M |
+| C2 | C | Self-aligning torque — the FFB signal (no hardware needed) | M |
+| C3 | C | Wheel input path: lock, ratio, pedals, shifter | M |
+| C4 | C | FFB output layer (**research spike first** — see §7) | L |
 
 Every phase: `./check.sh` clean → user drives the checklist → user verdict recorded →
 next phase. Every phase leaves the car fully keyboard-drivable.
 
 **Arc C is the exception to "strictly in order."** Its sequence is set by when a wheel
-physically arrives, not by dependency: C1 needs no hardware and belongs after B4 (it builds
-on the relaxed slip angle), while C2 and C3 cannot be tested at all without the wheel in
-hand. If a wheel arrives mid-Arc-B, pull C2 forward the same day — an untested input path
-is the difference between a usable wheel and an unusable one — and leave C1/C3 in place.
+physically arrives, not by dependency: C1 and C2 need no hardware, while C3 and C4 cannot
+be tested at all without the wheel in hand. If a wheel arrives mid-Arc-B, pull C3 forward
+the same day — an untested input path is the difference between a usable wheel and an
+unusable one — and leave the rest in place. C2 wants B4 done first (it builds on the
+relaxed slip angle).
+
+**Ordering decision, 2026-08-11 (user's call, recorded because it has a cost).** C1 runs
+AFTER Arc B, not before it. The alternative was to add road texture first so B2's dampers
+were tuned once against realistic input — the same "build on the final foundation" logic
+that put the 120 Hz tick in Phase 0. The user chose to finish Arc B first. **Consequence to
+expect and not be surprised by:** B2's `hs_blowoff` and knee speed exist specifically to
+swallow washboard, and they will have been tuned on a glass-smooth road, so C1 will very
+likely require revisiting them. Budget that re-tune into C1 rather than treating it as a
+regression.
 
 ---
 
@@ -615,7 +629,121 @@ plumbing), `tuning_panel.gd`.
 
 ---
 
-### Phase C1 — Self-aligning torque: the steering signal (no hardware required)
+### Phase C1 — Surface roughness the wheels actually feel
+
+**Files:** `vehicle_m2.gd` (the suspension raycast block), a new `scripts/roughness.gd`,
+`stage.gd` (surface classification already there), `tuning_panel.gd`, `hud.gd`.
+
+**The problem, measured 2026-08-11.** The stage's collision grid is `cells 320` over
+`size 720` — **2.25 m per cell** — and the hills use `octaves 2` with the source comment
+"fewer octaves = smoother (less high-freq bumps)". A 0.34 m tyre on a 2.25 m grid cannot
+feel anything below that scale, so outside the centre deformable patch the entire world is
+geometrically smooth and "dirt vs asphalt" is nothing but a friction scalar from
+`grip_at()`. Arc B makes the suspension *respond* better; C1 is what gives it something to
+respond to.
+
+**Chosen mechanism (user's call, 2026-08-11): a procedural roughness FIELD**, sampled per
+wheel at the contact point and injected into the suspension — not baked geometry. It costs
+no mesh or collider resolution, reaches wavelengths far below any practical grid, works on
+every surface at once, and is keyed to world position so it is **repeatable** — the same
+bump is in the same place every lap, which is what makes a stage learnable. The trade is
+that you feel the texture without seeing it; that was accepted.
+
+#### C1.1 The roughness field (functions over constants)
+
+- **Broadband component from the ISO 8608 standard.** Road profiles are classified by the
+  displacement PSD `Gd(n) = Gd(n₀)·(n/n₀)^(−w)` with `n₀ = 0.1` cycles/m and waviness
+  `w = 2`, where the single coefficient `Gd(n₀)` selects road class A (excellent) through H
+  (very poor) — [ISO 8608 profile simulation](https://www.researchgate.net/publication/320302446_Simulated_Road_Profiles_According_to_ISO_8608_in_Vibration_Analysis),
+  [PSD generation methods review](http://www.scielo.org.co/scielo.php?script=sci_arttext&pid=S0120-56092017000100007).
+  Realise it as octave-spaced `FastNoiseLite` layers whose amplitudes follow that power law,
+  so ONE physically meaningful export per surface (`road_class_gravel`, `road_class_tarmac`)
+  sets the whole spectrum instead of a pile of hand-tuned bump knobs.
+  **Caveat from the sources:** ISO 8608 does not say which real roads map to which class,
+  and synthesised classes differ measurably from real road spectra — so treat the class as a
+  physically-grounded starting point and let the drive test move it, exactly as with the
+  ride-frequency numbers in B1.
+- **Washboard / corrugation** (the user's first priority) is NOT broadband noise — it is a
+  coherent transverse ripple train, and it needs its own term. Published figures:
+  **wavelength 300–1000 mm, depth up to ~50 mm**, forming spontaneously on dry loose surfaces
+  and prevalent in arid regions (which matches this stage's dusty Acropolis-style gravel) —
+  [Royal Society: corrugation under vehicle weight](https://royalsocietypublishing.org/rspa/article/476/2241/20200323/80815/Corrugation-of-an-unpaved-road-surface-under),
+  [review of corrugation mechanisms](https://www.tandfonline.com/doi/full/10.1080/14680629.2025.2554717).
+  Model as `washboard_amp · sin(2π · s / washboard_lambda)` where **`s` is distance ALONG the
+  road centreline** so the ridges run transverse to travel, as they do in reality — a noise
+  field cannot produce this, which is why it is a separate term.
+  **Place it where it physically forms:** corrugation is driven by repeated
+  braking/accelerating traffic, so it belongs in braking zones and corner entries.
+  `wear.gd` ALREADY computes exactly that field (`curv_min`, `brake_dist`) to place the wear
+  line — reuse it as the washboard amplitude mask rather than inventing a second one. That
+  also makes the two systems agree: the line that gets worn is the line that gets ribbed.
+- **Tarmac detail** (the user's other priority): a much lower road class, plus discrete
+  features — expansion joints at a set interval and occasional patched repairs. Kerbs are
+  already real geometry in `stage.gd` and stay that way.
+
+#### C1.2 The enveloping filter — do not skip this
+
+**A tyre bridges anything shorter than its contact patch.** The tyre filters road wavelengths
+shorter than the contact length, so the *effective* profile at the wheel differs from the
+actual profile; this is the standard "enveloping" behaviour that MF-SWIFT models with
+elliptical cams — [MF-SWIFT](https://www.researchgate.net/publication/298445350_The_MF-Swift_tyre_model_Extending_the_Magic_Formula_with_rigid_ring_dynamics_and_an_enveloping_model),
+[enveloping at low speed](https://www.researchgate.net/publication/232816823_Experimental_analysis_of_tyre-enveloping_characteristics_at_low_speed).
+
+This is the difference between texture and buzz. The contact patch here is ~0.2 m: washboard
+at 0.3–1.0 m is LONGER than the patch and must come through, while fine gravel grain at
+1–5 cm is SHORTER and must be largely filtered out. Feeding the raw field to a single-point
+raycast would over-transmit exactly the frequencies a real tyre swallows, and the car would
+feel like it is running on gravel-shaped teeth.
+
+Implement cheaply: sample the field at N points spanning `contact_patch_len` along the
+wheel's heading and combine (weighted mean, biased toward the peak — a tyre rides over a
+crest, it does not sink into every trough). Export `contact_patch_len` (~0.2 m) and the
+sample count; the count is a perf/quality dial, not a feel parameter.
+
+#### C1.3 Injection point
+
+Add the effective roughness offset to the **suspension raycast hit distance** in
+`vehicle_m2.gd`, i.e. shorten/lengthen the measured ground distance. One line, and
+everything downstream inherits it for free and correctly: compression → spring → damper →
+B3's bump stop → `Fz` → load-sensitive grip → weight transfer → tyre heat/wear. Also offset
+`w.contact_point` so dust, marks, terrain dig and audio stay consistent.
+
+**Exclude the centre deformable patch** (`terrain.gd` already puts REAL geometry there);
+double-counting would give that patch texture twice. Blend the field out over its border.
+
+#### C1.4 Known interaction — the travel budget (read B3's open item first)
+
+B3 recorded that **all four corners already peg at 100% of travel on the rough dirt loop at
+100 km/h**, because B1's softer springs moved static sag from 7.7 cm to 12.7 cm. C1 adds
+input on top of that, so it will make bottoming worse before it makes it better. C1 must
+re-measure the bottoming statistics and, if they degrade, force the decision B3 left open:
+raise `ride_freq_*`, or raise ride height (`rest_length` + `max_travel` 0.45 → 0.50, gravel
+style, at ~5 cm of CoM height). Do not paper over it by shrinking `roughness_gain` — that
+would be tuning a magic number to hide a real geometry problem.
+
+**Compile gate:** `./check.sh` clean.
+**Headless probes (then remove):**
+1. **Spectrum:** sample the field along a straight line and dump RMS per octave band; the
+   slope must follow the ISO power law, and the gravel class must sit clearly above tarmac.
+2. **Enveloping:** a 3 cm bump 4 cm wide must be strongly attenuated at the wheel while a
+   0.6 m washboard passes at near full amplitude. This is the phase's key correctness test.
+3. **Repeatability:** sample the same world position twice, on different frames and after a
+   respawn — identical values, or the stage is not learnable.
+4. **Travel budget:** peak `Fz`, max compression and bottomed-frame count on the dirt loop at
+   100 km/h, before vs after, against B3's recorded numbers.
+
+**User drive checklist:**
+- [ ] Braking hard into a dirt corner: washboard is felt — the car skips and dances, and it
+  is a handling event to manage, not a cosmetic vibration.
+- [ ] The dirt loop reads as a SURFACE at speed rather than a smooth floor, and tarmac reads
+  smooth-but-alive (joints and patches, not dead glass).
+- [ ] `roughness_gain` 0 restores today's glass-smooth car exactly — the A/B that proves what
+  the phase bought.
+- [ ] No buzz or jitter at parking speed, and none at 250 km/h down the drag strip.
+- [ ] Bottoming is no worse than B3's baseline, or the ride-height/frequency call has been
+  made deliberately with the user.
+
+### Phase C2 — Self-aligning torque: the steering signal (no hardware required)
 
 **Files:** `vehicle_m2.gd` (lateral force site, after B4's relaxation length), `hud.gd`,
 `tuning_panel.gd`.
@@ -651,7 +779,7 @@ send to a motor.
   steering direction.
 - [ ] Gravel vs tarmac differ (they have different peak slip angles).
 
-### Phase C2 — Wheel input path (gated: needs the wheel in hand)
+### Phase C3 — Wheel input path (gated: needs the wheel in hand)
 
 **Files:** `world.gd` (input map + device detection), `vehicle_m2.gd` (steering block),
 `hud.gd`, `README.md`.
@@ -684,7 +812,7 @@ name, axis count and live axis values (the same approach that verified the DS4 b
 - [ ] Shifter selects gears including R and N; handbrake works.
 - [ ] Unplug the wheel: keyboard and DS4 still drive correctly.
 
-### Phase C3 — FFB output (gated: **spike before committing to this phase**)
+### Phase C4 — FFB output (gated: **spike before committing to this phase**)
 
 **Files:** a new `scripts/ffb.gd` output layer + whatever the spike concludes.
 
@@ -701,19 +829,19 @@ research spike, not an implementation, and it is entirely legitimate for it to c
    - a small external bridge process that owns the device and takes torque over a socket;
    - vendor SDKs, if the specific wheel has macOS support at all.
    Deliverable: the wheel physically pushes back, or a written "no, because…".
-2. Only if the spike succeeds: map C1's rack torque → constant force with `ffb_gain`
+2. Only if the spike succeeds: map C2's rack torque → constant force with `ffb_gain`
    (master, 0..1), a slew-rate clamp, and a hard output clamp.
 3. **Safety, non-negotiable:** zero the output on pause, focus loss, respawn, stall and
    quit. A wheel commanded to full torque with nobody holding it can hurt someone or
    damage itself — the "zero on every exit path" test comes BEFORE any feel tuning.
 4. Layer road texture on top once Arc B exists: suspension velocity and `w.bottomed` give
    kerb/washboard/bottoming cues that are far more convincing than SAT alone.
-5. If the spike fails: C1's signal still drives the HUD and rumble; record the finding in
+5. If the spike fails: C2's signal still drives the HUD and rumble; record the finding in
    ROADMAP.md so no future session re-litigates it, and park C3.
 
 **Compile gate:** `./check.sh` clean.
 **User checklist:**
-- [ ] Wheel goes light exactly when the front starts to wash out (the C1 cue, now felt).
+- [ ] Wheel goes light exactly when the front starts to wash out (the C2 cue, now felt).
 - [ ] Kerbs, ruts and bottoming come through as texture, distinct from cornering load.
 - [ ] `ffb_gain` from 0 → 1 scales cleanly with no oscillation or clipping.
 - [ ] Every exit path (pause, alt-tab, respawn, quit) leaves the wheel limp.
@@ -772,7 +900,23 @@ research spike, not an implementation, and it is entirely legitimate for it to c
   mitigation is a higher `ride_freq` until B3 lands.
 - **Assists masking physics bugs:** all assists land LAST in their arc (A4) and default
   OFF (except anti-stall) — raw physics is always the tested baseline first.
-- **FFB may simply not be reachable from Godot on this Mac (C3).** Verified 2026-08-05:
+- **C1 without the enveloping filter will feel like buzz, not texture.** A real tyre bridges
+  everything shorter than its contact patch (~0.2 m here); a single-point raycast bridges
+  nothing. Inject the raw field and every 2 cm stone arrives at full amplitude — high-
+  frequency noise the car cannot possibly ride. The enveloping sample-and-combine in C1.2 is
+  not polish, it is the thing that makes the phase work; if the drive test reports "vibration"
+  rather than "surface", suspect the filter before touching amplitudes.
+- **C1 fights the travel budget B3 already flagged.** All four corners peg at 100% travel on
+  the rough loop at 100 km/h today. More input makes that worse, and the honest fixes are ride
+  frequency or ride height — NOT quietly lowering `roughness_gain`, which would hide a real
+  geometry problem behind a tuned constant.
+- **C1 must not double-count the centre deformable patch**, where `terrain.gd` already puts
+  real ruts in the collider. Blend the field out across that border.
+- **C1 changes the baseline every earlier phase was judged against.** Dampers, bump stops and
+  tyre wear were all tuned on a smooth road. Expect to revisit B2's `hs_blowoff`/knee (see the
+  ordering note in §4) and to see tyre temperatures and wear move. `roughness_gain = 0` is the
+  A/B that separates "C1 broke it" from "C1 revealed it".
+- **FFB may simply not be reachable from Godot on this Mac (C4).** Verified 2026-08-05:
   Godot 4 ships **no** force-feedback API — `Input.start_joy_vibration()` is rumble
   (weak/strong motors), which is a different thing and must never be labelled FFB. The
   engine proposal to add constant/spring/damper/friction effects is still open
@@ -783,10 +927,10 @@ research spike, not an implementation, and it is entirely legitimate for it to c
   support; a downstream example needed rebuilding for Godot 4.4 and broke again on 4.5's
   SDL3 switch ([FFB example](https://cairerocha.itch.io/godot-force-feedback-example-ffb)).
   Stack that on top of patchy macOS/Apple-Silicon driver support for consumer wheels and
-  C3 is genuinely uncertain. **De-risk by ordering:** C1 (the physics signal) delivers
-  standalone value with zero hardware, C2 makes a wheel usable even with dead FFB, and C3
-  starts as a timeboxed spike whose honest outcome may be "no". Do not buy hardware on the
-  assumption that C3 will work.
+  C4 is genuinely uncertain. **De-risk by ordering:** C1 (surface texture) and C2 (the
+  steering signal) deliver standalone value with zero hardware, C3 makes a wheel usable even
+  with dead FFB, and C4 starts as a timeboxed spike whose honest outcome may be "no". Do not
+  buy hardware on the assumption that C4 will work.
 - **An FFB wheel is a physical actuator.** Unlike everything else in this plan, a bug here
   moves a real object with real force. Output clamps, slew limiting and zero-on-every-exit
   come before feel tuning, not after.
@@ -993,6 +1137,7 @@ User drive-through, all in one session, keyboard:
   CoM height, so ~16% more roll moment).
 - [ ] B4 — Relaxation length + By + CoM
 - [ ] B5 — Bake, prune, end-to-end
-- [ ] C1 — Self-aligning torque (no hardware needed; do after B4)
-- [ ] C2 — Wheel input path (needs a wheel; pull forward the day one arrives)
-- [ ] C3 — FFB output (spike first — may honestly conclude "not feasible", see §7)
+- [ ] C1 — Surface roughness (washboard + tarmac detail; procedural field, after Arc B)
+- [ ] C2 — Self-aligning torque (no hardware needed; do after B4)
+- [ ] C3 — Wheel input path (needs a wheel; pull forward the day one arrives)
+- [ ] C4 — FFB output (spike first — may honestly conclude "not feasible", see §7)
