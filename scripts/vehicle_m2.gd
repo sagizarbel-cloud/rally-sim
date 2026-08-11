@@ -223,6 +223,7 @@ var _brake_pedal := 0.0           # virtual brake pedal (0..1)
 var _steer_wheel: Node3D          # cockpit steering wheel (spins with steering input)
 var _rev_segs: Array = []         # cabin rev-bar segments: {mat, col}
 var _shift_mat: StandardMaterial3D   # cabin shift-light material (flashes near the shift point)
+var _cluster: Node3D              # the gauge cluster (dashboard.gd); the rev bar mounts on it
 var _flash := 0.0                 # shift-light blink phase
 var _drive_mode := 0              # 0 = AWD, 1 = RWD, 2 = FWD (cycle with T)
 var _livery_mat: StandardMaterial3D
@@ -349,46 +350,43 @@ func _rev_color(t: float) -> Color:
 	return Color(0.95, 0.12, 0.1)                  # red (redline zone)
 
 func _build_revbar() -> void:
-	# in-cabin rev bar on the dash: segments light green->yellow->red with rpm, + a flashing shift light
+	# shift-light strip across the TOP of the gauge cluster's screen, like the LED bar on a real
+	# racing display: segments light green->yellow->red with rpm, plus a flashing shift light at
+	# the end. Mounted ON the cluster (dashboard.gd), so it inherits the pod's position and tilt
+	# and can never drift into the dials - one thing to move, not two.
+	var host: Node3D = _cluster if _cluster != null else self
 	var n := 14
-	var seg_w := 0.02
-	var gap := 0.005
+	var seg_w := 0.015
+	var gap := 0.0035
 	var total := n * seg_w + (n - 1) * gap
-	var y := 0.57          # on the small binnacle box, close to the wheel
-	var z := -0.19         # binnacle near face (toward the driver) -- much closer than the main dash
-	var x0 := -0.35 - total * 0.5
+	var y := 0.062         # just inside the top edge of the screen
+	var z := 0.007         # a hair proud of the screen face
+	var x0 := -total * 0.5
 	for i in range(n):
 		var col := _rev_color(float(i) / float(n - 1))
 		var m := StandardMaterial3D.new()
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		m.albedo_color = col.darkened(0.8)         # dim when unlit
-		m.emission_enabled = true
-		m.emission = col
-		m.emission_energy_multiplier = 0.0         # off until rpm lights it
 		var seg := MeshInstance3D.new()
-		var bm := BoxMesh.new(); bm.size = Vector3(seg_w, 0.042, 0.01)
+		var bm := BoxMesh.new(); bm.size = Vector3(seg_w, 0.019, 0.004)
 		seg.mesh = bm
 		seg.material_override = m
 		seg.position = Vector3(x0 + i * (seg_w + gap) + seg_w * 0.5, y, z)
-		seg.rotation_degrees = Vector3(48, 0, 0)   # stand it up on the binnacle face, toward the driver
 		seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(seg)
+		host.add_child(seg)
 		_rev_segs.append({"mat": m, "col": col})
-	# shift light: a red disc above the bar, flashes near the shift point
+	# shift light: a red disc at the end of the strip, flashes near the shift point
 	_shift_mat = StandardMaterial3D.new()
 	_shift_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_shift_mat.albedo_color = Color(0.2, 0.0, 0.0)
-	_shift_mat.emission_enabled = true
-	_shift_mat.emission = Color(1.0, 0.06, 0.06)
-	_shift_mat.emission_energy_multiplier = 0.0
 	var light := MeshInstance3D.new()
-	var cyl := CylinderMesh.new(); cyl.top_radius = 0.019; cyl.bottom_radius = 0.019; cyl.height = 0.008
+	var cyl := CylinderMesh.new(); cyl.top_radius = 0.010; cyl.bottom_radius = 0.010; cyl.height = 0.004
 	light.mesh = cyl
 	light.material_override = _shift_mat
-	light.position = Vector3(-0.35, y + 0.05, z)
+	light.position = Vector3(total * 0.5 + 0.015, y, z)
 	light.rotation_degrees = Vector3(90, 0, 0)     # flat face toward the driver
 	light.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(light)
+	host.add_child(light)
 
 func _build_cluster() -> void:
 	# in-cabin gauge cluster (analog tacho + speedo + numeric gear) - see scripts/dashboard.gd.
@@ -397,6 +395,7 @@ func _build_cluster() -> void:
 	dash.name = "GaugeCluster"
 	dash.car = self
 	add_child(dash)
+	_cluster = dash
 
 func _build_body() -> void:
 	# Physics collision stays a single box; all the detail below is cosmetic (forward = -Z).
@@ -405,8 +404,8 @@ func _build_body() -> void:
 	col.shape = box; add_child(col)
 	_build_shell()
 	_build_cockpit()
-	_build_revbar()
 	_build_cluster()
+	_build_revbar()
 	# NOTE: no in-cabin 3D mirror quad -- a ViewportTexture renders black on a 3D surface on Metal.
 	# The functional rear-view is drawn as a 2D SubViewportContainer overlay in world.gd instead.
 
