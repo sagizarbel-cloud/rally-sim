@@ -100,7 +100,7 @@ func _process(delta: float) -> void:
 			names[i], grounded, w.Fz / 1000.0, w.slip, rad_to_deg(w.slip_angle), w.temp, w.tyre_wear * 100.0, tail])
 
 	lines.append("")
-	lines.append("[W/S] gas/brake  [A/D] steer  [Q/E] gears (R-N-1..6)  [Shift] clutch  [I] ignition  [T] AWD/RWD/FWD  [1/2/3] diff open/visc/rally  [Space] handbrake  [C] cam  [B] circuit  [L] time  [P] test puncture  [Tab] tune  [-/+] hud  [R] reset")
+	lines.append("[W/S] gas/brake  [A/D] steer  [Q/E] gears (R-N-1..6)  [Shift] clutch  [I] ignition  [T] AWD/RWD/FWD  [1/2/3] diff open/visc/rally  [Space] handbrake  [C] cam  [V]/R3 look back  [R-stick] look around  [B] circuit  [L] time  [P] test puncture  [Tab] tune  [-/+] hud  [R] reset")
 	_label.text = "\n".join(lines)
 
 func _fmt_time(t: float) -> String:

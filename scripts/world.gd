@@ -18,6 +18,19 @@ var _sun: DirectionalLight3D      # M10: the sun, cycled by time-of-day
 var _env: Environment
 var _sky_mat: ProceduralSkyMaterial
 var _tod := 0                     # time-of-day preset index
+# --- Right-stick look. The LEFT stick steers, so looking around lives on the right one. The
+# mapping is ABSOLUTE (stick deflection = view angle) rather than accumulating, so letting go
+# re-centres the view by itself the way your head does - no drift, nothing to reset. Clicking
+# the stick (R3) toggles a 180 deg look-back. ---
+var _look_yaw := 0.0              # rad, smoothed
+var _look_pitch := 0.0
+var _look_back := false
+var _rigid_cams: Array = []       # interior cams + the pitch they were mounted at
+const LOOK_DEADZONE := 0.15
+const LOOK_YAW_INTERIOR := 150.0  # deg: far enough to look over your shoulder
+const LOOK_YAW_CHASE := 180.0     # deg: a full orbit of the car
+const LOOK_PITCH_MAX := 22.0      # deg
+const LOOK_TAU := 0.10            # s, view smoothing (a head doesn't snap)
 
 const TOD := [
 	{"name": "NOON",    "rot": Vector3(-72, -40, 0),  "col": Color(1.0, 0.98, 0.95), "energy": 1.25, "top": Color(0.34, 0.50, 0.86), "horizon": Color(0.72, 0.82, 0.95), "ambient": 0.95},
@@ -222,6 +235,7 @@ func _setup_input() -> void:
 	_add_keys("handbrake",  [KEY_SPACE])
 	_add_keys("reset",      [KEY_R])
 	_add_keys("camera_toggle", [KEY_C])
+	_add_keys("look_back",     [KEY_V])   # 180 deg glance behind (right-stick click on a pad)
 	_add_keys("tuning_toggle", [KEY_TAB])
 	_add_keys("shift_up",   [KEY_E])
 	_add_keys("shift_down", [KEY_Q])
@@ -257,7 +271,8 @@ func _setup_input() -> void:
 	_add_button("hud_smaller",    JOY_BUTTON_DPAD_DOWN)
 	_add_button("drive_mode",    JOY_BUTTON_BACK)     # Share: AWD/RWD/FWD
 	_add_button("tuning_toggle", JOY_BUTTON_START)    # Options: tuning panel
-	_add_button("reset",             JOY_BUTTON_RIGHT_STICK)   # R3 - deliberate, never a slip
+	_add_button("reset",             JOY_BUTTON_LEFT_STICK)    # L3 - deliberate, never a slip
+	_add_button("look_back",         JOY_BUTTON_RIGHT_STICK)   # R3 - pairs with the look stick
 	_add_button("diff_preset_next",  JOY_BUTTON_TOUCHPAD)      # touchpad click: cycle 1/2/3
 
 	# analog deadzones: triggers rest at 0 (small dz), sticks drift a little (a touch more)
@@ -378,6 +393,7 @@ func _build_cameras(car: Node3D) -> void:
 	_cockpit_cam.rotation_degrees = Vector3(-10, 0, 0)
 	_cockpit_cam.fov = 85.0
 	car.add_child(_cockpit_cam)
+	_rigid_cams.append({"cam": _cockpit_cam, "base": _cockpit_cam.rotation})
 
 	# Dash: centred, on top of the dashboard looking forward (for a future gauge readout).
 	_dash_cam = Camera3D.new()
@@ -386,6 +402,7 @@ func _build_cameras(car: Node3D) -> void:
 	_dash_cam.rotation_degrees = Vector3(-12, 0, 0)
 	_dash_cam.fov = 86.0
 	car.add_child(_dash_cam)
+	_rigid_cams.append({"cam": _dash_cam, "base": _dash_cam.rotation})
 
 	# Bonnet: sits at the base of the windshield looking forward OVER the hood + scoop.
 	_hood_cam = Camera3D.new()
@@ -394,6 +411,7 @@ func _build_cameras(car: Node3D) -> void:
 	_hood_cam.rotation_degrees = Vector3(-10, 0, 0)
 	_hood_cam.fov = 104.0
 	car.add_child(_hood_cam)
+	_rigid_cams.append({"cam": _hood_cam, "base": _hood_cam.rotation})
 
 	_apply_camera()
 
@@ -405,10 +423,44 @@ func _apply_camera() -> void:
 	if _mirror_layer != null:
 		_mirror_layer.visible = (_cam_mode == 1 or _cam_mode == 2)   # mirror in cockpit + dash views
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if Input.is_action_just_pressed("camera_toggle"):
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()
+	_update_look(delta)
+
+func _axis_shaped(v: float) -> float:
+	# deadzone, then rescale what is left to the full 0..1 range so the view starts moving
+	# smoothly from zero instead of jumping the moment the stick clears the deadzone
+	if absf(v) < LOOK_DEADZONE:
+		return 0.0
+	return signf(v) * (absf(v) - LOOK_DEADZONE) / (1.0 - LOOK_DEADZONE)
+
+func _update_look(delta: float) -> void:
+	if Input.is_action_just_pressed("look_back"):
+		_look_back = not _look_back
+	var rx := 0.0
+	var ry := 0.0
+	var pads := Input.get_connected_joypads()
+	if pads.size() > 0:
+		rx = _axis_shaped(Input.get_joy_axis(pads[0], JOY_AXIS_RIGHT_X))
+		ry = _axis_shaped(Input.get_joy_axis(pads[0], JOY_AXIS_RIGHT_Y))
+	# third person orbits the car; the interior views turn in place like a head
+	var yaw_max := deg_to_rad(LOOK_YAW_CHASE if _cam_mode == 0 else LOOK_YAW_INTERIOR)
+	var yaw_t := -rx * yaw_max + (PI if _look_back else 0.0)
+	var pitch_t := -ry * deg_to_rad(LOOK_PITCH_MAX)
+	var k := clampf(delta / LOOK_TAU, 0.0, 1.0)
+	_look_yaw = lerp_angle(_look_yaw, yaw_t, k)      # lerp_angle takes the short way round the flip
+	_look_pitch = lerpf(_look_pitch, pitch_t, k)
+	for entry in _rigid_cams:
+		var cam: Camera3D = entry["cam"]
+		var base: Vector3 = entry["base"]
+		# default Euler order is YXZ, i.e. yaw then pitch - the FPS convention. The cams are
+		# children of the car, so the yaw axis is the car's own up and the view rolls with it.
+		cam.rotation = Vector3(base.x + _look_pitch, _look_yaw, base.z)
+	if _chase_cam != null:
+		_chase_cam.orbit_yaw = _look_yaw
+		_chase_cam.orbit_pitch = _look_pitch
 
 func _build_hud(car: Node3D) -> CanvasLayer:
 	var hud: CanvasLayer = load("res://scripts/hud.gd").new()
