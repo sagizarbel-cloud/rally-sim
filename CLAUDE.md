@@ -19,7 +19,7 @@ I verify that code **compiles/loads**; the **user drives to test feel** (grip, h
 - `:=` CANNOT infer a type from a Variant (`dict[key]`, untyped `stage.*` calls, `Array` elements) → use `var x: Type = ...`.
 - Unshaded `StandardMaterial3D` ignores emission → toggle `albedo_color` instead.
 - macOS has NO `timeout` command → use Godot's `--quit-after N` (N = FRAMES).
-- Godot 4 on macOS does NOT detect the wired Xbox One controller (engine bug) — keyboard input for now; analog code is ready.
+- Controllers: the **PS4 DualShock 4 IS detected** (confirmed driving since 2026-08-09) — analog throttle/brake are live and bypass the virtual-pedal shaping, pad layout in `world.gd` `_setup_input()`. The **wired Xbox One pad is still not detected** on Godot 4/macOS (engine bug). The HUD `input` line names whichever pad is live.
 
 ## Key files (scripts/)
 - `world.gd` — bootstrap + wiring, input map, environment / time-of-day.

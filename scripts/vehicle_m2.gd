@@ -527,7 +527,10 @@ func _build_cockpit() -> void:
 	# Driver on the LEFT (-x) for now. Low dash so the view clears it.
 	var dash := _mat(Color(0.04, 0.04, 0.05), false, 0.0, 0.95)
 	_part(Vector3(1.5, 0.14, 0.44), Vector3(0, 0.47, -0.42), dash, Vector3(12, 0, 0))
-	_part(Vector3(0.4, 0.12, 0.18), Vector3(-0.35, 0.54, -0.3), _mat(Color(0.02, 0.02, 0.03)), Vector3(16, 0, 0))
+	# binnacle bump the gauge cluster stands on. It has to stay BEHIND the cluster's own pod
+	# (dashboard.gd, tilted -24 deg at z -0.205) - at its old size its top-front edge came
+	# through the screen face. If the cluster ever moves, re-check this box against it.
+	_part(Vector3(0.34, 0.10, 0.16), Vector3(-0.35, 0.515, -0.33), _mat(Color(0.02, 0.02, 0.03)), Vector3(16, 0, 0))
 	# seats: driver (blue bucket, left) + co-driver (right)
 	_part(Vector3(0.42, 0.5, 0.2), Vector3(-0.35, 0.44, 0.55), _mat(Color(0.1, 0.2, 0.5)))
 	_part(Vector3(0.42, 0.5, 0.2), Vector3(0.35, 0.44, 0.55), _mat(Color(0.12, 0.12, 0.14)))

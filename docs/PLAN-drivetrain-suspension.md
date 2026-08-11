@@ -24,9 +24,11 @@ feel-verification instrument this project has._
   [tuning_panel.gd:13](../scripts/tuning_panel.gd)).
 - **GDScript gotchas:** tabs not spaces; `:=` cannot infer from a Variant (untyped
   `stage.*`/dict access → `var x: Type = ...`); unshaded `StandardMaterial3D` ignores
-  emission; macOS has no `timeout` (use `--quit-after N`, N = frames); Godot 4.4/macOS
-  does not detect the wired Xbox controller — keyboard is the only input, analog code
-  paths must stay intact but cannot be tested.
+  emission; macOS has no `timeout` (use `--quit-after N`, N = frames).
+- **Input (updated 2026-08-11):** the **PS4 DualShock 4 is detected and in use** — analog
+  throttle/brake are live and bypass the virtual-pedal shaping. The wired Xbox One pad is
+  still invisible to Godot 4/macOS. Earlier phases were written assuming keyboard only;
+  keyboard must keep working, but analog paths are now testable rather than theoretical.
 - Keyboard input map is built in `world.gd` `_build_input()` (`_add_keys`, ~line 218).
   New keys go there.
 - After finishing a phase, update the phase's checkbox in §9 of this file and add a
@@ -60,8 +62,10 @@ and tuned once, on the stable foundation.
 - **Philosophy:** realism at the core, with toggleable "training wheels" on top:
   anti-stall (default ON), auto-blip/rev-match (toggle), stability assist (default OFF),
   launch assist (default OFF). The existing TC toggle stays.
-- **Input:** keyboard-only for now; input shaping is FIRST-CLASS feel work (a binary
-  throttle gates everything you can feel). Analog paths stay ready underneath.
+- **Input:** written when keyboard was the only option, and input shaping is still
+  FIRST-CLASS feel work (a binary throttle gates everything you can feel). Since
+  2026-08-09 the DS4 is detected, so the analog paths are live for real — keyboard
+  shaping still has to hold up, because both are in use.
 - **Constraints:** every phase must leave the car fully drivable on keyboard. Nothing is
   sacred — existing tuning may be re-tuned in service of the end result.
 
@@ -274,7 +278,7 @@ next phase. Every phase leaves the car fully keyboard-drivable.
    drivetrain re-tune expected; the semi-implicit ODE is rate-robust).
 3. **Virtual pedals** (input shaping — the driver's foot, distinct from machine dynamics):
    add states `_throttle_pedal`, `_brake_pedal` (0..1) that chase the key state with
-   physical rates; analog input (if a controller ever works) bypasses the shaping exactly
+   physical rates; analog input (live since the DS4 was detected) bypasses the shaping exactly
    like `_steer` already does for the stick.
    - New exports + Tab rows: `throttle_rise_time` (~0.18 s), `throttle_fall_time`
      (~0.08 s), `brake_rise_time` (~0.12 s), `brake_fall_time` (~0.08 s).
