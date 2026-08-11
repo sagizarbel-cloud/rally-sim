@@ -174,9 +174,15 @@ class_name VehicleM2
 @export var tc_strength := 8.0               # torque trim rate (1/s per unit of slip error)
 
 # --- Brakes ---
-@export var brake_force := 24000.0
-@export var handbrake_strength := 1.0
-@export var rear_grip_cut := 0.2
+# The handbrake is its own line, not a multiple of the footbrake: a cable/hydraulic lever acts on
+# the rear calipers alone. Default matches the pre-A5 effective torque (brake_torque x 1.0), so the
+# lever feels exactly as it did - only the name is now honest. (A5 also retired `brake_force`, an
+# unused M1 leftover, and `rear_grip_cut`, the magic-number lateral-grip hack - locked rears now
+# lose grip through the friction ellipse, which is what a locked tyre actually does.)
+@export var handbrake_torque := 2600.0       # N*m applied to each REAR wheel by the lever
+# Rally hydraulic handbrakes disengage the centre diff so the rears can lock without dragging the
+# front axle (and the whole drivetrain) with them - the reason an AWD car can rotate on the lever.
+@export var handbrake_opens_centre := true
 
 # --- Steering / aero ---
 @export var max_steer_deg := 34.0
@@ -1048,6 +1054,12 @@ func _physics_process(delta: float) -> void:
 			c_target = minf(revved, clampf(2.0 - (kd / maxf(kn, 1.0)) / launch_sr, 0.0, 1.0))
 		if _blip_t > 0.0 or _shift_t > 0.0:
 			c_target = 0.0           # A2 blip / A4 shift dip: plates open while the ratio changes
+		elif handbrake > 0.0 and speed > slip_ref_speed:
+			# A5: rally technique - clutch in while the lever is up, so the engine is not dragged
+			# down by (or fighting) the locked rear axle. Below slip_ref_speed it is just a parking
+			# brake and the anti-stall clamp already covers it; with manual_clutch ON it is the
+			# driver's job, which is why this sits in the auto branch.
+			c_target = 0.0
 	if anti_stall or not manual_clutch or _ign_grace > 0.0:
 		c_target = minf(c_target, clampf((rpm_pre - idle_rpm * 0.55) / (idle_rpm * 0.35), 0.0, 1.0))
 	var c_rate := CLUTCH_OUT_RATE if c_target < _clutch else CLUTCH_IN_RATE
@@ -1201,13 +1213,18 @@ func _physics_process(delta: float) -> void:
 		# element transfers torque toward the SLOWER axle when the axles overspeed each other -
 		# front wheelspin on a loose exit migrates torque rearward (the AWD rally feel). It also
 		# couples the axles in N (the transfer case doesn't care whether the engine is connected).
+		# A5: while the lever is up the centre device is released, so the locked rears are not
+		# fighting the front axle through the transfer case (see handbrake_opens_centre).
+		var centre_open := handbrake_opens_centre and handbrake > 0.0
+		var c_visc: float = 0.0 if centre_open else centre_coupling
+		var c_pre: float = 0.0 if centre_open else centre_preload
 		var k_centre := 0.0
 		if _drive_mode == 0:
 			var wf := (_wheels[0].omega + _wheels[1].omega) * 0.5
 			var wr := (_wheels[2].omega + _wheels[3].omega) * 0.5
 			var dwc := wf - wr
 			var thc := tanh(dwc / DIFF_BAND)
-			var t_c := centre_preload * thc + centre_coupling * dwc
+			var t_c := c_pre * thc + c_visc * dwc
 			# impulse cap, like the axle diffs: the coupling can equalise the axles within one
 			# substep but never swing them past each other (kills saturated-Coulomb chatter)
 			var c_lim := absf(dwc) * wheel_inertia / dt_sub
@@ -1215,7 +1232,7 @@ func _physics_process(delta: float) -> void:
 			t_front -= t_c
 			t_rear += t_c
 			# each wheel sees a quarter of the coupling's slope (half per axle, half per wheel)
-			k_centre = 0.25 * (centre_coupling + centre_preload * (1.0 - thc * thc) / DIFF_BAND)
+			k_centre = 0.25 * (c_visc + c_pre * (1.0 - thc * thc) / DIFF_BAND)
 		# A3 axle differentials: per-axle transfer torque between the paired wheels (see _diff_transfer)
 		var power_now := t_gb > 0.0
 		var d_imp := wheel_inertia / (2.0 * dt_sub)   # one-substep pair-equalising impulse scale
@@ -1260,7 +1277,7 @@ func _physics_process(delta: float) -> void:
 			var dirf := clampf(w.omega * 2.0, -1.0, 1.0)
 			var t_brk := brake_torque * brake
 			if handbrake > 0.0 and not w.steer:
-				t_brk += brake_torque * handbrake_strength
+				t_brk += handbrake_torque * handbrake
 			if _esc[i] > 0.0:
 				# A4 stability assist: impulse-capped at the one-substep stopping impulse, so the
 				# correction can arrest this wheel but never spin it backwards (the A3 pattern)
@@ -1328,8 +1345,6 @@ func _physics_process(delta: float) -> void:
 		# lateral: Pacejka on slip angle, OPPOSES slip (restoring)
 		w.slip_angle = atan2(v_lat, maxf(absf(v_long), 1.0))
 		var Fy := -_mf(w.slip_angle, By, Cy, Ey, muy * Fz)
-		if handbrake > 0.0 and not w.steer:
-			Fy *= rear_grip_cut
 		# elliptical combined-slip limit
 		var nx := Fx / (mux * Fz + 0.001)
 		var ny := Fy / (muy * Fz + 0.001)

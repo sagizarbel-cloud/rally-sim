@@ -766,7 +766,28 @@ User drive-through, all in one session, keyboard:
   OFF 1.06 rad/s (the regime the aid owns, and it clearly catches it). The assist touches brakes
   only; engine demand is untouched. Re-drive verdict 2026-08-11: **"stability is good"** — the
   power-cut-through-corners artefact is gone and the aid is accepted. **A4 DONE.**
-- [ ] A5 — Handbrake refinement
+- [ ] A5 — Handbrake refinement — implemented 2026-08-11, **awaiting drive verdict**
+  (`./check.sh` clean; headless probe PASS on all four items, then removed).
+  **1. The grip hack is gone.** `Fy *= rear_grip_cut` deleted along with the export and its Tab
+  row. The plan flagged that this might expose the ellipse under-trimming a locked wheel — it does
+  not. Probe (22 m/s, 3rd, steering held): lever OFF yaw 0.23 rad/s and rear slip angle 7.8 deg;
+  lever ON yaw **0.58** rad/s and rear slip angle **18.8** deg. The rear omega goes 64.7 -> 0.11
+  rad/s, slip ratio saturates at -1.00 and ellipse utilisation hits 1.00, so the lateral force is
+  being trimmed by the friction ellipse exactly as intended. No constant needed anywhere.
+  **2. The lever releases the centre** (`handbrake_opens_centre := true`). With it OFF the locked
+  rears drag the front axle down through the coupling (front omega 64.7 -> 14.1); with it ON the
+  fronts keep rolling at 52.9. That is the difference between an AWD car that ploughs on the lever
+  and one that rotates.
+  **3. Auto-clutch dips** while the lever is up above `slip_ref_speed` (probe: clutch 0.00), so the
+  engine is not fighting the locked axle. Below that it is just a parking brake and the existing
+  anti-stall clamp covers it; with `manual_clutch` ON it is the driver's job, so the dip lives in
+  the auto branch only.
+  **4. D10 cleanup.** `handbrake_torque` is now a REAL export (N*m per rear wheel) replacing
+  `brake_torque * handbrake_strength` — the honest name the plan preferred — defaulted to 2600 so
+  the lever feels identical to before. Dead `brake_force` and `handbrake_strength` exports and
+  their Tab rows are gone (both were M1-only; `world.gd` only ever loads `vehicle_m2.gd`, so those
+  rows were unreachable). New Tab row: `handbrake_opens_centre`. NOTE for B5: other dead "(M1)"
+  rows remain in `_specs` (`engine_power`, `launch_boost`) — they belong to B5's prune, not here.
 - [ ] B1 — Derived suspension setup
 - [ ] B2 — Damper model
 - [ ] B3 — Bump stops
