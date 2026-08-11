@@ -118,8 +118,8 @@ func _build_dial(cx: float, majors: int, per_tick: float, span: float, red_from:
 		var value := frac * span
 		var is_major := i % 2 == 0
 		var a := deg_to_rad(SWEEP_START - SWEEP * frac)
-		var len_t: float = (r * 0.22) if is_major else (r * 0.12)
-		var wid: float = 0.0055 if is_major else 0.0032
+		var len_t: float = (r * 0.17) if is_major else (r * 0.095)
+		var wid: float = 0.0045 if is_major else 0.0026
 		var rad := r * 0.93 - len_t * 0.5
 		var col := C_TICK if is_major else C_TICK_MINOR
 		if red_from > 0.0 and value >= red_from:
