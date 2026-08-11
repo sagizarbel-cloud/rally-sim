@@ -766,7 +766,7 @@ User drive-through, all in one session, keyboard:
   OFF 1.06 rad/s (the regime the aid owns, and it clearly catches it). The assist touches brakes
   only; engine demand is untouched. Re-drive verdict 2026-08-11: **"stability is good"** — the
   power-cut-through-corners artefact is gone and the aid is accepted. **A4 DONE.**
-- [ ] A5 — Handbrake refinement — implemented 2026-08-11, **awaiting drive verdict**
+- [x] A5 — Handbrake refinement — DONE 2026-08-11 (drive-verified)
   (`./check.sh` clean; headless probe PASS on all four items, then removed).
   **1. The grip hack is gone.** `Fy *= rear_grip_cut` deleted along with the export and its Tab
   row. The plan flagged that this might expose the ellipse under-trimming a locked wheel — it does
@@ -803,8 +803,30 @@ User drive-through, all in one session, keyboard:
   direction (so the tyre stays anisotropic). Export `slide_friction` (default ON, Tab toggle) for
   A/B. Probe, same handbrake pull: yaw **0.60 → 0.90 rad/s** and rear slip angle **24° → 44°**
   (rotation ×1.5), while straight-line braking is unchanged to the decimal (44.7 km/h lost either
-  way) — the correction only touches tyres that have genuinely let go. AWAITING re-drive.
-- [ ] B1 — Derived suspension setup
+  way) — the correction only touches tyres that have genuinely let go. **Re-drive verdict
+  2026-08-11: "now it feels better" — A5 DONE.** NOTE for Arc B and beyond: the sliding-friction
+  correction is a TYRE-MODEL change, not a handbrake one. Every genuinely saturated tyre now takes
+  its force direction from its slip velocity, so limit behaviour (big slides, locked-brake entries)
+  differs from every phase before A5. `slide_friction` (default ON) A/Bs it.
+- [ ] B1 — Derived suspension setup — implemented 2026-08-11, **awaiting drive verdict**
+  (`./check.sh` clean; headless probe PASS, then removed). `spring_k` / `damper_c` / `arb_front` /
+  `arb_rear` are gone; the suspension now derives from `ride_freq_front` (1.4 Hz),
+  `ride_freq_rear` (1.6 Hz), `zeta` (0.65), `roll_gradient_target` (4.5 deg/g) and
+  `roll_couple_front` (55%), via `_derive_setup()` each tick — so live slider edits AND the
+  drive-mode CoM shift both re-rate the car immediately. Corner masses come from the CoM position
+  including `_com_bias()`, so switching to FWD genuinely loads and re-rates the front axle.
+  Probe (AWD): front **24 181 N/m** / rear 31 583, dampers 3574 / 4084, static compression 0.127 m
+  of 0.45 m travel — the plan predicted 24–28 k at 1.4 Hz, so the derivation lands where expected.
+  Versus the retired constants, which worked out at **1.80 Hz and zeta 1.13** (stiff AND
+  overdamped): the car is now softer and much less damped, and roll goes **1.28 -> 3.07 deg/g**.
+  **Interaction to know about:** at the current CoM height (-0.45, ~0.31 m above the contact plane)
+  the springs alone already give 3.07 deg/g, and a bar can only ADD roll stiffness — so the bars
+  correctly solve to ZERO in AWD and FWD, and `roll_gradient_target` only bites below ~3.1. RWD is
+  the exception: its rearward CoM leaves the front soft (17 016 N/m), so a front bar of 1967
+  appears to hold the 55% roll couple. When B4 raises the CoM the roll moment grows and the target
+  becomes reachable, at which point this slider starts doing something across its whole range.
+  `_fz_cap` is now 6x static corner load (18.4–23.8 kN by mode) replacing the flat 20 kN — interim
+  until B3's bump stops, per §5.4.
 - [ ] B2 — Damper model
 - [ ] B3 — Bump stops
 - [ ] B4 — Relaxation length + By + CoM

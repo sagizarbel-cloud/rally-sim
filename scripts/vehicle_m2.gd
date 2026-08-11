@@ -26,13 +26,24 @@ class_name VehicleM2
 @export var body_size := Vector3(1.8, 0.55, 4.2)
 @export var wheel_radius := 0.34
 @export var rest_length := 0.45
-@export var spring_k := 40000.0
-@export var damper_c := 8000.0                  # more damping soaks up rut/berm bumps (less jumping)
+# B1: the suspension is DERIVED, not dialled in. Springs come from a target ride frequency per
+# axle (k = m_corner * (2*pi*f)^2), dampers from a target damping ratio (c = 2*zeta*sqrt(k*m)),
+# and the anti-roll bars from a target roll gradient - so the handles are the numbers a race
+# engineer actually sets, and the corner masses re-derive themselves when the drive mode shifts
+# the CoM. Gravel cars live at the soft end: 1.2-1.6 Hz, with the rear ~10-20% higher than the
+# front so the car settles flat after a bump (flat ride). Race damping baseline is zeta 0.65-0.70;
+# the pre-B1 constants worked out at ~1.8 Hz and zeta 1.13, i.e. stiff AND overdamped.
+@export var ride_freq_front := 1.4          # Hz
+@export var ride_freq_rear := 1.6           # Hz
+@export var zeta := 0.65                    # damping ratio (1.0 = critically damped)
 @export var max_travel := 0.45
-# anti-roll bars: transfer load across an axle to resist body roll. Stiffer FRONT bar biases toward
-# understeer, stiffer REAR toward oversteer (via the load-sensitive tyre grip). N per m of travel diff.
-@export var arb_front := 14000.0
-@export var arb_rear := 10000.0
+# Anti-roll bars are sized from a target ROLL GRADIENT (degrees of body roll per g of lateral
+# acceleration) and a front roll-couple split, rather than picked in N/m. A bar can only ADD roll
+# stiffness, so if the springs alone are already stiffer than the target the bars correctly come
+# out at zero - soften the ride frequencies to roll more. Stiffer FRONT share biases toward
+# understeer, stiffer REAR toward oversteer, through the load-sensitive tyre grip.
+@export var roll_gradient_target := 4.5     # deg of roll per g
+@export var roll_couple_front := 0.55       # fraction of total roll stiffness carried at the front
 @export var camber_deg := 1.5                   # static negative camber (visual + a small grip cue)
 
 # --- Appearance ---
@@ -234,6 +245,16 @@ var _steer_wheel: Node3D          # cockpit steering wheel (spins with steering 
 var _rev_segs: Array = []         # cabin rev-bar segments: {mat, col}
 var _shift_mat: StandardMaterial3D   # cabin shift-light material (flashes near the shift point)
 var _cluster: Node3D              # the gauge cluster (dashboard.gd); the rev bar mounts on it
+# B1: derived suspension rates, recomputed each tick so live slider edits and drive-mode CoM
+# shifts both take effect immediately (see _derive_setup)
+var _k_front := 24000.0
+var _k_rear := 24000.0
+var _c_front := 3500.0
+var _c_rear := 3500.0
+var _arb_f := 0.0
+var _arb_r := 0.0
+var _fz_cap := 20000.0
+var _roll_grad := 0.0             # roll gradient the derived setup actually achieves (deg/g)
 var _flash := 0.0                 # shift-light blink phase
 var _drive_mode := 0              # 0 = AWD, 1 = RWD, 2 = FWD (cycle with T)
 var _livery_mat: StandardMaterial3D
@@ -333,6 +354,47 @@ func _ready() -> void:
 	_build_wheels()
 	respawn()
 	_apply_mode()               # the car now casts a real (sun/directional) shadow again
+
+func _derive_setup() -> void:
+	# B1: turn the three physical targets into the rates the suspension pass actually uses.
+	# Corner masses follow the CoM, INCLUDING the per-drive-mode z-shift, so switching to FWD
+	# genuinely loads the front axle and re-rates its springs rather than just moving the CoM.
+	var g := 9.81
+	var zf: float = _wheels[0].pos.z
+	var zr: float = _wheels[2].pos.z
+	var com_z := _com_bias()
+	var la := absf(com_z - zf)                    # CoM -> front axle
+	var lb := absf(zr - com_z)                    # CoM -> rear axle
+	var wb := maxf(la + lb, 0.01)                 # wheelbase
+	# each axle carries the share proportional to the OPPOSITE lever arm; halve for one corner
+	var m_cf := chassis_mass * (lb / wb) * 0.5
+	var m_cr := chassis_mass * (la / wb) * 0.5
+	var wf := TAU * maxf(ride_freq_front, 0.1)
+	var wr := TAU * maxf(ride_freq_rear, 0.1)
+	_k_front = m_cf * wf * wf
+	_k_rear = m_cr * wr * wr
+	_c_front = 2.0 * zeta * sqrt(maxf(_k_front * m_cf, 0.0))
+	_c_rear = 2.0 * zeta * sqrt(maxf(_k_rear * m_cr, 0.0))
+	# CoM height above the CONTACT plane at static ride height - the lever the roll moment acts on
+	var comp_f := m_cf * g / maxf(_k_front, 1.0)
+	var comp_r := m_cr * g / maxf(_k_rear, 1.0)
+	var ground_y := _wheels[0].pos.y - (rest_length + wheel_radius) + (comp_f + comp_r) * 0.5
+	var h := maxf(center_of_mass.y - ground_y, 0.05)
+	var track := maxf(absf(_wheels[0].pos.x - _wheels[1].pos.x), 0.01)
+	# roll moment per g, and the total roll stiffness that meets the target gradient
+	var m_per_g := chassis_mass * g * h
+	var k_need := m_per_g / maxf(deg_to_rad(roll_gradient_target), 0.0001)
+	# springs already resist roll: two at +/- track/2 give k*track^2/2 of roll stiffness each axle
+	var k_sf := _k_front * track * track * 0.5
+	var k_sr := _k_rear * track * track * 0.5
+	# a bar can only ADD - never let it go negative to force MORE roll than the springs allow
+	_arb_f = maxf(k_need * roll_couple_front - k_sf, 0.0) / (track * track)
+	_arb_r = maxf(k_need * (1.0 - roll_couple_front) - k_sr, 0.0) / (track * track)
+	_roll_grad = rad_to_deg(m_per_g / maxf(k_sf + k_sr + (_arb_f + _arb_r) * track * track, 1.0))
+	# interim load ceiling until B3's bump stops take over: a corner cannot sensibly see more than
+	# a few g of its own static load, and the old flat 20 kN both distorted loads and let the ARB
+	# pass overflow past it (the reason M7's impact-puncture proxy was unreliable)
+	_fz_cap = 6.0 * maxf(m_cf, m_cr) * g
 
 func _com_bias() -> float:
 	if _drive_mode == 1: return rwd_bias      # RWD: weight rearward
@@ -821,6 +883,7 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_just_pressed("reset"):
 		respawn(); return
 	center_of_mass = Vector3(0, -0.45, _com_bias())   # re-applied so live bias tuning takes effect
+	_derive_setup()                                  # B1: rates follow the targets + the live CoM
 
 	# virtual pedals: shape the binary key like a real foot; an analog trigger (if a pad ever works) bypasses it
 	var throttle_key := Input.get_action_strength("throttle")
@@ -919,7 +982,9 @@ func _physics_process(delta: float) -> void:
 		var contact_off := hit_pos - global_position
 		var pv := linear_velocity + angular_velocity.cross(contact_off)
 		var comp_vel := clampf(-pv.dot(up), -3.0, 3.0)
-		var Fz := clampf(spring_k * compression + damper_c * comp_vel, 0.0, 20000.0)
+		var kw: float = _k_front if w.steer else _k_rear
+		var cw: float = _c_front if w.steer else _c_rear
+		var Fz := clampf(kw * compression + cw * comp_vel, 0.0, _fz_cap)
 		w.Fz = Fz
 		w.comp = compression                              # deferred: anti-roll bars adjust Fz, applied below
 		var fwd := -global_transform.basis.z
@@ -930,8 +995,8 @@ func _physics_process(delta: float) -> void:
 			"v_long": pv.dot(fwd), "v_lat": pv.dot(right)}
 
 	# anti-roll bars transfer load across each axle, then apply the roll-balanced vertical load
-	_apply_arb(0, 1, arb_front)      # front pair (wheels FL, FR)
-	_apply_arb(2, 3, arb_rear)       # rear pair (wheels RL, RR)
+	_apply_arb(0, 1, _arb_f)         # front pair (wheels FL, FR)
+	_apply_arb(2, 3, _arb_r)         # rear pair (wheels RL, RR)
 	for w in _wheels:
 		if w.contact:
 			apply_force(w.contact_normal * w.Fz, info[w]["off"])

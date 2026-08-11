@@ -61,10 +61,11 @@ var _specs := [
 	["FWD front bias (M2)",  "fwd_bias",               0.0,      0.8,   0.05, func(v): return "%.2f m" % v],
 	["RWD rear bias (M2)",   "rwd_bias",               0.0,      0.8,   0.05, func(v): return "%.2f m" % v],
 	# suspension (M2)
-	["Front anti-roll (M2)", "arb_front",              0.0,  40000.0, 1000.0, func(v): return "%d" % int(v)],
-	["Rear anti-roll (M2)",  "arb_rear",               0.0,  40000.0, 1000.0, func(v): return "%d" % int(v)],
-	["Spring rate (M2)",     "spring_k",           20000.0,  80000.0, 2000.0, func(v): return "%d" % int(v)],
-	["Damping (M2)",         "damper_c",            3000.0,  16000.0,  500.0, func(v): return "%d" % int(v)],
+	["Ride freq front (M2)", "ride_freq_front",        0.8,      2.4,  0.05, func(v): return "%.2f Hz" % v],
+	["Ride freq rear (M2)",  "ride_freq_rear",         0.8,      2.4,  0.05, func(v): return "%.2f Hz" % v],
+	["Damping ratio (M2)",   "zeta",                   0.25,     1.30, 0.05, func(v): return "%.2f zeta" % v],
+	["Roll gradient (M2)",   "roll_gradient_target",   1.5,      8.0,  0.25, func(v): return "%.2f deg/g" % v],
+	["Roll couple front(M2)","roll_couple_front",      0.30,     0.75, 0.01, func(v): return "%d%% front" % int(v * 100.0)],
 	["Camber (M2)",          "camber_deg",             0.0,      6.0,    0.5, func(v): return "%.1f deg" % v],
 	# virtual pedals (input shaping)
 	["Throttle rise",        "throttle_rise_time",     0.0,      0.5,   0.02, func(v): return "%.2f s" % v],
