@@ -959,10 +959,38 @@ User drive-through, all in one session, keyboard:
   the exception: its rearward CoM leaves the front soft (17 016 N/m), so a front bar of 1967
   appears to hold the 55% roll couple. When B4 raises the CoM the roll moment grows and the target
   becomes reachable, at which point this slider starts doing something across its whole range.
-  `_fz_cap` is now 6x static corner load (18.4–23.8 kN by mode) replacing the flat 20 kN — interim
-  until B3's bump stops, per §5.4.
+  `_fz_cap` was an interim 6x static corner load; B3 (brought forward) has since removed it.
+  **Correction 2026-08-11, after the first drive:** the user reported the inside DRIVEN wheel
+  overheating and wearing out — front in FWD, rear in AWD/RWD — even on gentle turns. Measured on a
+  steady arc: `roll_couple_front` had NO AUTHORITY. Sizing the bars only to reach the roll-gradient
+  target left them at zero, so the springs' own distribution set the balance, and flat-ride tuning
+  (stiffer rear) handed the rear the load transfer: **43.4% front in AWD and 33.8% in RWD against a
+  55% setting** (pre-B1 it was 53.1% in every mode). That unloads the driven axle's inside wheel,
+  which then spins, heats and wears — exactly the symptom, in exactly the modes reported.
+  `_derive_setup` now sizes the bars to ENFORCE the couple first (the axle short of its share gets
+  the bar), and only then stiffens both ends together if the roll gradient is still under target.
+  Measured after: 55.0% front in all three modes, and the inside rear gains load in RWD
+  (3.53 -> 4.04 kN). The cost is less total roll (AWD 3.07 -> 2.44 deg/g), unavoidable because a
+  bar can only add stiffness — `ride_freq_rear` is the handle to give roll back.
 - [ ] B2 — Damper model
-- [ ] B3 — Bump stops
+- [x] B3 — Bump stops — DONE 2026-08-11, **brought forward ahead of B2** because B1 testing
+  bottomed (the plan's own §7 risk), so this was the blocking fix. Progressive cubic stop over the
+  last `bumpstop_zone` (20%) of travel, sized off the corner's OWN static load (`bumpstop_g`, in g)
+  so it scales with the car; `w.bottomed` is set while engaged and is now available to M7 as the
+  clean hard-hit puncture trigger the roadmap asked for (still a one-line opt-in, NOT wired).
+  B1's interim `_fz_cap` is gone — loads are bounded by the stop instead of a flat clamp.
+  Default `bumpstop_g` 3.0 chosen from a sweep on the dirt loop at 100 km/h, which showed the stop
+  trades peak load against collapsed time very steeply: 0g = 26.5 kN peak / 235 frames pegged,
+  3g = 35.7 / 188, 6g = 44.9 / 194, 10g = 57.1 / 160. Past ~3g loads climb far faster than the
+  bottoming falls — that is the "crashy" §5 warns against.
+  **Open item — travel budget, not stop strength.** Even at 10g all four corners still peg at 100%
+  of travel on the rough loop at 100 km/h, because the input exceeds what the travel can absorb:
+  B1's softer springs took static sag from 7.7 cm (pre-B1) to 12.7 cm, spending 5 cm of the bump
+  travel that used to swallow those hills. The stop makes bottoming progressive, but only ride
+  height or ride frequency can give the travel back. Levers, for the user to choose:
+  `ride_freq_front/rear` up (less sag, back toward the old stiffness), or `rest_length` +
+  `max_travel` 0.45 -> 0.50 (jack the car up, gravel-style, keeping B1's softness — costs ~5 cm of
+  CoM height, so ~16% more roll moment).
 - [ ] B4 — Relaxation length + By + CoM
 - [ ] B5 — Bake, prune, end-to-end
 - [ ] C1 — Self-aligning torque (no hardware needed; do after B4)

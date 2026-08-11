@@ -44,6 +44,18 @@ class_name VehicleM2
 # understeer, stiffer REAR toward oversteer, through the load-sensitive tyre grip.
 @export var roll_gradient_target := 4.5     # deg of roll per g
 @export var roll_couple_front := 0.55       # fraction of total roll stiffness carried at the front
+# B3: bottoming is an EVENT with a ramp, not a silent clamp. Over the last `bumpstop_zone` of
+# travel a progressive (cubic) rubber stop comes in, sized off the corner's OWN static load so it
+# scales with the car: at full engagement it adds `bumpstop_g` times that corner's static weight.
+# This replaces both the old hard travel clamp and B1's interim Fz cap - loads are now bounded by
+# something physical. `w.bottomed` is set while a stop is engaged (M7 can use it as the clean
+# hard-hit puncture trigger the roadmap asked for).
+@export var bumpstop_zone := 0.20           # fraction of max_travel the stop occupies
+@export var bumpstop_g := 3.0                # extra load at full engagement, in g of static corner load
+# Chosen from a sweep on the dirt loop at 100 km/h. The stop trades peak load against how long a
+# corner spends collapsed, and it does so steeply: 0g = 26.5 kN peak / 235 frames on the stops,
+# 3g = 35.7 kN / 188, 6g = 44.9 kN / 194, 10g = 57.1 kN / 160. Past ~3g the loads climb far faster
+# than the bottoming falls, which is the "crashy" the plan warns against - so 3g it is.
 @export var camber_deg := 1.5                   # static negative camber (visual + a small grip cue)
 
 # --- Appearance ---
@@ -253,7 +265,8 @@ var _c_front := 3500.0
 var _c_rear := 3500.0
 var _arb_f := 0.0
 var _arb_r := 0.0
-var _fz_cap := 20000.0
+var _mc_front := 312.5            # derived static corner masses (kg), for the bump stops
+var _mc_rear := 312.5
 var _roll_grad := 0.0             # roll gradient the derived setup actually achieves (deg/g)
 var _flash := 0.0                 # shift-light blink phase
 var _drive_mode := 0              # 0 = AWD, 1 = RWD, 2 = FWD (cycle with T)
@@ -333,6 +346,7 @@ class Wheel:
 	var spin := 0.0                     # accumulated visual roll angle
 	var omega := 0.0                    # wheel angular velocity (rad/s) - the drivetrain state
 	var comp := 0.0                     # suspension compression (m) - for the anti-roll bars
+	var bottomed := false               # B3: a bump stop is engaged this frame (M7 puncture trigger)
 	var temp := 20.0                    # M7: tyre core temperature (C)
 	var tyre_wear := 0.0                # M7: wear 0 = new .. 1 = worn out
 	var punctured := false              # M7: blown / flat -> big grip loss
@@ -371,6 +385,8 @@ func _derive_setup() -> void:
 	var m_cr := chassis_mass * (la / wb) * 0.5
 	var wf := TAU * maxf(ride_freq_front, 0.1)
 	var wr := TAU * maxf(ride_freq_rear, 0.1)
+	_mc_front = m_cf
+	_mc_rear = m_cr
 	_k_front = m_cf * wf * wf
 	_k_rear = m_cr * wr * wr
 	_c_front = 2.0 * zeta * sqrt(maxf(_k_front * m_cf, 0.0))
@@ -387,14 +403,30 @@ func _derive_setup() -> void:
 	# springs already resist roll: two at +/- track/2 give k*track^2/2 of roll stiffness each axle
 	var k_sf := _k_front * track * track * 0.5
 	var k_sr := _k_rear * track * track * 0.5
-	# a bar can only ADD - never let it go negative to force MORE roll than the springs allow
-	_arb_f = maxf(k_need * roll_couple_front - k_sf, 0.0) / (track * track)
-	_arb_r = maxf(k_need * (1.0 - roll_couple_front) - k_sr, 0.0) / (track * track)
+	# ROLL COUPLE FIRST. This is the balance handle, and it decides which end's INSIDE wheel goes
+	# light in a corner - which on the driven axle is the difference between a tyre that works and
+	# one that spins itself hot. Flat-ride tuning puts the stiffer spring at the REAR, so the
+	# springs alone hand the rear a bigger share of the load transfer; sizing the bars only to hit
+	# the roll-gradient target left this uncontrolled (measured 43% front in AWD and 34% in RWD
+	# against a 55% setting, cooking the inside rear). A bar can only ADD stiffness, so the axle
+	# that is short of its share gets the bar.
+	var rcf := clampf(roll_couple_front, 0.05, 0.95)
+	var b_f := 0.0
+	var b_r := 0.0
+	if k_sf * (1.0 - rcf) < k_sr * rcf:
+		b_f = rcf * k_sr / (1.0 - rcf) - k_sf      # front is short of its share
+	else:
+		b_r = (1.0 - rcf) * k_sf / rcf - k_sr      # rear is
+	# only once the balance is right does the roll GRADIENT get a say: if the car is still softer
+	# in roll than the target, stiffen both ends in the ratio that preserves the couple.
+	var k_tot := k_sf + b_f + k_sr + b_r
+	if k_tot < k_need:
+		var extra := k_need - k_tot
+		b_f += extra * rcf
+		b_r += extra * (1.0 - rcf)
+	_arb_f = maxf(b_f, 0.0) / (track * track)
+	_arb_r = maxf(b_r, 0.0) / (track * track)
 	_roll_grad = rad_to_deg(m_per_g / maxf(k_sf + k_sr + (_arb_f + _arb_r) * track * track, 1.0))
-	# interim load ceiling until B3's bump stops take over: a corner cannot sensibly see more than
-	# a few g of its own static load, and the old flat 20 kN both distorted loads and let the ARB
-	# pass overflow past it (the reason M7's impact-puncture proxy was unreliable)
-	_fz_cap = 6.0 * maxf(m_cf, m_cr) * g
 
 func _com_bias() -> float:
 	if _drive_mode == 1: return rwd_bias      # RWD: weight rearward
@@ -709,6 +741,7 @@ func _mf_peak_u(C: float, E: float) -> float:
 func _update_tyre(w: Wheel, Fx: float, Fy: float, v_long: float, v_lat: float, dt: float) -> void:
 	if not tyres_enabled:
 		w.tyre_grip = 1.0
+		w.bottomed = false
 		return
 	# heat = friction power dissipated at the contact (force x sliding speed), both axes
 	var slide_long := absf(w.omega * wheel_radius - v_long)
@@ -984,7 +1017,17 @@ func _physics_process(delta: float) -> void:
 		var comp_vel := clampf(-pv.dot(up), -3.0, 3.0)
 		var kw: float = _k_front if w.steer else _k_rear
 		var cw: float = _c_front if w.steer else _c_rear
-		var Fz := clampf(kw * compression + cw * comp_vel, 0.0, _fz_cap)
+		var Fz := maxf(kw * compression + cw * comp_vel, 0.0)
+		# B3: progressive bump stop over the last of the travel - firm, ramped, and bounded by the
+		# corner's own static load rather than by a flat clamp that distorted every big hit
+		w.bottomed = false
+		var zone := max_travel * clampf(bumpstop_zone, 0.02, 0.9)
+		var into := compression - (max_travel - zone)
+		if into > 0.0:
+			var x := clampf(into / zone, 0.0, 1.0)
+			var mc: float = _mc_front if w.steer else _mc_rear
+			Fz += bumpstop_g * mc * 9.81 * x * x * x
+			w.bottomed = true
 		w.Fz = Fz
 		w.comp = compression                              # deferred: anti-roll bars adjust Fz, applied below
 		var fwd := -global_transform.basis.z

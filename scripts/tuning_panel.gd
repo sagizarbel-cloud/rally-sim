@@ -66,6 +66,8 @@ var _specs := [
 	["Damping ratio (M2)",   "zeta",                   0.25,     1.30, 0.05, func(v): return "%.2f zeta" % v],
 	["Roll gradient (M2)",   "roll_gradient_target",   1.5,      8.0,  0.25, func(v): return "%.2f deg/g" % v],
 	["Roll couple front(M2)","roll_couple_front",      0.30,     0.75, 0.01, func(v): return "%d%% front" % int(v * 100.0)],
+	["Bump stop zone (M2)",  "bumpstop_zone",          0.05,     0.50, 0.01, func(v): return "%d%% of travel" % int(v * 100.0)],
+	["Bump stop force (M2)", "bumpstop_g",             1.0,     15.0,  0.5,  func(v): return "%.1f g" % v],
 	["Camber (M2)",          "camber_deg",             0.0,      6.0,    0.5, func(v): return "%.1f deg" % v],
 	# virtual pedals (input shaping)
 	["Throttle rise",        "throttle_rise_time",     0.0,      0.5,   0.02, func(v): return "%.2f s" % v],
