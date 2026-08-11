@@ -688,7 +688,7 @@ User drive-through, all in one session, keyboard:
   reads properly now that the rear coast ramp carries it — so coast lock was the right
   diagnosis, and no further tyre/suspension work is owed on that specific complaint.
   Implemented 2026-08-04 (`./check.sh` clean; headless probe PASS: airborne pair split 20 rad/s after 0.25s → OPEN 18.2 / VISCOUS 0.00 / LOCKED 0.00; AWD launch 14.7 m/s, reverse −9.3 m/s, centre 150/80 stable. Found+fixed: saturated-Coulomb chatter on LOCKED — transfer torque now impulse-capped at the one-substep pair equaliser, same for the centre. Ramp power/coast selected by sign of engine-side torque `t_gb` → reverse-safe. Defaults VISCOUS 90/90 + centre 0/0 = pre-A3 feel; probe removed). Stall-restart report re-checked same day: all four paths (detect / Shift-hold / release pull-away / bump-start) PASS headless on current build — user's failures were on the pre-`[I]`/pre-grace build. AWAITING user drive checklist verdict.
-- [ ] A4 — Shift model + assists — implemented 2026-08-10, **awaiting drive verdict**
+- [x] A4 — Shift model + assists — DONE 2026-08-11 (drive-verified)
   (`./check.sh` clean; headless probe PASS on all four areas, then removed).
   **Shift model:** a request now starts a `shift_time` (0.18 s) manoeuvre instead of swapping the
   ratio in a tick — the auto-clutch dips, the dogs take the new gear at MID-dip, the plates feed
@@ -760,7 +760,8 @@ User drive-through, all in one session, keyboard:
   40.9 km/h / 0.95 (the aid now COSTS nothing and keeps the car pointed); counter-steered slide —
   ON 0.58 vs OFF 0.55 (no longer interferes); rotation building before opposite lock — ON 0.61 vs
   OFF 1.06 rad/s (the regime the aid owns, and it clearly catches it). The assist touches brakes
-  only; engine demand is untouched. AWAITING the user's re-drive of the stability item only.
+  only; engine demand is untouched. Re-drive verdict 2026-08-11: **"stability is good"** — the
+  power-cut-through-corners artefact is gone and the aid is accepted. **A4 DONE.**
 - [ ] A5 — Handbrake refinement
 - [ ] B1 — Derived suspension setup
 - [ ] B2 — Damper model
