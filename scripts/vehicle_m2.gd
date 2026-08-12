@@ -369,6 +369,15 @@ var _wheels: Array[Wheel] = []
 func _ready() -> void:
 	mass = chassis_mass
 	gravity_scale = 1.0         # real gravity; air time is controlled by the (subtle) jump geometry
+	# Godot's project-wide default_linear_damp (0.1) is ADDED to the body's own value in COMBINE
+	# mode, applying mass*damp*v of resistance - 2138 N at 62 km/h against an aero drag of 205 N,
+	# and it grows only LINEARLY with speed so it never stops mattering. This car models its own
+	# aero (drag_k) and rolling resistance, so that generic damping was pure double-counting: it
+	# capped the car near 130 km/h and made the tall gears feel powerless, because in 6th the
+	# engine cannot out-push it. Replace it rather than combine, and let the vehicle's own
+	# longitudinal model be the only thing slowing the car down.
+	linear_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
+	linear_damp = 0.0
 	can_sleep = false
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
 	center_of_mass = Vector3(0, -0.45, 0)     # very low -> corner hard without tipping
