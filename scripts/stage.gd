@@ -44,11 +44,19 @@ class_name RallyStage
 @export var asphalt_kerb := 0.12         # small raised kerb lip right at the road edge
 @export var asphalt_elev := 0.0          # drag strip flat elevation
 @export var asphalt_color := Color(0.22, 0.22, 0.25)
-# --- DRAG STRIP: a ~1.4 km straight branching off the circuit's +X side, for real top-speed runs. ---
+# --- DRAG STRIP: a 4 km straight branching off the circuit's +X side, for real top-speed runs. ---
 @export var strip_x0 := 285.0            # near end (overlaps the circuit's right side)
-@export var strip_x1 := 1700.0           # far end -> ~1.4 km of straight
+@export var strip_len := 4000.0          # length of the straight (m) - strip_x1 derives from it
 @export var strip_hw := 12.0             # half-width (24 m wide)
 @export var runoff_r := 95.0             # braking / turn-around pad at the far end
+@export var strip_marker_step := 100.0   # distance posts down both shoulders (m)
+@export var strip_km_step := 1000.0      # billboard distance call-outs (m)
+# --- guard rail (real W-beam spec: 0.75 m beam top, posts ~2 m apart) ---
+@export var rail_height := 0.75          # top of the beam above the ground (m)
+@export var rail_beam_h := 0.32          # beam face height (m)
+@export var rail_beam_t := 0.10          # beam thickness (m)
+@export var rail_post_step := 2.0        # post spacing along the rail (m)
+@export var rail_span := 8.0             # beam / collision panel length (m)
 # --- per-surface traction multipliers (applied to tyre mu by the vehicle) ---
 @export var asphalt_grip := 1.52         # asphalt grips best (bumped a touch to calm high-gear wheelspin)
 @export var dirt_grip := 1.1             # dirt loop / centre patch - more grip in the turns
@@ -64,6 +72,7 @@ var _cs := 0.0
 var _n := 0
 var _half := 0.0
 var _strip_elev := 0.0            # drag strip is flat at the LOCAL hill height of its branch (smooth join)
+var strip_x1 := 0.0               # derived in _ready(): strip_x0 + strip_len
 var _noise := FastNoiseLite.new()
 
 func _ready() -> void:
@@ -76,6 +85,7 @@ func _ready() -> void:
 	_noise.frequency = hill_freq
 	_noise.fractal_octaves = hill_octaves
 	_strip_elev = _noise.get_noise_2d(strip_x0, 0.0) * hill_height   # match the circuit's local elevation
+	strip_x1 = strip_x0 + strip_len
 	_build()
 	_markers()
 	_build_drag_strip()
@@ -323,7 +333,7 @@ func _flat_slab(sz: Vector3, pos: Vector3, mat: StandardMaterial3D) -> void:
 	add_child(body)
 
 func _build_drag_strip() -> void:
-	# the ~1.4 km straight + runoff pad, built as flat slabs that continue past the terrain edge
+	# the straight + runoff pad, built as flat slabs that continue past the terrain edge
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = asphalt_color
 	mat.roughness = 0.9
@@ -332,13 +342,135 @@ func _build_drag_strip() -> void:
 	_flat_slab(Vector3(slen, 0.6, strip_hw * 2.0), Vector3((edge + strip_x1) * 0.5, _strip_elev - 0.3, 0.0), mat)
 	_flat_slab(Vector3(runoff_r * 2.0, 0.6, runoff_r * 2.0), Vector3(strip_x1, _strip_elev - 0.3, 0.0), mat)
 	var lbl := Label3D.new()
-	lbl.text = "1.4 km STRAIGHT ->"
+	lbl.text = "%.1f km STRAIGHT ->" % (strip_len / 1000.0)
 	lbl.font_size = 150; lbl.pixel_size = 0.06
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lbl.modulate = Color(0.82, 0.9, 1.0)
 	lbl.outline_size = 20; lbl.outline_modulate = Color(0, 0, 0, 0.9)
 	lbl.position = Vector3(edge + 70.0, _strip_elev + 7.0, 0.0)
 	add_child(lbl)
+	_strip_distance_markers()
+	_strip_end_rails()
+
+func _strip_distance_markers() -> void:
+	# Distance posts every strip_marker_step down BOTH shoulders, a taller orange one on each
+	# kilometre, plus a billboard call-out there. Counts derive from the strip's real length, so
+	# changing strip_len re-marks the whole thing. The posts stand just INSIDE the slab edge:
+	# past the terrain edge there is no ground outside it to stand on.
+	var stations := int(floor((strip_x1 - strip_x0) / strip_marker_step))
+	if stations < 1:
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.12; cyl.bottom_radius = 0.12; cyl.height = 1.0   # unit height -> scaled per instance
+	mm.mesh = cyl
+	mm.instance_count = stations * 2
+	var zoff := strip_hw - 0.8
+	var i := 0
+	for k in range(1, stations + 1):
+		var d := strip_marker_step * float(k)
+		var is_km := fposmod(d, strip_km_step) < 0.5
+		var h := 2.6 if is_km else 1.6
+		var col := Color(0.95, 0.5, 0.1) if is_km else Color(0.95, 0.95, 0.98)
+		for s in [-1.0, 1.0]:
+			var b := Basis(Vector3.RIGHT, Vector3.UP * h, Vector3.BACK)
+			var p := Vector3(strip_x0 + d, _strip_elev + h * 0.5, zoff * float(s))
+			mm.set_instance_transform(i, Transform3D(b, p))
+			mm.set_instance_color(i, col)
+			i += 1
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	var pm := StandardMaterial3D.new()
+	pm.vertex_color_use_as_albedo = true
+	mmi.material_override = pm
+	add_child(mmi)
+	# kilometre call-outs, one per km, readable from either direction (billboarded)
+	var d_km := strip_km_step
+	while d_km <= strip_len + 0.5:
+		var kl := Label3D.new()
+		kl.text = "%.0f km" % (d_km / 1000.0)
+		kl.font_size = 130; kl.pixel_size = 0.05
+		kl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		kl.modulate = Color(1.0, 0.72, 0.35)
+		kl.outline_size = 18; kl.outline_modulate = Color(0, 0, 0, 0.9)
+		kl.position = Vector3(strip_x0 + d_km, _strip_elev + 4.2, zoff)
+		add_child(kl)
+		d_km += strip_km_step
+
+func _strip_end_rails() -> void:
+	# Barrier around the far lip of the runoff pad: an arc wrapping past 90 degrees each side, so an
+	# overshoot AND a drift either way meet something solid instead of the void off the slab edge.
+	var r := runoff_r - 4.0                      # inside the square pad at every angle (90.8 < 95)
+	var a0 := -deg_to_rad(115.0)
+	var a1 := deg_to_rad(115.0)
+	var steps := maxi(2, int(ceil((a1 - a0) * r / rail_span)))
+	var pts := PackedVector3Array()
+	for k in range(steps + 1):
+		var a := lerpf(a0, a1, float(k) / float(steps))
+		pts.append(Vector3(strip_x1 + cos(a) * r, _strip_elev, sin(a) * r))
+	_guard_rail(pts)
+
+func _guard_rail(pts: PackedVector3Array) -> void:
+	# W-beam barrier along a polyline: one static body carrying a box per span, with the beam
+	# faces and posts drawn as two MultiMeshes (a 350 m arc is ~44 panels and ~176 posts).
+	if pts.size() < 2:
+		return
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.collision_mask = 0
+	add_child(body)
+	var beams := MultiMesh.new()
+	beams.transform_format = MultiMesh.TRANSFORM_3D
+	var box := BoxMesh.new(); box.size = Vector3.ONE        # unit box -> sized per instance
+	beams.mesh = box
+	beams.instance_count = pts.size() - 1
+	var posts: Array[Vector3] = []
+	var carry := 0.0
+	for k in range(pts.size() - 1):
+		var a: Vector3 = pts[k]
+		var b: Vector3 = pts[k + 1]
+		var seg := b - a
+		var span := seg.length()
+		var dir := seg / span
+		var side := Vector3(-dir.z, 0.0, dir.x)             # perpendicular in the ground plane
+		var mid := (a + b) * 0.5 + Vector3(0, rail_height - rail_beam_h * 0.5, 0)
+		beams.set_instance_transform(k, Transform3D(Basis(dir * span, Vector3.UP * rail_beam_h, side * rail_beam_t), mid))
+		var col := CollisionShape3D.new()
+		var shape := BoxShape3D.new()
+		shape.size = Vector3(span, rail_beam_h, rail_beam_t)
+		col.shape = shape
+		col.transform = Transform3D(Basis(dir, Vector3.UP, side), mid)
+		body.add_child(col)
+		var t := carry                                       # posts walk the polyline at a fixed spacing
+		while t < span:
+			posts.append(a + seg * (t / span))
+			t += rail_post_step
+		carry = t - span
+	var bmi := MultiMeshInstance3D.new()
+	bmi.multimesh = beams
+	var bmat := StandardMaterial3D.new()
+	bmat.albedo_color = Color(0.72, 0.74, 0.76)
+	bmat.metallic = 0.6; bmat.roughness = 0.4
+	bmi.material_override = bmat
+	body.add_child(bmi)
+	var pmm := MultiMesh.new()
+	pmm.transform_format = MultiMesh.TRANSFORM_3D
+	var pcyl := CylinderMesh.new()
+	pcyl.top_radius = 0.07; pcyl.bottom_radius = 0.07; pcyl.height = 1.0
+	pmm.mesh = pcyl
+	pmm.instance_count = posts.size()
+	for k in range(posts.size()):
+		var p: Vector3 = posts[k] + Vector3(0, rail_height * 0.5, 0)
+		pmm.set_instance_transform(k, Transform3D(Basis(Vector3.RIGHT, Vector3.UP * rail_height, Vector3.BACK), p))
+	var pmi := MultiMeshInstance3D.new()
+	pmi.multimesh = pmm
+	var pmat := StandardMaterial3D.new()
+	pmat.albedo_color = Color(0.42, 0.44, 0.46)
+	pmat.metallic = 0.5; pmat.roughness = 0.5
+	pmi.material_override = pmat
+	body.add_child(pmi)
 
 func _post(pos: Vector3, color: Color) -> void:
 	var mi := MeshInstance3D.new()
