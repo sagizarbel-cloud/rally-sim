@@ -82,8 +82,20 @@ class_name VehicleM2
 @export var puncture_flat := 0.62            # how much a punctured tyre visually squashes (deflated look)
 @export var puncture_shake := 2500.0         # vertical jitter force (N) at a punctured wheel - feels like bumps
 @export var engine_optimal_temp := 95.0      # engine's happy operating temperature (C) - for the component HUD
-@export var engine_heat_rate := 16.0         # C/s of heating at full load
-@export var engine_cool_rate := 0.05         # cooling toward ambient (1/s, scaled by airflow)
+# Engine thermal model: a real heat balance, C*dT/dt = Q_in - Q_out, not a rate toward a target.
+# Q_in is the share of the engine's OWN output that ends up in the coolant rather than at the
+# wheels, so idling barely warms it and full throttle cooks it. Q_out is a radiator that a
+# THERMOSTAT keeps shut until the engine is warm - which is what makes warm-up take a minute and
+# then hold a steady temperature almost regardless of load, exactly like a real car. (The old
+# model added a flat 16 C/s of load-scaled heat against cooling proportional to temperature; that
+# solved to an equilibrium ABOVE the 135 C ceiling, so it pinned at maximum within seconds.)
+@export var engine_heat_capacity := 40000.0  # J/K: iron block + head + coolant mass
+@export var coolant_heat_frac := 0.85        # waste heat into the coolant per unit of brake power
+@export var thermostat_temp := 88.0          # C: below this the radiator is bypassed (fast warm-up)
+@export var radiator_k := 1150.0             # W/K of radiator capacity at rest, scaled by airflow
+# Sized so the progression means something: cruising and hard driving both sit at the thermostat
+# (~90 C, no lamp), sustained full throttle at speed settles ~112 C (amber - you are working it),
+# and full throttle with no airflow runs away to the ceiling (red - you are abusing it).
 
 # --- M8 damage model: hard impacts degrade the car (power / grip / a steering pull); repaired on respawn ---
 @export var impact_threshold := 45.0         # horizontal decel (m/s^2) above which a hit counts as a crash (braking/cornering stay below)
@@ -1517,9 +1529,15 @@ func _physics_process(delta: float) -> void:
 		apply_central_force(-linear_velocity.normalized() * drag_k * linear_velocity.length_squared())
 
 	# M7: engine temperature (gauge for the component HUD) - heats with load, cools with airflow
-	var eload := clampf(_engine_rpm / maxf(redline_rpm, 1.0), 0.0, 1.2) * (0.35 + 0.65 * throttle)
-	_engine_temp += engine_heat_rate * eload * delta
-	_engine_temp -= engine_cool_rate * (_engine_temp - ambient_temp) * (1.0 + speed / 50.0) * delta
+	# heat INTO the coolant, from the engine's actual output: a motor making no torque makes
+	# almost no heat, which is why idling warms up so slowly and sustained WOT runs hot
+	var q_in := maxf(_t_comb, 0.0) * _omega_e * coolant_heat_frac
+	# heat OUT: radiator area x airflow, gated by the thermostat. Shut cold (nothing leaves, so
+	# the engine warms quickly to operating temperature), fully open a few degrees past it.
+	var t_open := clampf((_engine_temp - thermostat_temp) / 7.0, 0.0, 1.0)
+	var airflow := 1.0 + speed / 25.0
+	var q_out := radiator_k * airflow * maxf(_engine_temp - ambient_temp, 0.0) * t_open
+	_engine_temp += (q_in - q_out) / maxf(engine_heat_capacity, 1.0) * delta
 	_engine_temp = clampf(_engine_temp, ambient_temp, 135.0)
 
 	_prev_vel = linear_velocity     # M8: for next frame's impact detection

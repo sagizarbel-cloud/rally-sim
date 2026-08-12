@@ -90,6 +90,11 @@ var _specs := [
 	["Tyre wear rate",       "tyre_wear_rate",        0.0,     0.02,   0.001, func(v): return "%.3f" % v],
 	["Worn grip",            "worn_grip",             0.40,     1.0,    0.05,  func(v): return "%.2f" % v],
 	["Cold grip",            "cold_grip",             0.50,     1.0,    0.05,  func(v): return "%.2f" % v],
+	# engine thermal (physical heat balance)
+	["Engine heat cap",      "engine_heat_capacity", 20000.0, 250000.0, 5000.0, func(v): return "%d kJ/K" % int(v / 1000.0)],
+	["Coolant heat frac",    "coolant_heat_frac",      0.2,      1.5,   0.05,  func(v): return "%.2f" % v],
+	["Thermostat",           "thermostat_temp",       60.0,    105.0,   1.0,   func(v): return "%d C" % int(v)],
+	["Radiator",             "radiator_k",           200.0,   3000.0,  50.0,   func(v): return "%d W/K" % int(v)],
 	# damage (M8)
 	["Impact threshold",     "impact_threshold",     20.0,    120.0,   5.0,   func(v): return "%d" % int(v)],
 	["Damage per hit",       "damage_gain",           0.0,      1.0,    0.05,  func(v): return "%.2f" % v],
