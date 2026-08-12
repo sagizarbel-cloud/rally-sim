@@ -11,6 +11,7 @@ var _dash_cam: Camera3D           # dash-mounted forward view (rigidly attached)
 var _hood_cam: Camera3D           # bonnet view (rigidly attached to the car)
 var _rear_cam: Camera3D           # rear-facing camera feeding the cockpit rear-view mirror overlay
 var _mirror_layer: CanvasLayer    # the mirror panel; shown only in cockpit view
+var _status_layer: CanvasLayer    # bottom-right rev/speed/telltales; the OUTSIDE-view cluster
 var _cam_mode := 0                # 0 = chase, 1 = cockpit, 2 = dash, 3 = bonnet
 var _car                          # the vehicle (untyped so get_wheels() resolves dynamically)
 var _stage                        # RallyStage, for the base surface type (skid marks are asphalt-only)
@@ -61,6 +62,7 @@ func _ready() -> void:
 	_build_dust()
 	var hud := _build_hud(car)
 	_build_component_hud(car)
+	_build_status_hud(car)
 	_build_pacenotes(car, stage)
 	var tt := _build_timetrial(car, stage)
 	hud.time_trial = tt                          # HUD shows the active circuit's lap/last/best
@@ -167,6 +169,18 @@ func _build_pacenotes(car: Node3D, stage) -> void:
 	pn.car = car
 	pn.stage = stage        # reads the road geometry to detect + call corners
 	add_child(pn)
+
+func _build_status_hud(car: Node3D) -> void:
+	# bottom-right: rev arc + gear + speed + warning telltales. Shown in the views where the
+	# in-cabin pod can't be read; the cockpit and dash views have the real instrument instead.
+	_status_layer = CanvasLayer.new()
+	_status_layer.name = "StatusHUD"
+	_status_layer.layer = 3
+	var sh: Control = load("res://scripts/status_hud.gd").new()
+	sh.car = car
+	_status_layer.add_child(sh)
+	add_child(_status_layer)
+	_status_layer.visible = not (_cam_mode == 1 or _cam_mode == 2)
 
 func _build_component_hud(car: Node3D) -> void:
 	var cl := CanvasLayer.new()
@@ -422,6 +436,8 @@ func _apply_camera() -> void:
 	_hood_cam.current = (_cam_mode == 3)
 	if _mirror_layer != null:
 		_mirror_layer.visible = (_cam_mode == 1 or _cam_mode == 2)   # mirror in cockpit + dash views
+	if _status_layer != null:
+		_status_layer.visible = not (_cam_mode == 1 or _cam_mode == 2)   # outside views only
 
 func _process(delta: float) -> void:
 	if Input.is_action_just_pressed("camera_toggle"):
