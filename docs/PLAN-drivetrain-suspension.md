@@ -1135,6 +1135,17 @@ User drive-through, all in one session, keyboard:
   `ride_freq_front/rear` up (less sag, back toward the old stiffness), or `rest_length` +
   `max_travel` 0.45 -> 0.50 (jack the car up, gravel-style, keeping B1's softness — costs ~5 cm of
   CoM height, so ~16% more roll moment).
+  **RESOLVED 2026-08-12 (user's call): jacked up.** `rest_length` and `max_travel` are both 0.50.
+  The ride frequencies were deliberately NOT touched, because stiffening them would walk back the
+  softness B1 exists to provide. Measured after (headless, settled on the dirt loop, probe removed):
+  no corner bottomed at rest, per-wheel static compression 0.091 / 0.157 / 0.140 / 0.049 m on the
+  loop's camber, and the bump stop now engages from 0.40 m instead of 0.36 m — roughly **+4 cm of
+  free bump travel per corner, +15% total bump travel**. Spring rates are unchanged (they derive
+  from corner mass and ride frequency, not from ride height), so static sag in metres is the same;
+  what changed is the room above it. **Two things to carry forward:** the CoM is 5 cm higher, so
+  B1's roll couple wants a re-check on the next drive, and this is the travel headroom that C1's
+  roughness field and any Arc D crests/jumps will spend — measure against these numbers, do not
+  shrink the feature to fit.
 - [ ] B4 — Relaxation length + By + CoM
 - [ ] B5 — Bake, prune, end-to-end
 - [ ] C1 — Surface roughness (washboard + tarmac detail; procedural field, after Arc B)

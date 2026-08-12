@@ -25,7 +25,13 @@ class_name VehicleM2
 @export var chassis_mass := 1250.0
 @export var body_size := Vector3(1.8, 0.55, 4.2)
 @export var wheel_radius := 0.34
-@export var rest_length := 0.45
+# B3 open item, settled 2026-08-12 (user's call): jacked up 5 cm, gravel-car style, to buy back the
+# bump travel B1's softer springs spent on sag (7.7 -> 12.7 cm of static compression, on a loop that
+# was already pegging all four corners at 100% travel at 100 km/h). The alternative was stiffening
+# ride_freq_*, which would have walked back the softness B1 exists to provide. The cost is ~5 cm of
+# CoM height and so ~16% more roll moment - re-check the roll couple, and expect C1's roughness and
+# any Arc D crests/jumps to spend this travel again.
+@export var rest_length := 0.50
 # B1: the suspension is DERIVED, not dialled in. Springs come from a target ride frequency per
 # axle (k = m_corner * (2*pi*f)^2), dampers from a target damping ratio (c = 2*zeta*sqrt(k*m)),
 # and the anti-roll bars from a target roll gradient - so the handles are the numbers a race
@@ -36,7 +42,7 @@ class_name VehicleM2
 @export var ride_freq_front := 1.4          # Hz
 @export var ride_freq_rear := 1.6           # Hz
 @export var zeta := 0.65                    # damping ratio (1.0 = critically damped)
-@export var max_travel := 0.45
+@export var max_travel := 0.50              # matches rest_length - see the B3 note above
 # Anti-roll bars are sized from a target ROLL GRADIENT (degrees of body roll per g of lateral
 # acceleration) and a front roll-couple split, rather than picked in N/m. A bar can only ADD roll
 # stiffness, so if the springs alone are already stiffer than the target the bars correctly come
@@ -961,6 +967,7 @@ func _diff_transfer(dtype: int, dw: float, t_axle: float, power: bool, visc: flo
 	return Vector2(cap * th, cap * (1.0 - th * th) / DIFF_BAND)
 
 func _physics_process(delta: float) -> void:
+
 	if Input.is_action_just_pressed("reset"):
 		respawn(); return
 	center_of_mass = Vector3(0, -0.45, _com_bias())   # re-applied so live bias tuning takes effect
