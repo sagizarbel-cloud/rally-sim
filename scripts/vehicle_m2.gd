@@ -800,6 +800,33 @@ func _engine_torque(rpm: float) -> float:
 		shape = clampf(1.0 - 0.55 * (x - 1.0) * (x - 1.0), 0.35, 1.0)
 	return peak_torque * shape
 
+func top_speed_kmh() -> float:
+	# The speed the car can ACTUALLY reach: where the top gear's drive force is finally balanced
+	# by aero drag plus rolling resistance. Not the same thing as redline in top gear, which is
+	# only what the GEARING would allow - a car is drag-limited long before that unless it is
+	# very overpowered, and the motoring friction (engine_brake_*) eats into the drive force too.
+	# Used to graduate the speedometers, so the dial matches what the car can do.
+	var gr: float = float(gear_ratios[gear_ratios.size() - 1]) * final_drive
+	if gr <= 0.01:
+		return 0.0
+	var w_idle := idle_rpm * TAU / 60.0
+	var w_red := redline_rpm * TAU / 60.0
+	var c1 := (engine_brake_redline - engine_brake_idle) / maxf(w_red - w_idle, 1.0)
+	var c0 := engine_brake_idle - c1 * w_idle
+	var f_roll := roll_resist * chassis_mass * 9.81
+	# March DOWN from redline-in-top-gear and take the first speed the car can still pull. Going
+	# the other way does not work: in top gear at walking pace the engine is below idle and makes
+	# no torque at all, so an upward sweep quits on its first step and reports zero.
+	var v := w_red * maxf(wheel_radius, 0.01) / gr
+	while v > 1.0:
+		var w_e: float = v / maxf(wheel_radius, 0.01) * gr
+		var t_net: float = _engine_torque(w_e * 60.0 / TAU) - maxf(c0 + c1 * w_e, 0.0)
+		var f_drive: float = t_net * gr * driveline_eff / maxf(wheel_radius, 0.01)
+		if f_drive >= drag_k * v * v + f_roll:
+			return v * 3.6
+		v -= 0.5
+	return 0.0
+
 func _rpm_for_torque(t_need: float) -> float:
 	# invert _engine_torque on its LOW branch: the lowest rpm that can actually deliver t_need.
 	# (Past peak_torque_rpm there is no more torque to find, so it saturates there.)

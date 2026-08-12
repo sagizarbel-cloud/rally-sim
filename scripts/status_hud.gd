@@ -21,9 +21,10 @@ const R := 80.0                   # dial radius (tick tips)
 const SWEEP_START := 212.0        # deg, zero at lower left
 const SWEEP := 244.0              # deg of travel, clockwise to lower right
 
-const C_PANEL := Color(0.10, 0.10, 0.11, 0.90)
-const C_FACE := Color(0.16, 0.16, 0.17)
-const C_RIM := Color(0.07, 0.07, 0.08)
+# the greys are deliberately see-through: this sits over the road in the outside views, so the
+# backgrounds let the world read through while the marks, numerals and needle stay solid
+const C_FACE := Color(0.17, 0.17, 0.19, 0.42)
+const C_RIM := Color(0.06, 0.06, 0.07, 0.55)
 const C_TICK := Color(0.93, 0.94, 0.96)
 const C_TICK_MINOR := Color(0.62, 0.63, 0.66)
 const C_DANGER := Color(0.86, 0.14, 0.12)
@@ -38,6 +39,8 @@ const C_REV := Color(0.36, 0.86, 0.96)
 var _t := 0.0
 var _odo := 0.0                   # metres travelled, for the odometer strip
 var _kmh_shown := 0.0
+var _top := 240.0                 # cached drag-limited top speed; refreshed so slider edits show up
+var _top_t := 0.0
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -45,6 +48,10 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	_top_t -= delta
+	if _top_t <= 0.0 and car != null and car.has_method("top_speed_kmh"):
+		_top = maxf(float(car.top_speed_kmh()), 40.0)
+		_top_t = 1.0
 	if car != null and car.has_method("get_engine"):
 		var kmh: float = float(car.get_engine().get("speed_kmh", 0.0))
 		_odo += kmh / 3.6 * delta
@@ -130,15 +137,13 @@ func _draw() -> void:
 	var org := Vector2(vs.x - PANEL.x - MARGIN, vs.y - PANEL.y - MARGIN)
 	var c := org + PANEL * 0.5
 
-	draw_rect(Rect2(org, PANEL), C_PANEL)
 	draw_circle(c, R + 18.0, C_RIM)
 	draw_circle(c, R + 6.0, C_FACE)
 
 	# --- speedometer face, scaled to the car's theoretical top speed ---
-	var ratios: Array = car.gear_ratios
-	var top_ratio: float = float(ratios[ratios.size() - 1]) * float(car.final_drive)
-	var v_max: float = (float(car.redline_rpm) * TAU / 60.0) / maxf(top_ratio, 0.01) * float(car.wheel_radius) * 3.6
-	var kmh_max: float = maxf(ceil(v_max / 20.0) * 20.0, 40.0)
+	# scale to what the car can ACTUALLY reach (drag-limited, see top_speed_kmh), with a little
+	# headroom past it the way a real speedo has - not to what the gearing alone would allow
+	var kmh_max: float = maxf(ceil(_top * 1.06 / 20.0) * 20.0, 40.0)
 	# label every 40 km/h with a minor tick between: a 280 scale labelled every 20 puts fifteen
 	# numerals on an 80 px dial, which is unreadable at a glance - and glanceable is the point
 	var majors := maxi(int(kmh_max / 40.0), 1)
@@ -232,5 +237,5 @@ func _draw() -> void:
 	# --- odometer strip ---
 	var otxt := "%06d" % int(_odo / 1000.0 * 10.0)     # tenths of a km, like a trip meter
 	var ow := font.get_string_size(otxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-	draw_rect(Rect2(c.x - ow * 0.5 - 5.0, c.y + 60.0, ow + 10.0, 15.0), Color(0.07, 0.07, 0.08))
+	draw_rect(Rect2(c.x - ow * 0.5 - 5.0, c.y + 60.0, ow + 10.0, 15.0), Color(0.06, 0.06, 0.07, 0.55))
 	draw_string(font, Vector2(c.x - ow * 0.5, c.y + 72.0), otxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_DIM)

@@ -229,6 +229,8 @@ func _build_stage() -> Node:
 func _build_tuning(car: Node) -> void:
 	var panel: CanvasLayer = load("res://scripts/tuning_panel.gd").new()
 	panel.name = "TuningPanel"
+	panel.layer = 6                              # above the HUD layers, so the sliders are never
+	                                             # hidden behind the bottom-right instrument
 	panel.vehicle = car
 	add_child(panel)
 

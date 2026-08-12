@@ -147,10 +147,8 @@ func _ready() -> void:
 		# ranges DERIVED from the car: tacho to the next whole 1000 past redline, speedo to the
 		# theoretical top speed (redline through the tallest gear), rounded up to a round 20.
 		_rpm_max = ceil(float(car.redline_rpm) / 1000.0) * 1000.0
-		var ratios: Array = car.gear_ratios
-		var top: float = float(ratios[ratios.size() - 1]) * float(car.final_drive)
-		var v_max: float = (float(car.redline_rpm) * TAU / 60.0) / maxf(top, 0.01) * float(car.wheel_radius) * 3.6
-		_kmh_max = maxf(ceil(v_max / 20.0) * 20.0, 40.0)
+		# the speed the car can actually REACH (drag-limited), not what the gearing would allow
+		_kmh_max = maxf(ceil(float(car.top_speed_kmh()) * 1.06 / 20.0) * 20.0, 40.0)
 	var red_from := _rpm_max * 2.0          # off the scale unless the car tells us otherwise
 	if car != null:
 		red_from = float(car.redline_rpm) * float(car.shift_light_frac)
