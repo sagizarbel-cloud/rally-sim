@@ -39,10 +39,6 @@ const TOD := [
 	{"name": "EVENING", "rot": Vector3(-13, -118, 0), "col": Color(1.0, 0.58, 0.32), "energy": 1.15, "top": Color(0.28, 0.32, 0.58), "horizon": Color(0.95, 0.58, 0.35), "ambient": 0.6},
 	{"name": "NIGHT",   "rot": Vector3(-46, -30, 0),  "col": Color(0.55, 0.65, 0.95), "energy": 0.30, "top": Color(0.02, 0.03, 0.09), "horizon": Color(0.08, 0.11, 0.20), "ambient": 0.4},
 ]
-var _tracks: Array = []           # pool of tire-mark quads (laid only on wheelspin, asphalt only)
-var _track_idx := 0
-var _mark_accum := 0.0
-var _dust: Array = []             # per-wheel dirt CPUParticles3D, emit on wheelspin
 
 func _ready() -> void:
 	Engine.max_fps = 144
@@ -58,8 +54,7 @@ func _ready() -> void:
 	car.respawn()
 	_build_wear(car, stage)                      # M6: surface degradation wraps grip_at (corners + braking zones)
 	_build_cameras(car)
-	_build_tracks()
-	_build_dust()
+	_build_effects(car, stage)                   # M11: surface-aware dust, tyre smoke, fading marks
 	var hud := _build_hud(car)
 	_build_component_hud(car)
 	_build_status_hud(car)
@@ -71,61 +66,6 @@ func _ready() -> void:
 	_build_reactive_patch(car)
 	_build_sound(car, stage)
 
-func _build_tracks() -> void:
-	# a recycled pool of dark quads dropped under the wheels as the car moves
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.10, 0.07, 0.04, 0.55)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var quad := PlaneMesh.new(); quad.size = Vector2(0.26, 0.95)
-	for i in range(600):
-		var mi := MeshInstance3D.new()
-		mi.mesh = quad
-		mi.material_override = mat
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mi.visible = false
-		add_child(mi)
-		_tracks.append(mi)
-
-func _drop_track(pos: Vector3, nrm: Vector3, fwd: Vector3) -> void:
-	var mi: MeshInstance3D = _tracks[_track_idx]
-	_track_idx = (_track_idx + 1) % _tracks.size()
-	var y := nrm.normalized()
-	var zc := fwd - y * fwd.dot(y)
-	zc = zc.normalized() if zc.length() > 0.01 else Vector3.FORWARD
-	var xc := y.cross(zc).normalized()
-	zc = xc.cross(y).normalized()
-	mi.global_transform = Transform3D(Basis(xc, y, zc), pos + y * 0.02)
-	mi.visible = true
-
-func _build_dust() -> void:
-	# one dirt-spray emitter per wheel; positioned at the contact and emitting only on wheelspin
-	var mesh := QuadMesh.new(); mesh.size = Vector2(0.28, 0.28)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.56, 0.48, 0.34, 0.75)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mesh.material = mat
-	for i in range(4):
-		var p := CPUParticles3D.new()
-		p.mesh = mesh
-		p.emitting = false
-		p.amount = 18
-		p.lifetime = 0.6
-		p.direction = Vector3(0, 1, 0)
-		p.spread = 45.0
-		p.initial_velocity_min = 1.8
-		p.initial_velocity_max = 4.5
-		p.gravity = Vector3(0, -14, 0)
-		p.scale_amount_min = 0.5
-		p.scale_amount_max = 1.4
-		p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(p)
-		_dust.append(p)
-
 func _physics_process(delta: float) -> void:
 	if _car == null:
 		return
@@ -136,24 +76,15 @@ func _physics_process(delta: float) -> void:
 		var rb: Transform3D = _car.global_transform
 		_rear_cam.look_at_from_position(rb * Vector3(0, 0.82, 0.78), rb * Vector3(0, 0.5, 25.0), rb.basis.y)
 
-	# tire marks + dirt spray ONLY when a wheel is spinning (slip) - shows wheelspin, even in place
-	_mark_accum += delta
-	var lay := _mark_accum > 0.04
-	if lay:
-		_mark_accum = 0.0
-	var car_fwd: Vector3 = -_car.global_transform.basis.z
-	var wheels: Array = _car.get_wheels()
-	for i in range(wheels.size()):
-		var w = wheels[i]
-		var spinning: bool = w.contact and w.slip > 0.35
-		if i < _dust.size():
-			var p: CPUParticles3D = _dust[i]
-			p.emitting = spinning
-			if spinning:
-				p.global_position = w.contact_point + Vector3.UP * 0.12
-		# skid marks only on ASPHALT (base grip > 1.2); dirt/gravel shows spin via particles + wear line
-		if spinning and lay and _stage != null and _stage.grip_at(w.contact_point.x, w.contact_point.z) > 1.2:
-			_drop_track(w.contact_point, w.contact_normal, car_fwd)
+	# M11: dust / smoke / skid marks moved to scripts/effects.gd, where they are driven by
+	# contact-patch slip velocity and tyre temperature instead of a flat "is it spinning" test.
+
+func _build_effects(car: Node3D, stage) -> void:
+	var fx: Node3D = load("res://scripts/effects.gd").new()
+	fx.name = "SurfaceEffects"
+	add_child(fx)
+	fx.car = car
+	fx.stage = stage
 
 func _build_sound(car: Node3D, stage) -> void:
 	var snd: Node = load("res://scripts/sound.gd").new()

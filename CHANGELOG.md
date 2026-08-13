@@ -20,6 +20,31 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-13 (evening)
+
+**M11 dust, smoke and skid marks — now driven by physics instead of a threshold.** New
+`scripts/effects.gd`, self-contained; the old inline code in `world.gd` is gone.
+Symptoms this fixes, in driving words: *"sliding sideways on gravel throws no dust"*, *"dust
+looks identical on grass and on the gravel loop"*, *"tyre smoke on tarmac whenever a wheel
+spins, even stone cold"*, *"skid marks vanish mid-corner"*.
+The old test was `w.slip > 0.35` — slip RATIO only — so it saw wheelspin and lock-ups and was
+blind to everything else. Effects now scale with **contact-patch slip velocity** (m/s of rubber
+actually sliding, combining slip ratio AND slip angle) times **load**, so a lightly loaded wheel
+throws less. Measured on synthetic cases: a pure sideways slide at 25 km/h reads 12.0 m/s of slip
+and full intensity where the old test emitted **nothing**; a big slide on an unloaded wheel drops
+to 0.20 intensity where the old test emitted at full; a blip at a standstill drops to 0.19 (a
+puff, not a plume); gripping at 108 km/h stays at 0.00.
+**Smoke is thermal, not merely frictional** — it gates on M7's per-tyre temperature, starting at
+110 °C and reaching full at 165 °C (optimum is 85 °C), so a cold lock-up puffs and a long drift
+billows. **Dust takes its colour from the ground it came from** via `stage._surface_color()`, so
+the gravel loop throws dusty tan and the grass verge throws olive — no per-surface colour
+constants. **Marks** moved from 600 individual nodes to one MultiMesh with per-instance alpha and
+a 14 s fade, so the pool wrapping thins the oldest mark out instead of making it disappear.
+*Owed follow-up: the new `@export`s (slip_ref, smoke_temp, mark_fade, …) have no tuning-panel rows
+or HELP lines yet — `tuning_panel.gd` was held by the B2 session at the time. Add them when it is
+free, per the convention.* **Not yet drive-tested — this is a visual change and only driving can
+judge it.**
+
 ## 2026-08-13 (later still)
 
 **B2 CLOSED — drive verdict: "feels good".** Asymmetric digressive damper accepted.
