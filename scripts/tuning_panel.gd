@@ -80,7 +80,10 @@ var _specs := [
 	["HB opens centre (M2)", "handbrake_opens_centre", 0.0,     1.0,   1.0,  func(v): return "ON" if v else "OFF"],
 	["Slide friction (M2)",  "slide_friction",         0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
 	# chassis / grip (shared)
-	["Car weight",           "mass",                 700.0,   2500.0,   25.0, func(v): return "%d kg" % int(v)],
+	# drives chassis_mass, NOT the RigidBody's `mass`: chassis_mass is the single authority the
+	# suspension, roll gradient, tyre load reference and rolling resistance all read (the body's
+	# mass follows it in _derive_setup). Pointing this row at `mass` desynced the two.
+	["Car weight",           "chassis_mass",         700.0,   2500.0,   25.0, func(v): return "%d kg" % int(v)],
 	["Grip - lateral",       "mu_lat",                 0.6,      2.2,   0.05, func(v): return "%.2f" % v],
 	["Grip - longitudinal",  "mu_long",                0.6,      2.6,   0.05, func(v): return "%.2f" % v],
 	# tyre thermal + wear + puncture (M7)

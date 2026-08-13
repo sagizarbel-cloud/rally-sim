@@ -402,6 +402,11 @@ func _derive_setup() -> void:
 	# genuinely loads the front axle and re-rates its springs rather than just moving the CoM.
 	var g := 9.81
 	var zf: float = _wheels[0].pos.z
+	# chassis_mass is the one authority for how heavy the car is: corner masses, the roll gradient,
+	# the tyre load reference (_mu_load) and rolling resistance all derive from it, so the physics
+	# body has to follow it rather than drift (a live slider edit re-rates the whole car).
+	if not is_equal_approx(mass, chassis_mass):
+		mass = chassis_mass
 	var zr: float = _wheels[2].pos.z
 	var com_z := _com_bias()
 	var la := absf(com_z - zf)                    # CoM -> front axle
