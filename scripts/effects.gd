@@ -27,14 +27,25 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 @export var slip_floor := 0.8        # m/s below which nothing is emitted at all (tyre is gripping)
 @export var asphalt_grip := 1.2      # base grip above this = a hard surface: smoke + marks, no dust
 # --- dust (loose surfaces) ----------------------------------------------------------------
-@export var dust_amount := 24        # particles per wheel emitter
-@export var dust_lifetime := 0.9     # s - dust hangs, it does not vanish
+@export var dust_amount := 44        # many small particles read as dust; few big ones read as debris
+@export var dust_lifetime := 1.1     # s - dust hangs, it does not vanish
 @export var dust_rise := 3.2         # m/s upward kick at full intensity
+@export var dust_size := 0.20        # m - base particle size before per-particle scale variation
+@export var dust_trail := 0.65       # how much of the kick goes BACKWARD along travel vs straight up
 # --- tyre smoke (hard surfaces) -----------------------------------------------------------
+# Smoke has TWO causes and needs both. A long drift smokes because the tread got hot (thermal),
+# but a hard stop smokes instantly on cold tyres because a locked contact patch dumps enormous
+# friction POWER in a fraction of a second. Gating on temperature alone missed the whole braking
+# case - the tyre had not had time to heat up yet, which is exactly when you see the most smoke.
 @export var smoke_temp := 110.0      # C at which the tread starts to smoke (M7 optimum is 85)
-@export var smoke_full_temp := 165.0 # C at which it smokes as hard as it ever will
-@export var smoke_amount := 20
-@export var smoke_lifetime := 1.6    # s - smoke lingers much longer than dust
+@export var smoke_full_temp := 165.0 # C at which heat alone smokes as hard as it ever will
+@export var smoke_power_ref := 45000.0  # W of friction power at the patch for full smoke, cold
+@export var smoke_amount := 40
+@export var smoke_lifetime := 2.1    # s - smoke lingers much longer than dust
+@export var smoke_size := 0.30       # m - starts small and swells, the way smoke does
+@export var smoke_color := Color(0.90, 0.90, 0.92)   # white-grey burnt rubber over asphalt
+# --- particle shape -----------------------------------------------------------------------
+@export var blob_variants := 5       # distinct procedural puff sprites; emitters pick between them
 # --- skid marks ---------------------------------------------------------------------------
 @export var mark_pool := 900         # ring buffer of quads (one MultiMesh, one draw call)
 @export var mark_fade := 14.0        # s for a mark to fade out - "longer-lasting" per M11
@@ -47,13 +58,46 @@ var _mark_next := 0
 var _marks: Array = []               # active marks: {"i": index, "t": age, "a": peak alpha}
 var _lay_accum := 0.0
 
+var _blobs: Array[ImageTexture] = []
+
 func _ready() -> void:
+	for b in range(blob_variants):
+		_blobs.append(_make_blob(1000 + b * 977))
 	for i in range(4):
-		_dust.append(_make_emitter(dust_amount, dust_lifetime, Color(0.56, 0.48, 0.34), -14.0, 0.30))
-		_smoke.append(_make_emitter(smoke_amount, smoke_lifetime, Color(0.78, 0.78, 0.80), -1.2, 0.42))
+		_dust.append(_make_emitter(dust_amount, dust_lifetime, Color(0.56, 0.48, 0.34), -9.0, dust_size, i))
+		_smoke.append(_make_emitter(smoke_amount, smoke_lifetime, smoke_color, -0.7, smoke_size, i + 2))
 	_build_marks()
 
-func _make_emitter(amount: int, life: float, col: Color, gravity: float, size: float) -> CPUParticles3D:
+func _make_blob(seed_v: int) -> ImageTexture:
+	# A procedural puff sprite: soft-edged, and IRREGULAR, so particles do not read as a cloud of
+	# identical squares. Each variant gets its own lobed silhouette and internal mottling from its
+	# own seed, so the set looks like different scraps of dust rather than one shape repeated.
+	# Generated in code like everything else here - no image assets to ship or import.
+	var n := 48
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_v
+	var l1 := rng.randf_range(0.16, 0.40)          # two lobe harmonics dent the outline
+	var l2 := rng.randf_range(0.08, 0.26)
+	var p1 := rng.randf_range(0.0, TAU)
+	var p2 := rng.randf_range(0.0, TAU)
+	var k1 := float(rng.randi_range(2, 4))
+	var k2 := float(rng.randi_range(5, 8))
+	var m1 := rng.randf_range(0.0, TAU)            # and a mottle phase for the interior
+	for y in range(n):
+		for x in range(n):
+			var dx := (float(x) + 0.5) / float(n) * 2.0 - 1.0
+			var dy := (float(y) + 0.5) / float(n) * 2.0 - 1.0
+			var r := sqrt(dx * dx + dy * dy)
+			var th := atan2(dy, dx)
+			var edge := 1.0 + l1 * sin(k1 * th + p1) + l2 * sin(k2 * th + p2)
+			var a := clampf(1.0 - r / maxf(edge * 0.94, 0.05), 0.0, 1.0)
+			a = a * a * (3.0 - 2.0 * a)            # smoothstep: a soft shoulder, never a hard rim
+			a *= 0.80 + 0.20 * sin(6.0 * th + m1 + 9.0 * r)   # wispy, uneven density
+			img.set_pixel(x, y, Color(1, 1, 1, clampf(a, 0.0, 1.0)))
+	return ImageTexture.create_from_image(img)
+
+func _make_emitter(amount: int, life: float, col: Color, gravity: float, size: float, variant: int) -> CPUParticles3D:
 	var mesh := QuadMesh.new()
 	mesh.size = Vector2(size, size)
 	var mat := StandardMaterial3D.new()
@@ -62,20 +106,34 @@ func _make_emitter(amount: int, life: float, col: Color, gravity: float, size: f
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = _blobs[variant % _blobs.size()]
 	mesh.material = mat
 	var p := CPUParticles3D.new()
 	p.mesh = mesh
 	p.emitting = false
 	p.amount = amount
 	p.lifetime = life
+	p.lifetime_randomness = 0.45            # they must not all die on the same frame
 	p.direction = Vector3.UP
-	p.spread = 55.0
-	p.gravity = Vector3(0, gravity, 0)     # dust falls back; smoke is near-buoyant and drifts up
+	p.spread = 42.0
+	p.gravity = Vector3(0, gravity, 0)      # dust settles back down; smoke is near-buoyant
 	p.color = col
-	p.scale_amount_min = 0.6
-	p.scale_amount_max = 1.5
+	p.scale_amount_min = 0.35               # a wide spread of sizes, so no two puffs match
+	p.scale_amount_max = 1.7
+	p.angle_min = -180.0                    # each sprite starts at its own rotation...
+	p.angle_max = 180.0
+	p.angular_velocity_min = -55.0          # ...and keeps turning, so the set never repeats
+	p.angular_velocity_max = 55.0
+	p.damping_min = 1.4                     # air drag: dust loses its kick fast and hangs
+	p.damping_max = 3.2
+	var ramp := Gradient.new()              # fade in, then dissolve - dust does not blink out
+	ramp.set_color(0, Color(1, 1, 1, 0.0))
+	ramp.set_color(1, Color(1, 1, 1, 0.0))
+	ramp.add_point(0.12, Color(1, 1, 1, 1.0))
+	ramp.add_point(0.45, Color(1, 1, 1, 0.85))
+	p.color_ramp = ramp
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	p.local_coords = false                 # particles stay where they were born, not glued to the wheel
+	p.local_coords = false                  # particles stay where they were born, not glued to the wheel
 	add_child(p)
 	return p
 
@@ -122,9 +180,16 @@ func intensity(w, v: float, fz_ref: float) -> float:
 	var load: float = clampf(float(w.Fz) / maxf(fz_ref, 1.0), 0.0, 1.6)
 	return clampf((s - slip_floor) / maxf(slip_ref - slip_floor, 0.1), 0.0, 1.0) * load
 
-func smoke_frac(temp: float) -> float:
-	# Rubber smokes because it is HOT, not merely because it is sliding.
-	return clampf((temp - smoke_temp) / maxf(smoke_full_temp - smoke_temp, 1.0), 0.0, 1.0)
+func smoke_frac(temp: float, fz: float, vslip: float, grip: float) -> float:
+	# Two routes to smoke, and the effect takes whichever is stronger.
+	#   THERMAL - a tyre that has been worked for a while is hot enough to smoke on its own.
+	#   POWER   - friction power at the contact patch, P = mu.Fz.v_slip. A hard stop locks the
+	#             wheels and dumps six figures of watts into the tread instantly, which is why a
+	#             panic stop smokes on cold tyres. Temperature lags this by seconds; the smoke
+	#             does not.
+	var thermal := clampf((temp - smoke_temp) / maxf(smoke_full_temp - smoke_temp, 1.0), 0.0, 1.0)
+	var power := clampf(grip * fz * vslip / maxf(smoke_power_ref, 1.0), 0.0, 1.0)
+	return maxf(thermal, power)
 
 func _physics_process(delta: float) -> void:
 	_fade_marks(delta)
@@ -143,6 +208,11 @@ func _physics_process(delta: float) -> void:
 	if lay:
 		_lay_accum = 0.0
 	var fwd: Vector3 = -car.global_transform.basis.z
+	# Material is thrown BACKWARD relative to travel, then hangs where it was thrown - that is
+	# what makes a dust plume trail behind the car instead of puffing straight up around it.
+	var travel: Vector3 = car.linear_velocity
+	var back: Vector3 = -travel.normalized() if travel.length() > 1.0 else Vector3.ZERO
+	var kick: Vector3 = (Vector3.UP + back * dust_trail).normalized()
 	for i in range(mini(wheels.size(), 4)):
 		var w = wheels[i]
 		if not w.contact:
@@ -152,10 +222,14 @@ func _physics_process(delta: float) -> void:
 		var cp: Vector3 = w.contact_point
 		var grip: float = stage.grip_at(cp.x, cp.z)
 		var amt: float = intensity(w, v, fz_ref)
+		var vs: float = slip_speed(w, v)
 		if grip > asphalt_grip:
 			_dust[i].emitting = false
-			var sf: float = amt * smoke_frac(float(w.temp))
-			_drive(_smoke[i], cp, sf, 1.6, Color(0.80, 0.80, 0.82))
+			# smoke is gated on its own physics, not on `amt` - a locked wheel in a hard stop is
+			# barely "slipping" by the intensity measure until the car is moving, yet it is the
+			# single smokiest thing a tyre does
+			var sf: float = smoke_frac(float(w.temp), float(w.Fz), vs, grip)
+			_drive(_smoke[i], cp, sf, 1.5, smoke_color, kick)
 			if lay and amt > 0.12:
 				_lay_mark(cp, w.contact_normal, fwd, clampf(amt, 0.0, 1.0))
 		else:
@@ -165,17 +239,19 @@ func _physics_process(delta: float) -> void:
 			var col := Color(0.56, 0.48, 0.34)
 			if stage.has_method("_surface_color"):
 				col = stage._surface_color(cp.x, cp.z)
-			_drive(_dust[i], cp, amt, dust_rise, col.lightened(0.12))
+			_drive(_dust[i], cp, amt, dust_rise, col.lightened(0.12), kick)
 
-func _drive(p: CPUParticles3D, cp: Vector3, amt: float, rise: float, col: Color) -> void:
+func _drive(p: CPUParticles3D, cp: Vector3, amt: float, rise: float, col: Color, kick: Vector3) -> void:
 	if amt <= 0.01:
 		p.emitting = false
 		return
-	p.global_position = cp + Vector3.UP * 0.10
-	p.initial_velocity_min = rise * 0.35 * amt
+	p.global_position = cp + Vector3.UP * 0.08
+	p.direction = kick if kick.length() > 0.01 else Vector3.UP
+	p.initial_velocity_min = rise * 0.30 * amt
 	p.initial_velocity_max = rise * amt
-	p.scale_amount_max = 0.7 + 1.2 * amt
-	col.a = clampf(0.25 + 0.65 * amt, 0.0, 0.95)
+	p.scale_amount_min = 0.30 + 0.25 * amt        # a harder slip throws bigger clouds, not just more
+	p.scale_amount_max = 0.9 + 1.3 * amt
+	col.a = clampf(0.20 + 0.60 * amt, 0.0, 0.90)
 	p.color = col
 	p.emitting = true
 

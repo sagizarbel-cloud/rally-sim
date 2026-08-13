@@ -20,6 +20,32 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-13 (evening, later)
+
+**Tyre smoke on hard stops, and particles that look like dust instead of flying squares.**
+Symptoms this fixes: *"stamping on the brakes on tarmac produces no smoke"*, *"the particles look
+like squares flying"*, *"dust puffs around the car instead of trailing behind it"*.
+**Smoke had one cause and needed two.** It gated on M7 tyre temperature alone, so a panic stop
+made none — the tread had not had time to heat up, which is precisely when a real tyre smokes
+most. Smoke now takes whichever route is stronger: THERMAL (a tyre worked hot over a long drift)
+or POWER — friction power at the contact patch, P = mu.Fz.v_slip, which a locked wheel dumps into
+the tread instantly. Measured: a hard stop on cold tyres (60 C, 5 kN, 25 m/s of slip) now reads
+**1.00 where the temperature-only gate read 0.00**; a cold lock-up at 30 km/h reads 0.68; threshold
+braking with small slip reads a faint 0.07; cruising stays at 0.02. Colour is white-grey (0.90,
+0.90, 0.92) burnt rubber.
+**Particles** now use procedurally generated soft puff sprites — 5 variants, each with its own
+lobed silhouette and internal mottling from its own seed, generated in code like everything else
+(no image assets). Each particle also gets a random start rotation, its own spin, a wide scale
+spread (0.35–1.7), randomised lifetime and air damping, and a gradient that fades it in and
+dissolves it rather than blinking it out. Verified: ~145 of 256 sampled pixels per sprite are
+partial alpha, where a flat square would be 0. Dust is smaller (0.20 m) and there is more of it
+(44 per wheel), which is what reads as dust rather than debris.
+**Dust now trails.** Material is thrown BACKWARD along travel (`dust_trail` 0.65 of the kick)
+instead of straight up, so a plume streams behind the car rather than puffing around it.
+**Still not drive-tested** — visual, so only driving can judge it. `slip_ref` (6 m/s for full
+intensity) and `smoke_power_ref` (45 kW) are the first knobs to reach for if it is too eager or
+too shy.
+
 ## 2026-08-13 (evening)
 
 **M11 dust, smoke and skid marks — now driven by physics instead of a threshold.** New
