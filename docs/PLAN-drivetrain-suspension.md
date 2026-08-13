@@ -268,7 +268,7 @@ twice as often.
 | B3 | B | Bump stops + honest load path (`w.bottomed` for M7) | S |
 | B4 | B | Lateral relaxation length + surface-derived `By` + CoM height | M |
 | B5 | B | Bake defaults, prune dead tunables, end-to-end verification | S |
-| C1 | C | **Surface roughness the wheels feel** (washboard + tarmac detail) | M |
+| C1 | C | **Centreline abstraction + surface roughness the wheels feel** | L |
 | C2 | C | Self-aligning torque — the FFB signal (no hardware needed) | M |
 | C3 | C | Wheel input path: lock, ratio, pedals, shifter | M |
 | C4 | C | FFB output layer (**research spike first** — see §7) | L |
@@ -631,8 +631,49 @@ plumbing), `tuning_panel.gd`.
 
 ### Phase C1 — Surface roughness the wheels actually feel
 
-**Files:** `vehicle_m2.gd` (the suspension raycast block), a new `scripts/roughness.gd`,
-`stage.gd` (surface classification already there), `tuning_panel.gd`, `hud.gd`.
+**Files:** a new `scripts/centreline.gd`, a new `scripts/roughness.gd`, `vehicle_m2.gd` (the
+suspension raycast block), `stage.gd` (builds centrelines; surface classification already there),
+`tuning_panel.gd`, `hud.gd`.
+
+**Scope change 2026-08-13 (user's call): C1 absorbs the centreline abstraction that was Arc D's
+phase D2.** The reason is §6.2 of `docs/PLAN-stages-ground-map.md`: C1 keys washboard to `s`,
+distance along the road centreline, and Arc D was going to redefine how `s` is computed. Building
+C1 on a θ-derived `s` and then changing that definition would move every washboard ridge on the
+existing map — silently invalidating C1's own drive-verified feel and any braking points learned
+on it. Building the real `s` first costs one extra sub-phase now and removes a whole class of
+rework later. **Do C1.0 before C1.1.**
+
+#### C1.0 The centreline — build this FIRST
+
+`Centreline` holds sampled points, a **cumulative arc-length table**, and per-sample width,
+heading, curvature and superelevation. It exposes:
+- `point_at(s) -> {pos, heading, curvature, width}`
+- `nearest_point(x, z) -> {s, lateral, heading, curvature, width}`
+- `length() -> float`, `is_loop() -> bool`
+
+Splines are not naturally arc-length parameterised — equal steps in the curve parameter are not
+equal distances along the road — so build a cumulative-distance table at dense samples and invert
+it by binary search ([arc-length parameterisation
+primer](https://www.geometrictools.com/Documentation/MovingAlongCurveSpecifiedSpeed.pdf)). That
+table IS the `s` axis, and it is the same axis `wear.gd` and `pace_notes.gd` already build for
+themselves.
+
+**In C1 the existing polar roads are simply expressed as centrelines** — sampled from `_road(θ)`
+and `_asphalt_r(θ)` exactly as `wear.gd` (`:50`) and `pace_notes.gd` (`:52-57`) already sample
+them. No geometry changes; it is the same points reached through a new interface. `is_loop()` is
+true for all three circuits and stays true. Arc D later adds open roads (`is_loop() == false`)
+and generated stages — that is additive and cannot move anything C1 tuned.
+
+**`nearest_point` is the one query that can get expensive** — it is called per wheel per frame.
+Do not brute-force it over thousands of samples. Bin the samples into a coarse uniform grid keyed
+by world position so each query searches a handful of candidates. Budget it in the probe below.
+
+**Two C1 amendments that cost nothing now and a refactor later** (full list in
+`docs/PLAN-stages-ground-map.md` §6):
+- Ask a function `road_class_at(x, z)` for the ISO class rather than reading the per-surface
+  export inline — Arc D's D1 replaces that function's body and nothing else moves.
+- Write the centre-patch exclusion as a query, not a hardcoded radius test — it becomes the
+  ground map's `deformable` flag.
 
 **The problem, measured 2026-08-11.** The stage's collision grid is `cells 320` over
 `size 720` — **2.25 m per cell** — and the hills use `octaves 2` with the source comment
@@ -723,6 +764,12 @@ would be tuning a magic number to hide a real geometry problem.
 
 **Compile gate:** `./check.sh` clean.
 **Headless probes (then remove):**
+0a. **Centreline geometry identity.** Compare `Centreline` samples against direct
+   `_road(θ)`/`_asphalt_r(θ)` evaluation at 2000 positions per circuit. Pass: max deviation
+   **< 1 mm**. The existing map must not shift.
+0b. **`nearest_point` correctness and cost.** Against brute force at 500 random positions:
+   same `s` within one sample spacing. Report cost for 4 wheels × 120 Hz against the 1.84 ms/tick
+   baseline.
 1. **Spectrum:** sample the field along a straight line and dump RMS per octave band; the
    slope must follow the ISO power law, and the gravel class must sit clearly above tarmac.
 2. **Enveloping:** a 3 cm bump 4 cm wide must be strongly attenuated at the wheel while a
@@ -733,6 +780,8 @@ would be tuning a magic number to hide a real geometry problem.
    100 km/h, before vs after, against B3's recorded numbers.
 
 **User drive checklist:**
+- [ ] Lap times, sector splits, pace notes and the wear line are all unchanged — C1.0 is a
+  refactor and must be invisible on its own.
 - [ ] Braking hard into a dirt corner: washboard is felt — the car skips and dances, and it
   is a handling event to manage, not a cosmetic vibration.
 - [ ] The dirt loop reads as a SURFACE at speed rather than a smooth floor, and tarmac reads
@@ -1146,6 +1195,39 @@ User drive-through, all in one session, keyboard:
   B1's roll couple wants a re-check on the next drive, and this is the travel headroom that C1's
   roughness field and any Arc D crests/jumps will spend — measure against these numbers, do not
   shrink the feature to fit.
+  **REVISION REQUIRED, 2026-08-13 — the bump stop is the wrong KIND, not the wrong strength.**
+  The user asked whether the stop's range should be "tougher". It should not: the sweep already
+  showed that raising `bumpstop_g` spikes peak load hard (0g = 26.5 kN, 3g = 35.7, 6g = 44.9,
+  10g = 57.1, and a quadratic ramp at 12g hit **63.3 kN**) while barely reducing bottoming.
+  Research says why. Real end-of-travel control is **hydraulic**: a short-stroke pressurised
+  damper that is *velocity-sensitive* — faster impact, more resistance — and which **dissipates
+  the energy as heat** rather than storing it. The staging is documented as roughly soft first
+  third (gas spring), stiffer middle third, with **the majority of the energy absorbed in the
+  last third by oil through a piston**; above ~5 m/s impact velocity an elastomer stop cannot
+  dissipate fast enough on its own.
+  ([Superior Engineering](https://www.superiorengineering.com.au/hydraulic-bump-stops),
+  [Crawlpedia hydraulic bump stop guide](https://www.crawlpedia.com/bump_stops.htm),
+  [R53 Suspension technologies](https://www.r53suspension.com/technologies))
+  **Our stop is a pure displacement spring (`bumpstop_g · x³`), so it stores the impact and gives
+  it straight back — it pogos.** That is exactly why stiffening it raised loads without buying
+  travel. The fix is a velocity-dependent dissipative term alongside the progressive spring, i.e.
+  a hydraulic bump stop, with its own probe on *energy absorbed per impact* rather than peak load.
+  **Second finding, which reframes the whole "travel budget":** gravel WRC cars run **250–300 mm
+  of total suspension travel**, with softer springs than tarmac and dampers deliberately *soft in
+  compression, firm in rebound*
+  ([gravel setup overview](https://www.rallynews.autospeedmarket.com/rallynews/how-suspension-setup-affects-performance-on-gravel-stages/),
+  [WRCwings on suspension](https://www.wrcwings.tech/2020/05/24/suspension-grip-and-aerodynamics/)).
+  This car has `max_travel` 0.45 m with 0.127 m of static sag — **323 mm of bump travel, MORE than
+  a real rally car's entire stroke.** So "not enough travel" is probably the wrong diagnosis, and
+  raising ride height should NOT be the first move. The likelier causes, in order: (1) the stop
+  returns energy instead of absorbing it, (2) **B2 is not implemented yet** — its asymmetric
+  bump/rebound split is precisely the "soft compression, firm rebound" real cars use, and it is
+  the single most likely fix, (3) the heightmap's input may simply be more severe than a real
+  rally road. **Consequence for ordering: do B2 before revisiting the bump stop or the ride
+  height, and re-measure the bottoming statistics after it.** Treat the spring-rate figures in
+  those sources with caution — one quotes gravel rates as "450–600 N/mm", which is an order of
+  magnitude above a plausible wheel rate and is almost certainly a units error.
+
 - [ ] B4 — Relaxation length + By + CoM
 - [ ] B5 — Bake, prune, end-to-end
 - [ ] C1 — Surface roughness (washboard + tarmac detail; procedural field, after Arc B)

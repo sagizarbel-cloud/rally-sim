@@ -80,17 +80,17 @@ existing circuits' geometry is out of scope for this arc.
 2. **Scale → 4–6 km per stage, with the FULL streaming engineering** (chunk streaming, mesh
    LOD, memory budgeting) built from the start rather than a static heightmap that gets
    retrofitted.
-   _Consequence:_ D5 is a large phase and lands before any long stage is playable. The payoff
+   _Consequence:_ D4 is a large phase and lands before any long stage is playable. The payoff
    is that stage length stops being an engineering constant — going to 10–15 km later becomes a
    parameter change plus a budget re-measure, not a rewrite. The cost is that Arc D cannot ship
-   a long stage early; D4 deliberately ships a SHORT non-streamed one first so the generator is
+   a long stage early; D3 deliberately ships a SHORT non-streamed one first so the generator is
    provable before the streaming work starts.
 
 3. **Authoring → procedural generation from stage parameters, plus authored control points,
    with a path left open for imported heightmaps.**
    _Consequence:_ the generator is the primary tool (length, sinuosity, surface mix, elevation
    character), and pinned waypoints are an override layer on top of it, not a parallel system.
-   The heightmap-import path is designed for in D4's data model (§5.4) but NOT built in this
+   The heightmap-import path is designed for in D2's data model (§5.3) but NOT built in this
    arc — it is named as a seam, not a phase, so nobody has to retrofit it later.
 
 4. **Reaching the new area → a connecting road you physically drive, which unloads one area and
@@ -99,18 +99,18 @@ existing circuits' geometry is out of scope for this arc.
    plainly. It means (a) only one area is resident at a time, so the memory ceiling stays flat,
    but (b) the transition must happen while the car is moving, which forces asynchronous
    loading and a transition corridor long enough to hide the load, and (c) the calibration bed
-   must rebuild **bit-identically** every time you drive back into it. §5.6 makes that a probe,
+   must rebuild **bit-identically** every time you drive back into it. §5.5 makes that a probe,
    not a hope.
 
 5. **Surfaces → mixed-surface transitions only.** Gravel and tarmac already exist; mud, snow/ice
    and sand are explicitly out of this arc.
-   _Consequence:_ D7 is a blend-and-classification phase rather than N new surface models. This
+   _Consequence:_ D6 is a blend-and-classification phase rather than N new surface models. This
    is the cheapest big win available — it is where real stages punish you, and it needs no new
    tyre physics, only a ground-map class that interpolates between two classes that already
    work.
 
 6. **Deformable ruts along the stage (roadmap M6 Phase 2) → a late OPTIONAL phase in Arc D.**
-   _Consequence:_ specified as D8 and ordered last so the arc ships without it. Honest framing:
+   _Consequence:_ specified as D7 and ordered last so the arc ships without it. Honest framing:
    streaming a deformable corridor along a 4–6 km point-to-point stage is a subsystem, not a
    feature, because deformation state must now persist across chunk load/unload (§8.4).
 
@@ -290,21 +290,30 @@ stage rather than like noise. That is a testable property and it is already impl
 
 | Phase | Title | Size |
 |---|---|---|
+| — | _(the centreline abstraction moved into **C1** — see below)_ | — |
 | D1 | The ground map: one authority for what the ground is | M |
-| D2 | The centreline abstraction, retrofitted onto the existing roads | L |
-| D3 | Timing, notes and wear re-parameterised onto arc length | M |
-| D4 | The stage generator: parameters + control points (short, static) | L |
-| D5 | Chunked terrain, streaming and LOD | L |
-| D6 | The area manager and the connecting road | M |
-| D7 | Mixed-surface transitions | M |
-| D8 | Deformable ruts along the corridor (**optional** — may be cut) | L |
-| D9 | Bake defaults, prune, end-to-end verification | S |
+| D2 | Timing, notes and wear re-parameterised onto arc length | M |
+| D3 | The stage generator: parameters + control points (short, static) | L |
+| D4 | Chunked terrain, streaming and LOD | L |
+| D5 | The area manager and the connecting tunnel | M |
+| D6 | Mixed-surface transitions | M |
+| D7 | Deformable ruts along the corridor (**optional** — may be cut) | L |
+| D8 | Bake defaults, prune, end-to-end verification | S |
+
+**Scope change 2026-08-13 (user's call): the centreline abstraction — the old phase D2 — moves
+into C1.** C1 needs `s` for its washboard term, and having Arc D redefine `s` afterwards would
+move every ripple on the existing map (the risk this plan recorded as §6.2). Building the real
+centreline inside C1 costs one sub-phase there and deletes an entire L-sized phase here, plus the
+class of rework it would have caused. C1's spec now carries it as **C1.0**, including the
+millimetre-identity probe that protects the existing map. Arc D's remaining centreline work is
+purely additive — open roads (`is_loop() == false`) and generated ones — and cannot move anything
+C1 tuned.
 
 **Ordering rationale, stated because it is deliberate:** D1–D3 add **no new content at all**.
-They build the abstractions and prove them against the existing map, where every calibration
-baseline lives and where any deviation is immediately visible. Only once the ground map, the
-centreline and the three downstream systems are proven on known-good geometry does D4 generate
-anything new. This front-loads all the structural risk into phases that can be verified by
+They build on the centreline C1 already proved, and verify the ground map and the three
+downstream systems by equality against the existing map — where every calibration baseline lives
+and where any deviation is immediately visible. Only once all of that is proven on known-good
+geometry does D3 generate anything new. This front-loads all the structural risk into phases that can be verified by
 equality against a known answer, which is the cheapest kind of verification there is.
 
 **Every phase leaves the game fully drivable, on keyboard, with the existing map intact.**
@@ -352,42 +361,7 @@ moves.
 
 ---
 
-### Phase D2 — The centreline abstraction, retrofitted onto the existing roads
-
-**Files:** new `scripts/centreline.gd`; `stage.gd` (builds centrelines for its three circuits
-from the existing `_road`/`_asphalt_r`); `tuning_panel.gd`.
-
-**Mechanism.** `Centreline` holds sampled points, a cumulative arc-length table, per-sample
-width, heading, curvature and superelevation, and exposes:
-- `point_at(s) -> {pos, heading, curvature, width}`
-- `nearest_point(x, z) -> {s, lateral, heading, curvature, width}` — spatially binned (§3.1)
-- `length() -> float`, `is_loop() -> bool`
-
-**The critical move: the existing polar roads are expressed AS centrelines**, sampled from
-`_road(θ)` and `_asphalt_r(θ)` exactly as `wear.gd` and `pace_notes.gd` already sample them.
-Nothing about the old map's geometry changes — it is the same points, reached through a new
-interface. `is_loop()` is true for all three circuits, and stays true forever; point-to-point
-stages set it false.
-
-**Compile gate:** `./check.sh` clean.
-**Headless probes (then remove):**
-1. **Geometry identity.** For each circuit, compare `Centreline` samples against direct
-   `_road(θ)`/`_asphalt_r(θ)` evaluation at 2000 positions. Pass: max deviation < 1 mm.
-   The settled decision says the old map must not shift **by even a metre**; this probe holds
-   it to a millimetre.
-2. **`nearest_point` correctness and cost.** Against brute-force nearest over all samples at
-   500 random positions: identical `s` within one sample spacing, and report the speed-up.
-   Pass: correct everywhere, and cost per query low enough for 4 wheels × 120 Hz to disappear
-   into the existing budget.
-3. **Loop wrap.** `s` wraps correctly at the seam for loops and is clamped for open roads.
-
-**User drive checklist:**
-- [ ] All three circuits drive exactly as before; lap times land where they used to.
-- [ ] Nothing changed visually anywhere.
-
----
-
-### Phase D3 — Timing, notes and wear re-parameterised onto arc length
+### Phase D2 — Timing, notes and wear re-parameterised onto arc length
 
 **Files:** `time_trial.gd` (**rewrite**), `pace_notes.gd` (re-parameterise), `wear.gd`
 (re-parameterise), `hud.gd` (wording: "lap" vs "run").
@@ -425,7 +399,7 @@ stages set it false.
 
 ---
 
-### Phase D4 — The stage generator: parameters + control points (short, static)
+### Phase D3 — The stage generator: parameters + control points (short, static)
 
 **Files:** new `scripts/stage_gen.gd`; new `scripts/stage_def.gd` (the stage data model);
 `stage.gd` (becomes able to build a generated stage as well as the legacy one);
@@ -443,7 +417,7 @@ stages set it false.
 
 **Deliberately short and static in this phase:** cap it at ~1–1.5 km and build it with the
 existing single-heightmap approach so the phase is drivable and provable without streaming.
-D5 replaces the build step, not the generator.
+D4 replaces the build step, not the generator.
 
 **The heightmap-import seam:** `StageDef` must be able to name an external elevation source
 instead of the procedural one, and `stage_gen` must read elevation through one function so that
@@ -474,7 +448,7 @@ swapping the source is a one-place change. Design it; do not build it.
 
 ---
 
-### Phase D5 — Chunked terrain, streaming and LOD
+### Phase D4 — Chunked terrain, streaming and LOD
 
 **Files:** new `scripts/stage_chunks.gd`; `stage.gd`; `world.gd`; `tuning_panel.gd`.
 
@@ -509,12 +483,13 @@ the stage allows.
 
 ---
 
-### Phase D6 — The area manager and the connecting road
+### Phase D5 — The area manager and the connecting tunnel
 
 **Files:** new `scripts/area_manager.gd`; `world.gd`; `stage.gd`; `time_trial.gd` (area-aware);
 `pace_notes.gd`, `wear.gd` (rebuild per area).
 
-**Mechanism.** An `AreaManager` owns which area is resident. Areas: `CALIBRATION` (the existing
+**Mechanism — the connector is a TUNNEL (user's suggestion, 2026-08-13, adopted).** An
+`AreaManager` owns which area is resident. Areas: `CALIBRATION` (the existing
 three circuits + patch + drag strip, untouched) and `STAGE` (a generated stage). A **connecting
 road** runs between them, built from a `Centreline` like everything else and using the existing
 `_guard_rail(polyline)` helper. Driving along it crosses a transition zone that triggers an
@@ -537,7 +512,9 @@ Every baseline this project owns depends on it.
    the transition or are reset deliberately — decide which, and assert it.
 
 **User drive checklist:**
-- [ ] Driving between areas feels like driving, with no freeze and no black screen.
+- [ ] Driving through the tunnel feels like driving, with no freeze, no black screen and no
+      visible pop-in at either mouth.
+- [ ] Reversing back out mid-tunnel does something sensible rather than breaking.
 - [ ] Arriving back at the old map, the car behaves exactly as it did before you left — run a
       drag-strip top-speed pass and a dirt-loop lap and compare against your remembered
       baseline.
@@ -546,7 +523,7 @@ Every baseline this project owns depends on it.
 
 ---
 
-### Phase D7 — Mixed-surface transitions
+### Phase D6 — Mixed-surface transitions
 
 **Files:** `ground_map.gd`; `roughness.gd` (C1's); `sound.gd`; `world.gd` (particles/marks);
 `stage_gen.gd`; `tuning_panel.gd`.
@@ -577,7 +554,7 @@ boundary between them.
 
 ---
 
-### Phase D8 — Deformable ruts along the corridor (**OPTIONAL** — may be cut)
+### Phase D7 — Deformable ruts along the corridor (**OPTIONAL** — may be cut)
 
 **Files:** `terrain.gd`, `stage_chunks.gd`, `ground_map.gd`.
 
@@ -591,7 +568,7 @@ stage stops being repeatable in the one way the player would most notice. That m
 deformation is no longer a pure function of position: it is position **plus accumulated
 history**, which must be stored per chunk, evicted with care, and bounded in memory.
 
-**This phase is explicitly cuttable.** If D5's budget is tight or persistence proves expensive,
+**This phase is explicitly cuttable.** If D2's budget is tight or persistence proves expensive,
 cut it and record the decision. The arc ships without it.
 
 **Compile gate:** `./check.sh` clean.
@@ -600,7 +577,7 @@ cut it and record the decision. The arc ships without it.
    there, at the same depth and position.
 2. **Memory bound.** Deformation state over a full stage stays under a stated ceiling; eviction
    never drops the chunk the car is on.
-3. **Budget.** Frame-time spikes with deformation active, against D5's numbers.
+3. **Budget.** Frame-time spikes with deformation active, against D2's numbers.
 
 **User drive checklist:**
 - [ ] A second pass down the same stretch is measurably different from the first — the line has
@@ -610,7 +587,7 @@ cut it and record the decision. The arc ships without it.
 
 ---
 
-### Phase D9 — Bake, prune, end-to-end
+### Phase D8 — Bake, prune, end-to-end
 
 **Files:** all of the above; `docs/ROADMAP.md`.
 
@@ -646,7 +623,7 @@ than to retrofit afterwards — **read this section before executing C1.**
 
 3. **The deformable-patch exclusion generalises.** C1 excludes the centre deformable patch
    because `terrain.gd` puts real geometry there. That exclusion becomes the ground map's
-   `deformable` flag (D1) and later covers the whole stage corridor (D8). Write C1's exclusion
+   `deformable` flag (D1) and later covers the whole stage corridor (D7). Write C1's exclusion
    as a query, not a hardcoded radius test against the patch.
 
 4. **The washboard placement mask is shared with `wear.gd`.** C1 reuses `wear.gd`'s
@@ -657,8 +634,8 @@ than to retrofit afterwards — **read this section before executing C1.**
 
 5. **C1's repeatability probe is Arc D's standard.** C1's third probe (identical field values at
    the same world position across frames and respawns) is exactly the property every Arc D phase
-   must hold. Arc D reuses it verbatim, extended to survive chunk load/unload (D5) and area
-   transitions (D6).
+   must hold. Arc D reuses it verbatim, extended to survive chunk load/unload (D4) and area
+   transitions (D5).
 
 ---
 
@@ -693,15 +670,27 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
    by routing `s` through one function in C1 and adding a D2 probe that asserts washboard
    positions on the old map are unchanged.
 
-2. **The vertical budget — already overdrawn.** B3 recorded that **all four corners peg 100% of
-   suspension travel on the dirt loop at 100 km/h**, because B1's softer springs moved static
-   sag from 7.7 cm to 12.7 cm. C1 adds roughness on top. Arc D then adds crests, compressions
-   and ditches. **Stance, decided here rather than rediscovered per phase:** D4 may not ship
-   elevation features until the ride-height/frequency decision B3 left open has actually been
-   made with the user (raise `ride_freq_*`, or `rest_length` + `max_travel` 0.45 → 0.50 at ~5 cm
-   of CoM height). Every terrain-adding phase re-runs the bottoming probe against B3's numbers.
-   Do **not** paper over it by scaling terrain amplitude down — that hides a geometry problem
-   behind a magic number.
+2. **The vertical budget — reframed 2026-08-13, and it is NOT a travel problem.** B3 recorded all
+   four corners pegging 100% of travel on the dirt loop at 100 km/h, and the obvious reading was
+   "not enough travel, raise the ride height". Research says otherwise. Gravel WRC cars run
+   **250–300 mm of total suspension travel**; this car has `max_travel` 0.45 m with 0.127 m of
+   static sag, i.e. **323 mm of bump travel — more than a real rally car's entire stroke.**
+   ([gravel setup overview](https://www.rallynews.autospeedmarket.com/rallynews/how-suspension-setup-affects-performance-on-gravel-stages/),
+   [WRCwings](https://www.wrcwings.tech/2020/05/24/suspension-grip-and-aerodynamics/))
+   The likelier causes, and the order to attack them: **(a)** the bump stop is a pure displacement
+   spring, so it stores the impact and returns it instead of absorbing it — real end-of-travel
+   control is *hydraulic*, velocity-sensitive and dissipates energy as heat, which is why the
+   `bumpstop_g` sweep raised peak load to 63 kN without buying travel (full finding and sources in
+   the drivetrain plan's B3 revision); **(b) B2 is not implemented yet**, and its asymmetric
+   bump/rebound split is exactly the "soft compression, firm rebound" real gravel cars use — the
+   single most likely fix; **(c)** the heightmap's input may simply be more severe than a real
+   rally road.
+   **Stance for this arc:** do **B2, then the hydraulic bump-stop revision, and re-measure**,
+   before Arc D adds crests and compressions — and before anyone raises ride height, which the
+   travel figures suggest is the wrong lever. D3 may not ship elevation features until that
+   re-measurement exists. Every terrain-adding phase re-runs the bottoming probe against B3's
+   numbers. Do **not** scale terrain amplitude down to hide it — that buries a suspension problem
+   inside the map.
 
 3. **Collider cook spikes under streaming (§3.4).** An average frame time will look fine while
    the car hits a 30 ms spike every 200 m. Measure worst-frame, not mean, and correlate it with
@@ -713,7 +702,7 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
 
 5. **`time_trial.gd` is a rewrite, and it owns the user's saved bests.** A rewrite that loses or
    invalidates per-circuit bests and ghosts is a real regression even though nothing crashes.
-   D3's probes must assert timing equality on the old map before the new topology is trusted.
+   D2's probes must assert timing equality on the old map before the new topology is trusted.
 
 6. **`nearest_point(x, z)` cost (§3.1).** Called per wheel per frame against a 6 km centreline.
    Brute force is 24 000 distance tests per frame at 4 wheels × 120 Hz. Spatial binning is not
@@ -724,11 +713,11 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
    detail positional.
 
 8. **Area transition leaks.** Ten round trips is the probe because a per-transition leak is
-   invisible in one. The bit-identical rebuild assertion (D6.1) is the single most important
+   invisible in one. The bit-identical rebuild assertion (D5.1) is the single most important
    probe in the arc — it is what protects §1.1.
 
 9. **Scope.** Nine phases, three of them L, one of them cuttable. If the arc needs to be
-   shortened, cut D8 first, then D7. D1–D6 is the minimum coherent deliverable: one ground map,
+   shortened, cut D7 first, then D6. D1–D5 is the minimum coherent deliverable: one ground map,
    one centreline abstraction, one generated point-to-point stage, streamed, reachable by road.
 
 ---
@@ -736,11 +725,11 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
 ## 9. Phase status (executor updates this)
 
 - [ ] D1 — The ground map: one authority for what the ground is
-- [ ] D2 — The centreline abstraction, retrofitted onto the existing roads
-- [ ] D3 — Timing, notes and wear re-parameterised onto arc length
-- [ ] D4 — The stage generator: parameters + control points (short, static)
-- [ ] D5 — Chunked terrain, streaming and LOD
-- [ ] D6 — The area manager and the connecting road
-- [ ] D7 — Mixed-surface transitions
-- [ ] D8 — Deformable ruts along the corridor (optional)
-- [ ] D9 — Bake defaults, prune, end-to-end verification
+- [ ] D2 — Timing, notes and wear re-parameterised onto arc length
+- [ ] D3 — The stage generator: parameters + control points (short, static)
+- [ ] D4 — Chunked terrain, streaming and LOD
+- [ ] D5 — The area manager and the connecting tunnel
+- [ ] D6 — Mixed-surface transitions
+- [ ] D7 — Deformable ruts along the corridor (optional)
+- [ ] D8 — Bake defaults, prune, end-to-end verification
+_(the centreline abstraction that was D2 now lives in **C1.0** — see the drivetrain plan)_
