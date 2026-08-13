@@ -536,6 +536,17 @@ plumbing), `tuning_panel.gd`.
 - [ ] `roll_gradient_target` slider: 2.5 = flat/dead, 6 = wallowy — pick the sweet spot.
 - [ ] `roll_couple_front` slider audibly/visibly shifts balance (more front = understeer).
 - [ ] Changing drive mode (T) re-derives the setup sensibly (FWD noses down slightly, etc.).
+- [ ] The inside DRIVEN wheel no longer cooks and wears on gentle turns — the symptom that
+  exposed the roll-couple bug on the first B1 drive. Watch the component HUD through a few
+  steady corners in each drive mode.
+- [ ] **Added 2026-08-13, because B1's verdict now covers them too:** ride height is 5 cm taller
+  (B3's travel-budget resolution) — does the car still feel planted, or tall and rolly? The CoM
+  is up 5 cm, so the roll moment grew ~16% and `roll_couple_front` deserves a second look at the
+  new height.
+- [ ] **Added 2026-08-13:** the Tab panel's Car weight slider now drives `chassis_mass` rather
+  than the body's `mass` alone, so it re-rates springs, bars and the tyre load reference live.
+  Drag it and confirm the car changes CHARACTER (softer/firmer, different balance), not just
+  inertia. Previously it changed only how heavy the body was.
 
 ### Phase B2 — Damper model: bump/rebound asymmetry + digressive knee
 
