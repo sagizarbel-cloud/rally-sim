@@ -13,6 +13,7 @@ I verify that code **compiles/loads**; the **user drives to test feel** (grip, h
 - **Functions over constants**: improve realism/fun via physical functions, not by tuning magic-number constants. Always prefer a physical model, and say so.
 - Expose new tunables as `@export` vars; add sliders to `tuning_panel.gd` (Tab in-game) when useful.
 - Validate geometry/detection with a temporary `print()` probe, then REMOVE it before finishing.
+- **Update `CHANGELOG.md`** when a plan phase closes, a bug is fixed, or a measured finding changes what we believe about the car — including the user's drive verdicts, which are otherwise lost in chat. `docs/ROADMAP.md` stays the authoritative state; the changelog is how it got there.
 
 ## GDScript / Godot gotchas (these cause real bugs)
 - **Tabs, not spaces** for indentation — never mix.

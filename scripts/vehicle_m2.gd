@@ -25,7 +25,7 @@ class_name VehicleM2
 @export var chassis_mass := 1250.0
 @export var body_size := Vector3(1.8, 0.55, 4.2)
 @export var wheel_radius := 0.34
-# B3 open item, settled 2026-08-12 (user's call): jacked up 5 cm, gravel-car style, to buy back the
+# B3 open item, settled 2026-08-13 (user's call): jacked up 5 cm, gravel-car style, to buy back the
 # bump travel B1's softer springs spent on sag (7.7 -> 12.7 cm of static compression, on a loop that
 # was already pegging all four corners at 100% travel at 100 km/h). The alternative was stiffening
 # ride_freq_*, which would have walked back the softness B1 exists to provide. The cost is ~5 cm of

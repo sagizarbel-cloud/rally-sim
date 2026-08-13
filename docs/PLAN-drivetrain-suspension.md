@@ -1184,7 +1184,7 @@ User drive-through, all in one session, keyboard:
   `ride_freq_front/rear` up (less sag, back toward the old stiffness), or `rest_length` +
   `max_travel` 0.45 -> 0.50 (jack the car up, gravel-style, keeping B1's softness — costs ~5 cm of
   CoM height, so ~16% more roll moment).
-  **RESOLVED 2026-08-12 (user's call): jacked up.** `rest_length` and `max_travel` are both 0.50.
+  **RESOLVED 2026-08-13 (user's call): jacked up.** `rest_length` and `max_travel` are both 0.50.
   The ride frequencies were deliberately NOT touched, because stiffening them would walk back the
   softness B1 exists to provide. Measured after (headless, settled on the dirt loop, probe removed):
   no corner bottomed at rest, per-wheel static compression 0.091 / 0.157 / 0.140 / 0.049 m on the

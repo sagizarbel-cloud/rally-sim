@@ -36,7 +36,7 @@ is that this should not stay a one-off: it should become **one authority for wha
 any (x, z)** — surface class, roughness class, deformability, grip, colour, audio — and the stages
 should be built on top of that authority rather than beside it.
 
-## Measured current state (verified 2026-08-12 — use these facts, don't re-derive them)
+## Measured current state (verified 2026-08-13 — use these facts, don't re-derive them)
 
 - **The world is one 720 m square, 320² cells = 2.25 m/cell** (`stage.gd:10-11`), hills at
   `hill_octaves 2` (`stage.gd:14`). Nothing below 2.25 m exists geometrically outside the centre
@@ -71,7 +71,7 @@ should be built on top of that authority rather than beside it.
 ## Settled decision — do not reopen it, plan around it
 
 **New maps go in a NEW area; the existing map is preserved untouched as the test and
-calibration bed** (user's call, 2026-08-12). The three concentric circuits, the centre
+calibration bed** (user's call, 2026-08-13). The three concentric circuits, the centre
 deformable patch and the 4 km drag strip stay exactly as they are, because every calibration
 baseline this project has is expressed in their terms — 259 km/h in 6th down the strip,
 dirt-loop lap feel, B3's bottoming statistics at 100 km/h on the dirt loop, A2's coast-down
