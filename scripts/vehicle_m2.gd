@@ -41,7 +41,20 @@ class_name VehicleM2
 # the pre-B1 constants worked out at ~1.8 Hz and zeta 1.13, i.e. stiff AND overdamped.
 @export var ride_freq_front := 1.4          # Hz
 @export var ride_freq_rear := 1.6           # Hz
-@export var zeta := 0.65                    # damping ratio (1.0 = critically damped)
+# B2: a real damper is neither symmetric nor linear, and both departures matter.
+# ASYMMETRY - rebound is firmer than bump. On compression the damper should get out of the way so
+# the wheel can follow the ground; on extension it must pull the wheel back down WITHOUT levering
+# the body up after it, so rebound carries the higher ratio. Real gravel practice is explicitly
+# "soft in compression, firm in rebound".
+# DIGRESSIVE KNEE - below the knee velocity the damper works at full rate, which is where it earns
+# its keep: body roll, pitch and the set of the car in a corner all happen at low damper speed.
+# Above the knee the valve blows off and the incremental rate collapses, so a square-edged rock or
+# a washboard ridge passes through instead of spiking the load straight into the chassis. Without
+# this, the only way to get body control is a damper that also makes rough ground unbearable.
+@export var zeta_bump := 0.55               # damping ratio in compression
+@export var zeta_rebound := 0.85            # damping ratio in extension (firmer, as on a real car)
+@export var knee_speed := 0.08              # m/s of damper velocity where the valve starts to blow off
+@export var hs_blowoff := 0.35              # incremental rate above the knee, as a fraction of below it
 @export var max_travel := 0.50              # matches rest_length - see the B3 note above
 # Anti-roll bars are sized from a target ROLL GRADIENT (degrees of body roll per g of lateral
 # acceleration) and a front roll-couple split, rather than picked in N/m. A bar can only ADD roll
@@ -279,8 +292,8 @@ var _cluster: Node3D              # the gauge cluster (dashboard.gd); the rev ba
 # shifts both take effect immediately (see _derive_setup)
 var _k_front := 24000.0
 var _k_rear := 24000.0
-var _c_front := 3500.0
-var _c_rear := 3500.0
+var _ccrit_front := 5500.0        # 2*sqrt(k*m): the CRITICAL damping coefficient per corner.
+var _ccrit_rear := 5500.0         # B2 scales it by zeta_bump / zeta_rebound at force time.
 var _arb_f := 0.0
 var _arb_r := 0.0
 var _mc_front := 312.5            # derived static corner masses (kg), for the bump stops
@@ -396,6 +409,19 @@ func _ready() -> void:
 	respawn()
 	_apply_mode()               # the car now casts a real (sun/directional) shadow again
 
+func _damper_force(vel: float, c_crit: float) -> float:
+	# B2: piecewise-linear in damper velocity, built from four physical parameters.
+	# Direction picks the damping ratio (bump vs rebound); the knee splits the curve into a stiff
+	# low-speed region that controls the body and a soft high-speed region that swallows impacts.
+	# Setting zeta_bump == zeta_rebound and hs_blowoff == 1.0 reproduces B1's linear damper exactly,
+	# which is the A/B that proves what this phase bought.
+	var z: float = zeta_bump if vel >= 0.0 else zeta_rebound
+	var c := z * c_crit
+	var a := absf(vel)
+	var knee := maxf(knee_speed, 0.001)
+	var f: float = c * a if a <= knee else c * knee + c * clampf(hs_blowoff, 0.0, 1.0) * (a - knee)
+	return f * signf(vel)
+
 func _derive_setup() -> void:
 	# B1: turn the three physical targets into the rates the suspension pass actually uses.
 	# Corner masses follow the CoM, INCLUDING the per-drive-mode z-shift, so switching to FWD
@@ -421,8 +447,9 @@ func _derive_setup() -> void:
 	_mc_rear = m_cr
 	_k_front = m_cf * wf * wf
 	_k_rear = m_cr * wr * wr
-	_c_front = 2.0 * zeta * sqrt(maxf(_k_front * m_cf, 0.0))
-	_c_rear = 2.0 * zeta * sqrt(maxf(_k_rear * m_cr, 0.0))
+	# critical damping per corner; the damping RATIOS are applied per-direction in _damper_force
+	_ccrit_front = 2.0 * sqrt(maxf(_k_front * m_cf, 0.0))
+	_ccrit_rear = 2.0 * sqrt(maxf(_k_rear * m_cr, 0.0))
 	# CoM height above the CONTACT plane at static ride height - the lever the roll moment acts on
 	var comp_f := m_cf * g / maxf(_k_front, 1.0)
 	var comp_r := m_cr * g / maxf(_k_rear, 1.0)
@@ -1076,8 +1103,8 @@ func _physics_process(delta: float) -> void:
 		var pv := linear_velocity + angular_velocity.cross(contact_off)
 		var comp_vel := clampf(-pv.dot(up), -3.0, 3.0)
 		var kw: float = _k_front if w.steer else _k_rear
-		var cw: float = _c_front if w.steer else _c_rear
-		var Fz := maxf(kw * compression + cw * comp_vel, 0.0)
+		var ccw: float = _ccrit_front if w.steer else _ccrit_rear
+		var Fz := maxf(kw * compression + _damper_force(comp_vel, ccw), 0.0)
 		# B3: progressive bump stop over the last of the travel - firm, ramped, and bounded by the
 		# corner's own static load rather than by a flat clamp that distorted every big hit
 		w.bottomed = false

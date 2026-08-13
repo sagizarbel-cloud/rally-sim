@@ -1185,7 +1185,30 @@ User drive-through, all in one session, keyboard:
   Measured after: 55.0% front in all three modes, and the inside rear gains load in RWD
   (3.53 -> 4.04 kN). The cost is less total roll (AWD 3.07 -> 2.44 deg/g), unavoidable because a
   bar can only add stiffness — `ride_freq_rear` is the handle to give roll back.
-- [ ] B2 — Damper model
+- [ ] B2 — Damper model — implemented 2026-08-13, **awaiting drive verdict** (`./check.sh` clean;
+  headless probe PASS, then removed). `zeta` splits into `zeta_bump` (0.55) and `zeta_rebound`
+  (0.85) with a digressive knee at `knee_speed` 0.08 m/s and `hs_blowoff` 0.35 above it; the
+  damper force is now a piecewise-linear FUNCTION of damper velocity built from those four
+  physical parameters, replacing `damper_c · comp_vel`. `_ccrit_*` holds 2·√(k·m) per corner and
+  the ratios are applied per-direction at force time.
+  Probe: rebound/bump ratio **1.55× at every velocity** (0.85/0.55 ✓); incremental rate 3024 Ns/m
+  below the knee vs 1058 above it = **0.35× exactly** ✓; and with `zeta_bump = zeta_rebound = 0.65`
+  and `hs_blowoff = 1.0` it reproduces B1's linear damper with a **max error of 0.000000 N** —
+  that exact equivalence is the A/B that proves what the phase bought.
+  **Bottoming re-measure, dirt loop at ~100 km/h (this is the interesting part, and it did NOT go
+  as predicted).** The B3 revision named B2 as the most likely fix for the pegging. It is not.
+  B1 linear damper: 4/4 corners pegged, 31 frames on the stops, **max Fz 37.2 kN**. B2 asymmetric +
+  digressive: 4/4 corners still pegged, **50** frames on the stops, **max Fz 28.8 kN**.
+  So B2 does not reduce how OFTEN the car reaches the stops — it slightly increases it — but it
+  cuts peak load by **23%**. That is exactly what a blow-off valve is for: it lets the suspension
+  move instead of transmitting the spike into the chassis, so the car rides INTO the stop more
+  often but arrives much more gently.
+  **Consequence for the B3 revision:** hypothesis (b) is now disproven, and (a) stands — the bump
+  stop is a pure displacement spring that returns energy instead of dissipating it. Note also that
+  `rest_length`/`max_travel` are now **0.50 m** (the ride-height lever was taken), giving 0.373 m
+  of bump travel — MORE than a real WRC car's entire stroke — and it still pegs 100%. Travel is
+  not the constraint. The hydraulic (velocity-dependent, dissipative) bump stop is the remaining
+  candidate, and it should be measured on **energy absorbed per impact**, not peak load.
 - [x] B3 — Bump stops — DONE 2026-08-11, **brought forward ahead of B2** because B1 testing
   bottomed (the plan's own §7 risk), so this was the blocking fix. Progressive cubic stop over the
   last `bumpstop_zone` (20%) of travel, sized off the corner's OWN static load (`bumpstop_g`, in g)

@@ -51,7 +51,10 @@ const HELP := {
 	# --- suspension ---
 	"ride_freq_front": "SUSPENSION - front natural frequency (Hz) - THE spring-rate handle. Gravel cars live at 1.2-1.6 Hz. Higher = stiffer, less sag, more travel left for bumps.",
 	"ride_freq_rear": "SUSPENSION - rear natural frequency (Hz), normally 10-20% above the front so the car settles flat after a bump (flat ride).",
-	"zeta": "SUSPENSION - damping ratio. 1.0 = critically damped (no bounce, but dead); 0.65 = race baseline; too low and the car pogos over bumps.",
+	"zeta_bump": "SUSPENSION - damping ratio in COMPRESSION. Lower lets the wheel follow the ground over bumps; too low and the car floats and pogos.",
+	"zeta_rebound": "SUSPENSION - damping ratio in EXTENSION, normally FIRMER than bump. It pulls the wheel back down after a bump without levering the body up. Too low = double bounce after crests; too high = the car jacks down over successive bumps.",
+	"knee_speed": "SUSPENSION - damper velocity where the valve blows off. Below it the damper controls body roll and pitch at full rate; above it the rate collapses so sharp hits pass through instead of spiking into the chassis.",
+	"hs_blowoff": "SUSPENSION - how much rate survives above the knee, as a fraction. 1.0 = no blow-off (linear damper, the pre-B2 car); lower = rough ground is swallowed more.",
 	"roll_gradient_target": "SUSPENSION - HOW FAR THE BODY LEANS: degrees of body roll per 1 g of cornering. ~2.5 = flat and go-kart-like, ~6 = soft and wallowy. The anti-roll bars are sized to hit this number.",
 	"roll_couple_front": "SUSPENSION - what SHARE of total roll stiffness the FRONT axle carries (0.55 = 55%). More front = more understeer, less = more oversteer. This is the balance knob.",
 	"bumpstop_zone": "SUSPENSION - fraction of travel the bump stop occupies at the top (0.20 = the last 20%): the cushion before the suspension goes solid.",
@@ -153,7 +156,10 @@ var _specs := [
 	# suspension (M2)
 	["Ride freq front (M2)", "ride_freq_front",        0.8,      2.4,  0.05, func(v): return "%.2f Hz" % v],
 	["Ride freq rear (M2)",  "ride_freq_rear",         0.8,      2.4,  0.05, func(v): return "%.2f Hz" % v],
-	["Damping ratio (M2)",   "zeta",                   0.25,     1.30, 0.05, func(v): return "%.2f zeta" % v],
+	["Damping bump (M2)",    "zeta_bump",              0.15,     1.30, 0.05, func(v): return "%.2f zeta" % v],
+	["Damping rebound (M2)", "zeta_rebound",           0.15,     1.60, 0.05, func(v): return "%.2f zeta" % v],
+	["Damper knee (M2)",     "knee_speed",             0.02,     0.40, 0.01, func(v): return "%.2f m/s" % v],
+	["HS blow-off (M2)",     "hs_blowoff",             0.05,     1.00, 0.05, func(v): return "%.2f x" % v],
 	["Roll gradient (M2)",   "roll_gradient_target",   1.5,      8.0,  0.25, func(v): return "%.2f deg/g" % v],
 	["Roll couple front(M2)","roll_couple_front",      0.30,     0.75, 0.01, func(v): return "%d%% front" % int(v * 100.0)],
 	["Bump stop zone (M2)",  "bumpstop_zone",          0.05,     0.50, 0.01, func(v): return "%d%% of travel" % int(v * 100.0)],
