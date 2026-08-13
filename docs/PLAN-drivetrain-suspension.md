@@ -1146,7 +1146,16 @@ User drive-through, all in one session, keyboard:
   correction is a TYRE-MODEL change, not a handbrake one. Every genuinely saturated tyre now takes
   its force direction from its slip velocity, so limit behaviour (big slides, locked-brake entries)
   differs from every phase before A5. `slide_friction` (default ON) A/Bs it.
-- [ ] B1 — Derived suspension setup — implemented 2026-08-11, **awaiting drive verdict**
+- [x] B1 — Derived suspension setup — **DONE 2026-08-13, drive-verified: "feels good"**, with the
+  5 cm ride height (B3's travel-budget resolution) and the `chassis_mass` slider fix both included
+  in the same drive. One usability finding from that drive, now addressed: the user could not tell
+  what `roll_gradient_target` was doing, because the Tab panel listed ~76 unlabelled sliders with no
+  explanation anywhere. The panel now sorts A-Z and shows a one-line explanation of whatever is
+  under the cursor. **Treat that as a phase lesson, not a side quest:** a derived-setup phase hands
+  the user physical handles (Hz, damping ratio, deg/g) instead of magic numbers, and those handles
+  are only an improvement if the panel says what they mean. Any future phase that adds a derived
+  tunable adds its HELP line in the same commit.
+  Implemented 2026-08-11 —
   (`./check.sh` clean; headless probe PASS, then removed). `spring_k` / `damper_c` / `arb_front` /
   `arb_rear` are gone; the suspension now derives from `ride_freq_front` (1.4 Hz),
   `ride_freq_rear` (1.6 Hz), `zeta` (0.65), `roll_gradient_target` (4.5 deg/g) and

@@ -7,6 +7,96 @@ var vehicle
 var _panel: PanelContainer
 var _defaults := {}
 var _ctls: Array = []      # cached slider/checkbox controls (built once in _ready)
+var _help_lbl: Label       # banner under the title: explains whatever is under the cursor
+
+# What each control actually DOES, in one line, shown in the banner on hover (and as the native
+# tooltip). Every line starts with the system it belongs to, because the panel is sorted A-Z and
+# the alphabet scatters related knobs - the tag is how you know a diff ramp from a damper.
+const HELP := {
+	# --- engine ---
+	"engine_power": "ENGINE (M1 only) - flat power figure for the old M1 car. The M2 car ignores it and uses Peak torque.",
+	"peak_torque": "ENGINE - the peak of the torque curve (N.m), reached around 4300 rpm. The single biggest 'how fast' knob.",
+	"redline_rpm": "ENGINE - rpm where the limiter cuts. Also sets the engine-audio pitch ceiling and the gearing-limited top speed.",
+	"engine_inertia": "ENGINE - crank + flywheel inertia. Low = revs flare and blip quickly; high = lazy, smoother, harder to stall.",
+	"idle_torque_frac": "ENGINE - full-throttle torque at idle as a fraction of peak. An engine cannot breathe at 1000 rpm; low values make launches bog.",
+	"intake_tau": "ENGINE - throttle-to-torque lag (s), modelling intake filling. Larger = softer, more elastic response.",
+	"engine_brake_idle": "ENGINE - motoring friction at idle (N.m). Part of how hard the car slows when you lift off in gear.",
+	"engine_brake_redline": "ENGINE - motoring friction at redline (N.m). Competition spec is high (90+): strong engine braking, nose tucks on lift.",
+	"engine_heat_capacity": "ENGINE - thermal mass: how slowly engine temperature moves.",
+	"coolant_heat_frac": "ENGINE - share of combustion heat going into the coolant rather than out of the exhaust.",
+	"thermostat_temp": "ENGINE - temperature at which the thermostat opens and the radiator starts doing work.",
+	"radiator_k": "ENGINE - radiator cooling power, in watts per degree of temperature difference.",
+	# --- drivetrain ---
+	"final_drive": "DRIVETRAIN - the axle ratio every gear multiplies through. Higher = shorter gearing: quicker acceleration, lower top speed.",
+	"torque_split": "DRIVETRAIN - AWD front/rear torque share. Higher sends more to the rear: more oversteer on power.",
+	"launch_boost": "DRIVETRAIN - extra torque multiplier in 1st to get off the line. A crutch; Launch assist is the modern version.",
+	"shift_time": "DRIVETRAIN - seconds a gearshift takes, with drive cut throughout. Longer = a rhythmic dip on full-throttle upshifts.",
+	"wheel_inertia": "DRIVETRAIN - rotational inertia of one wheel and tyre (kg.m2). Higher resists both spin-up and lock-up.",
+	"clutch_margin": "CLUTCH - torque capacity as a multiple of peak engine torque. Near 1.0 the plates slip under load; high never slips.",
+	"bite_rpm": "CLUTCH - the rpm the clutch aims to hold during a launch. Higher = more aggressive, more wheelspin off the line.",
+	"manual_clutch": "CLUTCH - whether the clutch pedal (Left Shift / Square) is live. OFF = the clutch is automatic.",
+	# --- differentials ---
+	"front_diff_type": "DIFF - front type: 0 open, 1 viscous, 2 Salisbury clutch-pack, 3 locked. Open lets the inside wheel spin away.",
+	"rear_diff_type": "DIFF - rear type: 0 open, 1 viscous, 2 Salisbury clutch-pack, 3 locked. Locked makes the throttle steer the car on dirt.",
+	"front_visc": "DIFF - front viscous coupling (N.m per rad/s of wheel-speed difference). Resists one wheel spinning up, smoothly.",
+	"rear_visc": "DIFF - rear viscous coupling (N.m per rad/s of wheel-speed difference).",
+	"front_preload": "DIFF - front clutch-pack preload (N.m): locking that is always present, even at zero torque.",
+	"rear_preload": "DIFF - rear clutch-pack preload (N.m): always-on locking, independent of how much torque is flowing.",
+	"front_power_ramp": "DIFF - how hard the FRONT pack locks UNDER POWER. Higher pulls the car straight and tight on exit (more understeer).",
+	"rear_power_ramp": "DIFF - how hard the REAR pack locks UNDER POWER. Higher = longer, more stable power slides.",
+	"front_coast_ramp": "DIFF - how hard the FRONT pack locks OFF THROTTLE. Affects entry stability.",
+	"rear_coast_ramp": "DIFF - how hard the REAR pack locks OFF THROTTLE. High = stable entry; low = eager lift-off rotation.",
+	"centre_coupling": "DIFF - AWD centre coupling: how hard the axles tie together when their speeds differ. High = 'four paws digging'.",
+	"centre_preload": "DIFF - always-on locking between the front and rear axles, independent of any speed difference.",
+	# --- suspension ---
+	"ride_freq_front": "SUSPENSION - front natural frequency (Hz) - THE spring-rate handle. Gravel cars live at 1.2-1.6 Hz. Higher = stiffer, less sag, more travel left for bumps.",
+	"ride_freq_rear": "SUSPENSION - rear natural frequency (Hz), normally 10-20% above the front so the car settles flat after a bump (flat ride).",
+	"zeta": "SUSPENSION - damping ratio. 1.0 = critically damped (no bounce, but dead); 0.65 = race baseline; too low and the car pogos over bumps.",
+	"roll_gradient_target": "SUSPENSION - HOW FAR THE BODY LEANS: degrees of body roll per 1 g of cornering. ~2.5 = flat and go-kart-like, ~6 = soft and wallowy. The anti-roll bars are sized to hit this number.",
+	"roll_couple_front": "SUSPENSION - what SHARE of total roll stiffness the FRONT axle carries (0.55 = 55%). More front = more understeer, less = more oversteer. This is the balance knob.",
+	"bumpstop_zone": "SUSPENSION - fraction of travel the bump stop occupies at the top (0.20 = the last 20%): the cushion before the suspension goes solid.",
+	"bumpstop_g": "SUSPENSION - bump-stop strength, in g of that corner's static load. Higher = less bottoming, but harsher and crashier over big hits.",
+	"camber_deg": "SUSPENSION - static wheel lean. Negative camber gives the loaded outside tyre a flatter contact patch mid-corner.",
+	# --- chassis / tyres ---
+	"chassis_mass": "CHASSIS - the car's mass, and the one authority for it: moving this re-rates the springs, bars, tyre load reference and rolling resistance live.",
+	"fwd_bias": "CHASSIS - how far the centre of mass shifts FORWARD in FWD mode, loading the front axle for traction.",
+	"rwd_bias": "CHASSIS - how far the centre of mass shifts REARWARD in RWD mode.",
+	"mu_lat": "TYRE - base lateral friction coefficient, before surface, load, temperature and wear. The cornering-grip master knob.",
+	"mu_long": "TYRE - base longitudinal friction coefficient. Drives both acceleration and braking grip.",
+	"peak_slip_tarmac": "TYRE - the slip ratio where TARMAC grip peaks (~0.14). Lower = grip arrives and leaves sooner, so the limit feels more on/off.",
+	"peak_slip_gravel": "TYRE - the slip ratio where GRAVEL grip peaks (~0.28). Much later than tarmac, which is why loose surfaces reward wheelspin.",
+	"slide_friction": "TYRE - grip retained once a tyre is fully sliding, as a fraction of peak. Low makes a slide punishing and hard to recover.",
+	"optimal_temp": "TYRE - core temperature where grip peaks (85 C). Colder AND hotter both cost grip.",
+	"tyre_heat_rate": "TYRE - how fast friction work heats the tyre.",
+	"tyre_cool_rate": "TYRE - how fast airflow cools it again.",
+	"tyre_wear_rate": "TYRE - how fast tyre work wears the tyre out. Wear ends in a blowout.",
+	"worn_grip": "TYRE - grip multiplier at 100% wear.",
+	"cold_grip": "TYRE - grip multiplier when the tyre is stone cold.",
+	# --- brakes / aero / input ---
+	"brake_torque": "BRAKES - maximum brake torque per wheel (N.m). Past the tyre's limit the wheels simply lock: there is no ABS.",
+	"handbrake_torque": "BRAKES - torque the lever applies to each REAR wheel.",
+	"handbrake_opens_centre": "BRAKES - rally hydraulic handbrake behaviour: disengages the centre diff so the rears can lock without dragging the fronts.",
+	"drag_k": "AERO - air resistance; force = k x speed squared. It sets top speed AND does most of the retardation above ~300 km/h, so turning it down lengthens braking too.",
+	"throttle_rise_time": "INPUT - how fast the virtual throttle pedal presses, so a binary key behaves like a foot. Analog triggers bypass this.",
+	"throttle_fall_time": "INPUT - how fast the virtual throttle pedal lifts.",
+	"brake_rise_time": "INPUT - how fast the virtual brake pedal presses. Long enough to trail-brake with, short enough to stop.",
+	"brake_fall_time": "INPUT - how fast the virtual brake pedal releases.",
+	# --- assists / HUD / damage ---
+	"anti_stall": "ASSIST - keeps the engine alive at low rpm, like a real rally anti-stall. OFF means you can genuinely stall it.",
+	"auto_blip": "ASSIST - rev-matches on downshift. ON is smooth; OFF gives a felt jolt and a momentary slide.",
+	"overrev_guard": "ASSIST - blocks a downshift that would spin the engine past its limit. OFF lets a money shift cost real damage.",
+	"launch_assist": "ASSIST - manages clutch and throttle for a consistent launch. OFF hands the clutch back to you.",
+	"stability_assist": "ASSIST - brakes individual wheels to correct yaw. ON tames big dirt slides; OFF is raw.",
+	"stability_gain": "ASSIST - how hard stability assist corrects. Too high and it fights you through ordinary corners.",
+	"stability_margin": "ASSIST - how far past the tyre's limit a slide must go before the assist steps in. Higher = later and less intrusive.",
+	"tc_enabled": "ASSIST - traction control: trims engine torque when the driven wheels exceed the slip target.",
+	"tc_slip_target": "ASSIST - the slip ratio traction control holds. Higher permits more wheelspin.",
+	"shift_light_frac": "HUD - fraction of redline where the cabin shift light starts flashing (0.90 = at 90% of redline).",
+	"impact_threshold": "DAMAGE - horizontal deceleration (m/s2) that counts as a crash. Braking, cornering and landings stay below it.",
+	"damage_gain": "DAMAGE - how much damage a hit of a given severity does.",
+	"damage_power_loss": "DAMAGE - engine power lost at 100% damage.",
+	"damage_steer_pull": "DAMAGE - how hard the car pulls to one side at 100% damage.",
+}
 
 # label, property, min, max, step, value-formatter
 # Specs for BOTH M1 and M2 params. In _ready, only the ones the loaded car actually
@@ -137,7 +227,23 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(title)
 
-	for s in _specs:
+	# Help banner: pinned under the title so it never moves, and reserved at a fixed height so
+	# the list below does not jump around as explanations of different lengths come and go.
+	_help_lbl = Label.new()
+	_help_lbl.text = "Hover any control for an explanation."
+	_help_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_help_lbl.custom_minimum_size = Vector2(0, 76)
+	_help_lbl.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_help_lbl.add_theme_font_size_override("font_size", 12)
+	_help_lbl.add_theme_color_override("font_color", Color(0.72, 0.84, 1.0))
+	vbox.add_child(_help_lbl)
+
+	# A-Z, because there are ~76 controls in one flat list and hunting for one by memory of the
+	# code order is hopeless. The system tag that opens every HELP line carries the grouping that
+	# alphabetical order throws away.
+	var ordered := _specs.duplicate()
+	ordered.sort_custom(func(a, b): return String(a[0]).naturalnocasecmp_to(String(b[0])) < 0)
+	for s in ordered:
 		if vehicle.get(s[1]) == null:
 			continue                      # this vehicle (M1 or M2) doesn't have the param
 		_defaults[s[1]] = vehicle.get(s[1])
@@ -179,6 +285,7 @@ func _add_row(vbox: VBoxContainer, label: String, prop: String, mn: float, mx: f
 	var top := HBoxContainer.new()
 	var name_lbl := Label.new(); name_lbl.text = label
 	name_lbl.custom_minimum_size = Vector2(180, 0)
+	_wire_help(name_lbl, prop)
 	var val_lbl := Label.new()
 	val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	val_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -190,6 +297,7 @@ func _add_row(vbox: VBoxContainer, label: String, prop: String, mn: float, mx: f
 	slider.value = vehicle.get(prop)
 	slider.focus_mode = Control.FOCUS_NONE   # so Tab isn't eaten by focus navigation
 	slider.custom_minimum_size = Vector2(320, 0)
+	_wire_help(slider, prop)
 	slider.value_changed.connect(func(v):
 		vehicle.set(prop, v)
 		val_lbl.text = fmt.call(v))
@@ -206,8 +314,23 @@ func _add_toggle(vbox: VBoxContainer, label: String, prop: String) -> void:
 	btn.button_pressed = vehicle.get(prop)
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.toggled.connect(func(on): vehicle.set(prop, on))
+	_wire_help(btn, prop)
 	vbox.add_child(btn)
 	btn.set_meta("prop", prop)
+
+func _wire_help(ctl: Control, prop: String) -> void:
+	# Hovering a control writes its explanation into the banner. Labels ignore the mouse by
+	# default, so they have to be told to accept it or hovering the NAME would do nothing -
+	# which is the half of the row people actually point at when they are asking "what is this?".
+	var text: String = HELP.get(prop, "")
+	if text == "":
+		return
+	ctl.mouse_filter = Control.MOUSE_FILTER_STOP
+	ctl.tooltip_text = text
+	ctl.mouse_entered.connect(func(): _help_lbl.text = text)
+	ctl.mouse_exited.connect(func():
+		if _help_lbl.text == text:
+			_help_lbl.text = "Hover any control for an explanation.")
 
 func _reset() -> void:
 	for ctl in _ctls:

@@ -11,6 +11,22 @@ the only verification this project has for feel, and they are otherwise lost in 
 
 ---
 
+## 2026-08-13 (later)
+
+**B1 CLOSED — drive verdict: "feels good".** The derived suspension setup is accepted, and the
+verdict covers the 5 cm ride height and the `chassis_mass` slider fix as well, since both landed
+before the drive. B2 is now unblocked.
+
+**Tuning panel: A–Z ordering and a live explanation banner.** The B1 drive surfaced that
+`roll_gradient_target` was unintelligible — and the cause was structural, not that one label: the
+panel was ~76 sliders in one flat list, in source order, with no explanation of any of them
+anywhere in the game. Every control now carries a one-line explanation, shown in a fixed banner
+under the title on hover (and as the native tooltip), and the list is sorted alphabetically so a
+control can be found by name. Each explanation opens with the system it belongs to — ENGINE,
+DIFF, SUSPENSION, TYRE — because alphabetical order scatters related knobs and the tag is what
+carries the grouping. Coverage is verified: 76 of 76 sliders have help, with no orphaned entries.
+*Convention added: a phase that adds a tunable adds its HELP line in the same commit.*
+
 ## 2026-08-13
 
 **Drag strip extended to 4 km, with markers and barriers.** `strip_x1` now derives from a new
