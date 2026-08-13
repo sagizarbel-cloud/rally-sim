@@ -51,6 +51,10 @@ const HELP := {
 	# --- suspension ---
 	"ride_freq_front": "SUSPENSION - front natural frequency (Hz) - THE spring-rate handle. Gravel cars live at 1.2-1.6 Hz. Higher = stiffer, less sag, more travel left for bumps.",
 	"ride_freq_rear": "SUSPENSION - rear natural frequency (Hz), normally 10-20% above the front so the car settles flat after a bump (flat ride).",
+	"peak_alpha_tarmac": "TYRE - slip ANGLE where lateral grip peaks on asphalt. Low = tarmac bite that arrives early and lets go sharply.",
+	"peak_alpha_gravel": "TYRE - slip ANGLE where lateral grip peaks on gravel. Higher than tarmac: gravel slides deeper and more progressively before letting go. This gap IS the surface difference.",
+	"sigma_lat": "TYRE - relaxation length: how far the tyre must ROLL before its lateral force builds. Bigger = the car takes a set with a beat of delay you can time a flick against; near zero = darty and instant.",
+	"com_height": "CHASSIS - centre-of-mass height. Higher = more honest body roll and weight transfer (and more roll-over risk on berms); very low corners flat but feels dead.",
 	"zeta_bump": "SUSPENSION - damping ratio in COMPRESSION. Lower lets the wheel follow the ground over bumps; too low and the car floats and pogos.",
 	"zeta_rebound": "SUSPENSION - damping ratio in EXTENSION, normally FIRMER than bump. It pulls the wheel back down after a bump without levering the body up. Too low = double bounce after crests; too high = the car jacks down over successive bumps.",
 	"knee_speed": "SUSPENSION - damper velocity where the valve blows off. Below it the damper controls body roll and pitch at full rate; above it the rate collapses so sharp hits pass through instead of spiking into the chassis.",
@@ -156,6 +160,10 @@ var _specs := [
 	# suspension (M2)
 	["Ride freq front (M2)", "ride_freq_front",        0.8,      2.4,  0.05, func(v): return "%.2f Hz" % v],
 	["Ride freq rear (M2)",  "ride_freq_rear",         0.8,      2.4,  0.05, func(v): return "%.2f Hz" % v],
+	["Peak slip angle tarmac (M2)","peak_alpha_tarmac", 4.0,     16.0,  0.5,  func(v): return "%.1f deg" % v],
+	["Peak slip angle gravel (M2)","peak_alpha_gravel", 6.0,     24.0,  0.5,  func(v): return "%.1f deg" % v],
+	["Relaxation length (M2)","sigma_lat",              0.10,     1.20, 0.05, func(v): return "%.2f m" % v],
+	["CoM height (M2)",      "com_height",             -0.60,    -0.10, 0.01, func(v): return "%.2f m" % v],
 	["Damping bump (M2)",    "zeta_bump",              0.15,     1.30, 0.05, func(v): return "%.2f zeta" % v],
 	["Damping rebound (M2)", "zeta_rebound",           0.15,     1.60, 0.05, func(v): return "%.2f zeta" % v],
 	["Damper knee (M2)",     "knee_speed",             0.02,     0.40, 0.01, func(v): return "%.2f m/s" % v],

@@ -71,6 +71,39 @@ or HELP lines yet — `tuning_panel.gd` was held by the B2 session at the time. 
 free, per the convention.* **Not yet drive-tested — this is a visual change and only driving can
 judge it.**
 
+## 2026-08-13 (B4 + B5)
+
+**B4 — the car takes a set instead of darting.** Symptom this addresses: *"steering feels darty"*,
+*"the car changes direction instantly"*, *"a Scandinavian flick can't be timed"*, and *"gravel and
+tarmac break away the same way"*. Three changes.
+**Relaxation length** (`sigma_lat`, 0.55 m): a tyre must ROLL about sigma metres before its lateral
+force builds, so the force now follows a relaxed slip angle (`w.alpha_rel`) rather than the
+instantaneous one. Expressed per distance rolled, not per second — measured 63% of a step reached
+after **0.533 m at 8 m/s and 0.500 m at 30 m/s**, i.e. the same distance at very different speeds,
+which is the proof it is a tyre property and not a frame-rate or speed artefact.
+**Surface-derived `By`**: the fixed `By = 10` is gone. Lateral stiffness now derives from where
+each surface peaks — `peak_alpha_tarmac` 9 deg, `peak_alpha_gravel` 14 deg — exactly as `Bx`
+already did longitudinally. Measured peaks land on 9.0 and 14.0 deg exactly. Gravel now slides
+deeper and more progressively before letting go; that gap IS the surface difference.
+**CoM height** is an export (`com_height`, still -0.45) so raising it toward -0.30 is a slider A/B
+rather than a code edit.
+Stability checked on the STRAIGHT drag strip (the asphalt ring is curved, and testing there first
+gave a false 0.544 rad/s "weave" that was just the road): peak yaw **0.000 rad/s at both 1 m/s and
+250 km/h** — no shimmy, no weave.
+`hs_blowoff` baked to **0.45** (user's call after the B2 drive).
+
+**B5 — prune found nothing to prune, which is the point.** Every retired system had already been
+cleaned up by the phase that retired it: `_t_drive`, `torque_rise_time`/`torque_fall_time` (A1),
+`lsd_lock` (A3), `rear_grip_cut` and `brake_force` (A5), `spring_k`/`damper_c`/`arb_front`/
+`arb_rear` (B1) and the interim single `zeta` (B2) are all absent from the code — the only
+surviving mentions are comments explaining what was removed and why. Tuning panel audited: **83
+spec rows, 83 HELP entries, zero rows missing help and zero orphaned entries.** The two M1-only
+rows (`engine_power`, `launch_boost`) are deliberately kept — the panel skips any row whose
+property the loaded car lacks, which is what lets one panel serve both vehicles.
+`docs/ROADMAP.md` updated: M15 marked done, and the Tier-3 torque-delivery entry now carries an
+explicit **"do not resurrect `_t_drive`"** warning, since that entry still describes a system A1
+replaced and a future session reading it cold would otherwise rebuild it.
+
 ## 2026-08-13 (later still)
 
 **B2 CLOSED — drive verdict: "feels good".** Asymmetric digressive damper accepted.

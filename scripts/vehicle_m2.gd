@@ -64,7 +64,7 @@ class_name VehicleM2
 @export var zeta_bump := 0.55               # damping ratio in compression
 @export var zeta_rebound := 0.85            # damping ratio in extension (firmer, as on a real car)
 @export var knee_speed := 0.08              # m/s of damper velocity where the valve starts to blow off
-@export var hs_blowoff := 0.35              # incremental rate above the knee, as a fraction of below it
+@export var hs_blowoff := 0.45              # incremental rate above the knee, as a fraction of below it
 @export var max_travel := 0.32              # matches rest_length (the geometric maximum)
 # Anti-roll bars are sized from a target ROLL GRADIENT (degrees of body roll per g of lateral
 # acceleration) and a front roll-couple split, rather than picked in N/m. A bar can only ADD roll
@@ -85,6 +85,8 @@ class_name VehicleM2
 # corner spends collapsed, and it does so steeply: 0g = 26.5 kN peak / 235 frames on the stops,
 # 3g = 35.7 kN / 188, 6g = 44.9 kN / 194, 10g = 57.1 kN / 160. Past ~3g the loads climb far faster
 # than the bottoming falls, which is the "crashy" the plan warns against - so 3g it is.
+@export var com_height := -0.45              # B4: CoM height (m, body frame). Higher = more honest
+                                            # roll and load transfer, tamed by real ARBs/dampers.
 @export var camber_deg := 1.5                   # static negative camber (visual + a small grip cue)
 
 # --- Appearance ---
@@ -143,7 +145,17 @@ class_name VehicleM2
 @export var peak_slip_gravel := 0.28         # slip ratio at peak longitudinal grip on dirt/grass
 @export var Cx := 1.65
 @export var Ex := 0.97
-@export var By := 10.0
+# B4: the lateral stiffness is DERIVED from where each surface peaks, exactly as Bx already is
+# longitudinally. A tarmac tyre reaches peak lateral force at a small slip angle and lets go
+# sharply; gravel peaks much later and slides progressively - that difference IS the "lean on it"
+# gravel feel, and a single fixed By could never express it.
+@export var peak_alpha_tarmac := 9.0        # deg of slip angle at peak lateral grip on asphalt
+@export var peak_alpha_gravel := 14.0       # deg of slip angle at peak lateral grip on dirt/gravel
+# B4: relaxation length - a tyre has to ROLL about sigma metres before its lateral force builds.
+# Without it the car is darty: force appears the instant the wheel is steered, so there is no
+# beat between turning in and the car taking a set, and a flick cannot be timed. Longitudinal
+# already has natural lag through the wheel-spin ODE; this is the missing lateral half.
+@export var sigma_lat := 0.55               # m, relaxation length (~1.6x wheel radius)
 @export var Cy := 1.4
 @export var Ey := 0.97
 @export var roll_resist := 0.015
@@ -381,7 +393,8 @@ class Wheel:
 	var contact_normal := Vector3.UP
 	var Fz := 0.0
 	var kappa := 0.0
-	var slip_angle := 0.0
+	var slip_angle := 0.0               # instantaneous (steady-state) slip angle
+	var alpha_rel := 0.0                # B4: RELAXED slip angle - what the tyre force actually follows
 	var slip := 0.0                     # slip ratio magnitude (for terrain dig / dust / tracks)
 	var util := 0.0
 	var spin := 0.0                     # accumulated visual roll angle
@@ -409,7 +422,7 @@ func _ready() -> void:
 	linear_damp = 0.0
 	can_sleep = false
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
-	center_of_mass = Vector3(0, -0.45, 0)     # very low -> corner hard without tipping
+	center_of_mass = Vector3(0, com_height, 0)
 	collision_layer = 2
 	collision_mask = 1 | 4
 	var pm := PhysicsMaterial.new(); pm.friction = 0.3
@@ -514,7 +527,7 @@ func _apply_arb(i: int, j: int, k: float) -> void:
 	b.Fz = b.Fz - t
 
 func _apply_mode() -> void:
-	center_of_mass = Vector3(0, -0.45, _com_bias())   # shift weight toward the driven axle
+	center_of_mass = Vector3(0, com_height, _com_bias())   # shift weight toward the driven axle
 	if _livery_mat != null:
 		_livery_mat.albedo_color = MODE_COLORS[_drive_mode]
 	if _flare_mat != null:
@@ -935,6 +948,17 @@ func _launch_setup(split: float, ratio: float, t_fric: float) -> Vector2:
 	var t_need := clutch_margin * t_wheel / maxf(absf(ratio) * driveline_eff, 0.001) + t_fric
 	return Vector2(maxf(sr / maxf(n, 1.0), 0.02), _rpm_for_torque(t_need))
 
+func _by_at(w: Wheel) -> float:
+	# B4: derive the lateral Pacejka B from the surface's peak-slip-ANGLE, blended by grip exactly
+	# as the longitudinal bxw is. Same mechanism, same blend, so the two axes stay consistent.
+	var sg := 1.0
+	if w.contact and surface_source != null:
+		sg = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+	var u := _mf_peak_u(Cy, Ey)
+	var b_t := u / maxf(deg_to_rad(peak_alpha_tarmac), 0.01)
+	var b_g := u / maxf(deg_to_rad(peak_alpha_gravel), 0.01)
+	return lerpf(b_g, b_t, clampf((sg - 1.15) / 0.25, 0.0, 1.0))
+
 func _understeer_gradient() -> float:
 	# K_us [s^2/m] for the bicycle-model reference yaw rate psi_dot = v*delta / (L + K_us*v^2):
 	# axle load over axle cornering stiffness, front minus rear. The stiffness is the tyre
@@ -946,7 +970,7 @@ func _understeer_gradient() -> float:
 	var cr := 0.0
 	for w in _wheels:
 		var fz: float = maxf(w.Fz, 1.0)
-		var ca: float = _mu_load(mu_lat, fz) * fz * Cy * By
+		var ca: float = _mu_load(mu_lat, fz) * fz * Cy * _by_at(w)
 		if w.steer:
 			wf += fz
 			cf += ca
@@ -1012,7 +1036,7 @@ func _physics_process(delta: float) -> void:
 
 	if Input.is_action_just_pressed("reset"):
 		respawn(); return
-	center_of_mass = Vector3(0, -0.45, _com_bias())   # re-applied so live bias tuning takes effect
+	center_of_mass = Vector3(0, com_height, _com_bias())   # re-applied so live tuning takes effect
 	_derive_setup()                                  # B1: rates follow the targets + the live CoM
 
 	# virtual pedals: shape the binary key like a real foot; an analog trigger (if a pad ever works) bypasses it
@@ -1556,7 +1580,13 @@ func _physics_process(delta: float) -> void:
 		var Fx: float = fx_sum[w] / float(drive_substeps)
 		# lateral: Pacejka on slip angle, OPPOSES slip (restoring)
 		w.slip_angle = atan2(v_lat, maxf(absf(v_long), 1.0))
-		var Fy := -_mf(w.slip_angle, By, Cy, Ey, muy * Fz)
+		# B4 relaxation: the tyre must ROLL sigma_lat metres before the force follows the steer.
+		# Expressed per DISTANCE, not per time, so the lag is a property of the tyre rather than
+		# of the frame rate or the speed: fast, the force arrives quickly; crawling, it barely
+		# lags at all. v is floored at slip_ref_speed so it cannot oscillate at parking speed.
+		var v_roll := maxf(absf(v_long), slip_ref_speed)
+		w.alpha_rel += (w.slip_angle - w.alpha_rel) * clampf(v_roll / maxf(sigma_lat, 0.01) * delta, 0.0, 1.0)
+		var Fy := -_mf(w.alpha_rel, _by_at(w), Cy, Ey, muy * Fz)
 		# elliptical combined-slip limit
 		var nx := Fx / (mux * Fz + 0.001)
 		var ny := Fy / (muy * Fz + 0.001)
@@ -1645,6 +1675,7 @@ func respawn() -> void:
 		w.spin = 0.0
 		w.omega = 0.0
 		w.kappa = 0.0
+		w.alpha_rel = 0.0
 		w.temp = ambient_temp      # M7: fresh tyres on respawn
 		w.tyre_wear = 0.0
 		w.punctured = false

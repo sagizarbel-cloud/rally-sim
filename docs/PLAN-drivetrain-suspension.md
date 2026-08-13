@@ -1279,8 +1279,19 @@ User drive-through, all in one session, keyboard:
   those sources with caution — one quotes gravel rates as "450–600 N/mm", which is an order of
   magnitude above a plausible wheel rate and is almost certainly a units error.
 
-- [ ] B4 — Relaxation length + By + CoM
-- [ ] B5 — Bake, prune, end-to-end
+- [ ] B4 — Relaxation length + By + CoM — implemented 2026-08-13, **awaiting drive verdict**
+  (`./check.sh` clean; probe PASS, removed). Relaxation measured at 0.533 m (8 m/s) and 0.500 m
+  (30 m/s) to reach 63% of a step — same distance at both speeds, proving it is a distance
+  property. Derived `By` peaks land on exactly 9.0 deg (tarmac) and 14.0 deg (gravel). Straight-
+  line stability 0.000 rad/s peak yaw at both 1 m/s and 250 km/h. `com_height` is now a slider,
+  still at -0.45, for the A/B the plan asks for. `hs_blowoff` baked to 0.45 per the B2 drive.
+- [ ] B5 — Bake, prune, end-to-end — prune + audit DONE 2026-08-13; **the bake and the §8
+  end-to-end drive still need the user.** Prune found nothing outstanding: every retired system
+  was already removed by the phase that retired it (`_t_drive`, `lsd_lock`, `rear_grip_cut`,
+  `brake_force`, `spring_k`/`damper_c`/`arb_*`, interim `zeta`) — only explanatory comments
+  remain. Panel audit: 83 rows, 83 HELP entries, no gaps and no orphans. The two M1-only rows are
+  kept deliberately (the panel skips rows the loaded car lacks). ROADMAP updated with M15 done and
+  a "do not resurrect `_t_drive`" warning on the superseded Tier-3 entry.
 - [ ] C1 — Surface roughness (washboard + tarmac detail; procedural field, after Arc B)
 - [ ] C2 — Self-aligning torque (no hardware needed; do after B4)
 - [ ] C3 — Wheel input path (needs a wheel; pull forward the day one arrives)
