@@ -9,6 +9,15 @@ without reading every diff.
 measured finding changes what we believe about the car. Feel verdicts belong here too — they are
 the only verification this project has for feel, and they are otherwise lost in chat.
 
+**Write entries to be SEARCHED, because that is what this file is for.** Its main job is
+forensic: when something breaks, or an old bug comes back, this is where you grep for hints
+before touching code. So every entry must name the **symptom in the words you would use while
+driving** — "inside rear wheel cooking on gentle turns", "car pogos above 400 km/h", "top speed
+capped around 130", "launches on grass feel like ice" — not only the mechanism or the name of the
+fix. A symptom you cannot search for is a symptom you will diagnose twice. Record the measured
+numbers alongside it (before/after, per-wheel loads, distances), since a recurrence is usually
+recognised by the numbers drifting back rather than by the symptom returning in full.
+
 ---
 
 ## 2026-08-13 (later)
