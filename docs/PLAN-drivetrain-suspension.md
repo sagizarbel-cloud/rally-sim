@@ -1185,7 +1185,7 @@ User drive-through, all in one session, keyboard:
   Measured after: 55.0% front in all three modes, and the inside rear gains load in RWD
   (3.53 -> 4.04 kN). The cost is less total roll (AWD 3.07 -> 2.44 deg/g), unavoidable because a
   bar can only add stiffness — `ride_freq_rear` is the handle to give roll back.
-- [ ] B2 — Damper model — implemented 2026-08-13, **awaiting drive verdict** (`./check.sh` clean;
+- [x] B2 — Damper model — DONE 2026-08-13 (drive-verified: "feels good") (`./check.sh` clean;
   headless probe PASS, then removed). `zeta` splits into `zeta_bump` (0.55) and `zeta_rebound`
   (0.85) with a digressive knee at `knee_speed` 0.08 m/s and `hs_blowoff` 0.35 above it; the
   damper force is now a piecewise-linear FUNCTION of damper velocity built from those four
@@ -1209,6 +1209,14 @@ User drive-through, all in one session, keyboard:
   of bump travel — MORE than a real WRC car's entire stroke — and it still pegs 100%. Travel is
   not the constraint. The hydraulic (velocity-dependent, dissipative) bump stop is the remaining
   candidate, and it should be measured on **energy absorbed per impact**, not peak load.
+  **Travel reverted to realistic 2026-08-13 (user's call).** `rest_length` / `max_travel`
+  500 → **320 mm**, the top of the real gravel-WRC range, keeping B1's spring rates untouched.
+  Measured 500 vs 320 on the dirt loop at 100 km/h: still 4/4 pegged either way, frames on the
+  stops 50 → 177, but **peak Fz 28.8 → 23.1 kN** — less travel gave LOWER peak load, because the
+  spring builds force over the whole stroke (12.1 kN of spring force at full compression at
+  500 mm vs 7.7 kN at 320 mm). The inflated travel was manufacturing its own load spikes. Body
+  clearance 538 → 358 mm against a real gravel car's ~300 mm. Riding the stops often is now the
+  EXPECTED state, not a defect — which makes the hydraulic bump stop the last open item.
 - [x] B3 — Bump stops — DONE 2026-08-11, **brought forward ahead of B2** because B1 testing
   bottomed (the plan's own §7 risk), so this was the blocking fix. Progressive cubic stop over the
   last `bumpstop_zone` (20%) of travel, sized off the corner's OWN static load (`bumpstop_g`, in g)

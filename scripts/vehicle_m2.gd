@@ -31,7 +31,17 @@ class_name VehicleM2
 # ride_freq_*, which would have walked back the softness B1 exists to provide. The cost is ~5 cm of
 # CoM height and so ~16% more roll moment - re-check the roll couple, and expect C1's roughness and
 # any Arc D crests/jumps to spend this travel again.
-@export var rest_length := 0.50
+# Suspension travel, set to REAL gravel-rally figures (2026-08-13). Gravel WRC cars run
+# 250-300 mm of TOTAL wheel travel; this was 500 mm, which left 373 mm of bump travel alone -
+# more than a real rally car's entire stroke - and it was still pegging 100% on the dirt loop,
+# which is what proved travel was never the constraint. rest_length also sets ride height here
+# (body origin sits rest_length + wheel_radius - sag above the contact), so 500 mm was giving
+# ~54 cm of ground clearance against a real gravel car's ~30 cm. 320 mm is the top of the real
+# range, keeping a little margin because this terrain's input may be harsher than a real road.
+# EXPECT the bump stops to be in play regularly now: on a rough stage a real rally car uses them
+# constantly, which is precisely why the stop wants to be hydraulic (dissipative) rather than a
+# spring that hands the energy back - see the B3 revision in docs/PLAN-drivetrain-suspension.md.
+@export var rest_length := 0.32
 # B1: the suspension is DERIVED, not dialled in. Springs come from a target ride frequency per
 # axle (k = m_corner * (2*pi*f)^2), dampers from a target damping ratio (c = 2*zeta*sqrt(k*m)),
 # and the anti-roll bars from a target roll gradient - so the handles are the numbers a race
@@ -55,7 +65,7 @@ class_name VehicleM2
 @export var zeta_rebound := 0.85            # damping ratio in extension (firmer, as on a real car)
 @export var knee_speed := 0.08              # m/s of damper velocity where the valve starts to blow off
 @export var hs_blowoff := 0.35              # incremental rate above the knee, as a fraction of below it
-@export var max_travel := 0.50              # matches rest_length - see the B3 note above
+@export var max_travel := 0.32              # matches rest_length (the geometric maximum)
 # Anti-roll bars are sized from a target ROLL GRADIENT (degrees of body roll per g of lateral
 # acceleration) and a front roll-couple split, rather than picked in N/m. A bar can only ADD roll
 # stiffness, so if the springs alone are already stiffer than the target the bars correctly come

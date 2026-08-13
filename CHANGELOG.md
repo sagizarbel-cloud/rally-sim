@@ -20,6 +20,33 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-13 (later still)
+
+**B2 CLOSED — drive verdict: "feels good".** Asymmetric digressive damper accepted.
+
+**Suspension travel cut from 500 mm to 320 mm — the "vertical budget" was never the problem.**
+Symptom this closes: *"all four corners bottom out on the dirt loop"*, *"suspension bottoming
+going uphill at 100 km/h"*, and the instinct that follows it — *"the car needs more travel"* /
+*"raise the ride height"*. It does not. Real gravel WRC cars run **250-300 mm of TOTAL wheel
+travel**; this car had 500 mm, i.e. **373 mm of BUMP travel alone — more than a real rally car's
+entire stroke — and it still pegged 100%**. Travel was never the constraint, and the ride-height
+lever taken earlier (0.45 → 0.50) made it worse, not better. Ground clearance had reached 538 mm
+against a real gravel car's ~300 mm.
+Measured on the dirt loop at ~100 km/h, 500 mm vs 320 mm: peak travel 100% in both, 4/4 corners
+pegged in both, frames on the stops **50 → 177**, and — the counter-intuitive part — **peak Fz
+28.8 kN → 23.1 kN**. Less travel produced LOWER peak loads, because the spring keeps building
+force over the whole stroke: at full compression it made 12.1 kN of spring force at 500 mm
+against 7.7 kN at 320 mm. The inflated travel was manufacturing its own load spikes.
+Static sag is unchanged at 127 mm (springs untouched, B1 is drive-verified), so sag is now 40% of
+total travel and bump travel is 193 mm; body clearance 358 mm.
+**What to expect, and what NOT to diagnose as a bug:** the car now rides its bump stops often
+(177 frames vs 50). That is correct — a real rally car on rough gravel is on the stops constantly.
+It is also exactly why the stop wants to become **hydraulic** (velocity-sensitive, dissipating
+energy as heat) instead of the current pure displacement spring, which stores the impact and
+hands it straight back. That is the outstanding B3 revision, and it is now the ONLY remaining
+suspect for bottoming harshness: B2 was tested and disproven as the fix (it cut peak load 23% but
+slightly increased stop contact), and travel is ruled out by the numbers above.
+
 ## 2026-08-13 (later)
 
 **B1 CLOSED — drive verdict: "feels good".** The derived suspension setup is accepted, and the
