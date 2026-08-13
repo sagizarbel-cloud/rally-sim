@@ -4,6 +4,8 @@ _Last updated: 2026-07-28. Living document — future sessions should read this 
 
 Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt**, built procedurally in code, grounded in real vehicle-dynamics literature. Design philosophy: **improve realism and fun through physical functions, not by tuning magic-number constants.**
 
+**ACTIVE PLANS:** `docs/PLAN-drivetrain-suspension.md` (Arcs A/B/C — drivetrain, suspension, steering feel) and, queued behind Arc C1, `docs/PLAN-stages-ground-map.md` (**Arc D — the ground map & real point-to-point stages**, planned 2026-08-13).
+
 **ACTIVE PLAN (2026-08-02): `docs/PLAN-drivetrain-suspension.md`** — phased, self-contained execution plan: 120 Hz tick + virtual pedals, then drivetrain arc (engine inertia/clutch/neutral, emergent engine braking, Salisbury + selectable diffs + centre coupling, shift model + assists, handbrake), then suspension arc (derived setup, digressive dampers, bump stops, relaxation length). Execute it phase-by-phase before picking other milestones.
 
 ---
