@@ -20,6 +20,46 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-14 (particles: speed-scaled dust, building smoke column)
+
+**Accepted look, refined behaviour** — user verdict on the rebuilt system: *"the particles look
+much much better and mimic a lot more closely the behavior i wanted"*. This entry is the tuning
+pass on top of it, plus one API change that was needed to do it honestly.
+
+**Moved the emitters from CPUParticles3D to GPUParticles3D**, for one reason: `amount_ratio`. It
+scales emission density continuously with no restart. The CPU node has no equivalent — its only
+rate control is `amount`, and writing that mid-drive restarts the system and wipes the live cloud.
+Verified `amount_ratio` exists on GPUParticles3D and does NOT exist on CPUParticles3D before
+committing to the change. The move also brought turbulence, so dust now swirls instead of drifting
+in straight lines.
+
+**Dust grows and thickens with speed, from 20 km/h to a ceiling at 120.** Frequency has to scale
+with speed, not just size: particles are left in world space, so a fixed emission rate is smeared
+over three times the ground at 100 km/h that it covers at 30 — the plume visibly thins exactly when
+it should be biggest. Emission per METRE is the honest quantity. Measured: 20 km/h → scale x0.85,
+density 0.35; 40 → x1.14, 0.48; 60 → x1.44, 0.61; 90 → x1.88, 0.81; 120 → x2.30, 1.00; and beyond
+120 it holds at the ceiling rather than running away.
+Particles are also **born bigger, expand faster and settle larger**: the growth curve is now
+[birth 0.75 → 2.30 by 32% of life → 3.10 at death] against the old [0.30 → 1.85 linear], and
+**life is 4.6 s, up from 3.2 s**. Base sprite 0.42 → 0.52 m.
+
+**Tyre smoke now BUILDS under pressure and subsides slowly**, like a real tyre. It integrates
+pressure rather than tracking it, so a long drift makes a column and a quick stab does not, and
+lifting tapers instead of switching the smoke off. Measured: under sustained slip the column
+reaches 0.39 after 1 s, 0.77 after 2 s and full at 2.6 s; once the pressure is off it falls to 0.60
+after 2 s, 0.20 after 4 s and is gone by 6 s. The build-up drives SIZE (x0.75 with no build, x2.00
+at a full column) and density, while instantaneous pressure drives opacity.
+
+**Sizes are smoothed before they reach the shader.** `scale_min`/`scale_max` are uniforms the GPU
+reads every frame, not values baked at spawn — writing them raw would resize every live particle at
+once, the same class of bug as the earlier colour flicker. They ease over ~0.7 s so a change reads
+as the cloud swelling.
+
+**Not drive-tested — visual.** Knobs: `dust_size_start` / `dust_size_ceiling` / `dust_size_full`
+for the speed ramp, `dust_density_start` / `_ceiling` for frequency, `smoke_build_time` (2.6 s) and
+`smoke_decay_time` (5.0 s) for how fast the column comes and goes, and the `grow` arrays in
+`LAYERS` for the per-particle expansion.
+
 ## 2026-08-14 (particles rebuilt on research)
 
 **Particle system rebuilt as a data-driven layer table, after the first attempt looked wrong.**

@@ -31,14 +31,31 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 # --- gates: what it takes to disturb the surface ------------------------------------------
 @export var slip_ref := 6.0          # m/s of contact-patch slip for a full-intensity effect
 @export var slip_floor := 1.2        # m/s below which the tyre is gripping and throws nothing
-@export var dust_speed_min := 8.0    # m/s (~29 km/h) of work before gravel dust starts at all
-@export var dust_speed_ref := 26.0   # m/s (~94 km/h) at which the speed gate is fully open
+@export var dust_speed_min := 5.6    # m/s (20 km/h) - dust starts here, as asked
+@export var dust_speed_ref := 26.0   # m/s (~94 km/h) at which the slip gate is fully open
+# Dust gets BIGGER and MORE FREQUENT with speed, up to a ceiling. Frequency has to scale because
+# particles are left in world space: at 100 km/h the same emission rate is smeared over three
+# times the distance it covers at 30, so a fixed rate visibly thins out exactly when the plume
+# should be at its biggest. Emission per METRE is the honest quantity, hence the speed ramp.
+@export var dust_size_start := 0.85  # scale multiplier at 20 km/h (slightly bigger than before)
+@export var dust_size_ceiling := 2.3 # scale multiplier once dust_size_full is reached
+@export var dust_size_full := 33.0   # m/s (~120 km/h) where size stops growing
+@export var dust_density_start := 0.35   # amount_ratio at 20 km/h
+@export var dust_density_ceiling := 1.0  # amount_ratio at dust_size_full and beyond
 @export var asphalt_grip := 1.2      # base grip above this = a hard surface: smoke, no dust
 # --- smoke (hard surfaces) ----------------------------------------------------------------
 @export var smoke_temp := 110.0      # C at which the tread starts to smoke (M7 optimum is 85)
 @export var smoke_full_temp := 165.0 # C at which heat alone smokes as hard as it ever will
 @export var smoke_power_ref := 60000.0  # W of friction power at the patch for full smoke, cold
 @export var smoke_scale := 0.55      # smoke is thinner and smaller than dust - "much less"
+# A tyre does not smoke at full volume the instant it slips: the column BUILDS while the tread is
+# under pressure and keeps drifting for a while after the pressure comes off. This accumulator is
+# that behaviour - it integrates pressure rather than tracking it, so a long drift smokes far more
+# than a quick stab, and letting off tapers instead of switching the smoke away.
+@export var smoke_build_time := 2.6  # s of sustained slip to reach a full smoke column
+@export var smoke_decay_time := 5.0  # s to subside once the pressure is off - deliberately slower
+@export var smoke_size_start := 0.75 # scale multiplier with no build-up (slightly bigger than before)
+@export var smoke_size_max := 2.0    # scale multiplier at a fully built column
 # --- skid marks ---------------------------------------------------------------------------
 @export var mark_pool := 900
 @export var mark_fade := 14.0
@@ -51,16 +68,19 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 @export var release_grit := 0.14     # s for GRIT - stones stop when the slip does
 
 # A layer declaration. `grow` is start->end scale over life: >1 means the puff expands as it ages.
+# A layer declaration. `grow` is [birth, knee_t, knee_scale, death] - the puff is born at `birth`,
+# reaches `knee_scale` by `knee_t` of its life, then eases on to `death`. The knee is what makes it
+# expand FAST at first and then settle toward a ceiling, the way a real puff of dust does.
 const LAYERS := {
-	"dust":  {"amount": 34, "life": 3.2, "size": 0.42, "gravity": -0.55, "rise": 2.2,
-			  "grow": [0.30, 1.85], "alpha": 0.44, "spread": 34.0, "damp": [1.2, 2.8],
-			  "box": Vector3(0.30, 0.12, 0.30), "prio": 1, "spin": 22.0},
-	"smoke": {"amount": 26, "life": 2.4, "size": 0.30, "gravity": -0.35, "rise": 1.7,
-			  "grow": [0.26, 1.60], "alpha": 0.30, "spread": 30.0, "damp": [1.4, 3.0],
-			  "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 18.0},
-	"grit":  {"amount": 26, "life": 0.55, "size": 0.055, "gravity": -19.0, "rise": 9.0,
-			  "grow": [1.0, 0.9], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
-			  "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0},
+	"dust":  {"amount": 90, "life": 4.6, "size": 0.52, "gravity": -0.45, "rise": 2.4,
+			  "grow": [0.75, 0.32, 2.30, 3.10], "alpha": 0.44, "spread": 36.0, "damp": [1.1, 2.6],
+			  "box": Vector3(0.32, 0.14, 0.32), "prio": 1, "spin": 20.0, "turb": 0.55},
+	"smoke": {"amount": 60, "life": 3.0, "size": 0.32, "gravity": -0.30, "rise": 1.8,
+			  "grow": [0.45, 0.35, 1.60, 2.20], "alpha": 0.30, "spread": 30.0, "damp": [1.4, 3.0],
+			  "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 16.0, "turb": 0.30},
+	"grit":  {"amount": 30, "life": 0.55, "size": 0.055, "gravity": -19.0, "rise": 9.0,
+			  "grow": [1.0, 0.5, 1.0, 0.9], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
+			  "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0, "turb": 0.0},
 }
 
 var _em := {}                        # layer name -> Array[CPUParticles3D], one per wheel
@@ -71,6 +91,8 @@ var _mm: MultiMesh
 var _mark_next := 0
 var _marks: Array = []
 var _lay_accum := 0.0
+var _build := [0.0, 0.0, 0.0, 0.0]   # smoke column build-up per wheel, 0..1
+var _size := {}                      # layer -> smoothed scale multiplier (see _emit_layer)
 
 func _ready() -> void:
 	_atlas = _make_puff_atlas(atlas_cells, atlas_px)
@@ -127,12 +149,30 @@ func _draw_puff(img: Image, ox: int, oy: int, sz: int, rng: RandomNumberGenerato
 			a *= clampf(edge / 0.07, 0.0, 1.0)             # frames must not bleed into each other
 			img.set_pixel(ox + x, oy + y, Color(1, 1, 1, clampf(a, 0.0, 1.0)))
 
-func _curve(a: float, b: float) -> Curve:
+func _curve(g: Array) -> Curve:
+	# [birth, knee_t, knee_scale, death] - fast early expansion, then easing toward a ceiling.
 	var c := Curve.new()
-	c.max_value = maxf(maxf(a, b), 1.0)
-	c.add_point(Vector2(0.0, a))
-	c.add_point(Vector2(1.0, b))
+	c.max_value = maxf(maxf(float(g[0]), float(g[2])), maxf(float(g[3]), 1.0))
+	c.add_point(Vector2(0.0, float(g[0])))
+	c.add_point(Vector2(clampf(float(g[1]), 0.05, 0.95), float(g[2])))
+	c.add_point(Vector2(1.0, float(g[3])))
 	return c
+
+func _curve_tex(g: Array) -> CurveTexture:
+	var t := CurveTexture.new()
+	t.curve = _curve(g)
+	return t
+
+func _ramp_tex() -> GradientTexture1D:
+	# Ending on alpha 0 is the single biggest factor in whether particles read as believable.
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1, 1, 1, 0.0))
+	grad.set_color(1, Color(1, 1, 1, 0.0))
+	grad.add_point(0.10, Color(1, 1, 1, 1.0))
+	grad.add_point(0.40, Color(1, 1, 1, 0.75))
+	var t := GradientTexture1D.new()
+	t.gradient = grad
+	return t
 
 func _build_layer(spec: Dictionary) -> Array:
 	var out: Array = []
@@ -140,7 +180,11 @@ func _build_layer(spec: Dictionary) -> Array:
 		out.append(_make_emitter(spec))
 	return out
 
-func _make_emitter(spec: Dictionary) -> CPUParticles3D:
+func _make_emitter(spec: Dictionary) -> GPUParticles3D:
+	# GPU particles, not CPU, for one reason that matters: `amount_ratio`. It scales emission
+	# density continuously with no restart, which is what lets dust thicken with speed. The CPU
+	# node has no equivalent - its only rate control is `amount`, and writing that mid-drive
+	# restarts the system and wipes the live cloud.
 	var mesh := QuadMesh.new()
 	mesh.size = Vector2(spec["size"], spec["size"])
 	var mat := StandardMaterial3D.new()
@@ -154,43 +198,46 @@ func _make_emitter(spec: Dictionary) -> CPUParticles3D:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.vertex_color_use_as_albedo = true
 	mat.albedo_texture = _atlas
-	mat.proximity_fade_enabled = true       # soft particles: fade where the sprite cuts the ground,
-	mat.proximity_fade_distance = 0.5       # instead of showing a hard intersection line
+	mat.proximity_fade_enabled = true       # soft particles: fade where the sprite cuts the ground
+	mat.proximity_fade_distance = 0.5
 	mat.render_priority = spec["prio"]
 	mesh.material = mat
-	var p := CPUParticles3D.new()
-	p.mesh = mesh
-	p.emitting = false
-	p.amount = spec["amount"]
+
+	var pm := ParticleProcessMaterial.new()
+	pm.gravity = Vector3(0, spec["gravity"], 0)
+	pm.direction = Vector3.UP
+	pm.spread = spec["spread"]
+	pm.initial_velocity_min = 0.0
+	pm.initial_velocity_max = spec["rise"]
+	pm.damping_min = spec["damp"][0]
+	pm.damping_max = spec["damp"][1]
+	pm.scale_min = 0.75
+	pm.scale_max = 1.35
+	pm.scale_curve = _curve_tex(spec["grow"])
+	pm.color_ramp = _ramp_tex()
+	pm.angle_min = -180.0
+	pm.angle_max = 180.0
+	pm.angular_velocity_min = -float(spec["spin"])
+	pm.angular_velocity_max = float(spec["spin"])
+	pm.anim_offset_min = 0.0                # every particle draws a RANDOM atlas frame
+	pm.anim_offset_max = 1.0
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX   # a volume, so a cloud has body
+	pm.emission_box_extents = spec["box"]
+	if float(spec["turb"]) > 0.0:
+		pm.turbulence_enabled = true        # dust swirls rather than drifting in straight lines
+		pm.turbulence_noise_strength = float(spec["turb"])
+		pm.turbulence_noise_scale = 2.2
+
+	var p := GPUParticles3D.new()
+	p.process_material = pm
+	p.draw_pass_1 = mesh
+	p.amount = spec["amount"]               # the CEILING; amount_ratio scales it per frame
 	p.lifetime = spec["life"]
-	p.lifetime_randomness = 0.5
-	p.direction = Vector3.UP
-	p.spread = spec["spread"]
-	p.gravity = Vector3(0, spec["gravity"], 0)
-	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX   # a volume, so the cloud has body
-	p.emission_box_extents = spec["box"]
-	# every particle draws a RANDOM frame from the atlas: anim_speed 0 holds whichever it picked
-	p.anim_offset_min = 0.0
-	p.anim_offset_max = 1.0
-	p.anim_speed_min = 0.0
-	p.anim_speed_max = 0.0
-	p.scale_amount_min = 0.7
-	p.scale_amount_max = 1.5
-	p.scale_amount_curve = _curve(spec["grow"][0], spec["grow"][1])   # born small, swells as it ages
-	p.angle_min = -180.0
-	p.angle_max = 180.0
-	p.angular_velocity_min = -spec["spin"]
-	p.angular_velocity_max = spec["spin"]
-	p.damping_min = spec["damp"][0]
-	p.damping_max = spec["damp"][1]
-	var ramp := Gradient.new()              # ending on alpha 0 is what stops it looking like sprites
-	ramp.set_color(0, Color(1, 1, 1, 0.0))
-	ramp.set_color(1, Color(1, 1, 1, 0.0))
-	ramp.add_point(0.10, Color(1, 1, 1, 1.0))
-	ramp.add_point(0.40, Color(1, 1, 1, 0.75))
-	p.color_ramp = ramp
+	p.randomness = 0.5
+	p.amount_ratio = 1.0
+	p.local_coords = false                  # particles stay where they were born
+	p.emitting = false
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	p.local_coords = false
 	add_child(p)
 	return p
 
@@ -240,6 +287,25 @@ func dust_frac(v: float, vslip: float, slip_amt: float) -> float:
 	var work: float = maxf(v, vslip)
 	var speed_gate: float = clampf((work - dust_speed_min) / maxf(dust_speed_ref - dust_speed_min, 0.1), 0.0, 1.0)
 	return speed_gate * clampf(slip_amt, 0.0, 1.0)
+
+func dust_scale_at(v: float) -> float:
+	# Size grows with speed to a ceiling: at 20 km/h a modest puff, at 120 km/h and beyond the
+	# full plume. Beyond the ceiling it stops growing rather than running away.
+	var t: float = clampf((v - dust_speed_min) / maxf(dust_size_full - dust_speed_min, 0.1), 0.0, 1.0)
+	return lerpf(dust_size_start, dust_size_ceiling, t)
+
+func dust_density_at(v: float) -> float:
+	# Frequency has to rise with speed for the plume to stay dense: particles are left in world
+	# space, so a fixed rate is smeared over more ground the faster you go.
+	var t: float = clampf((v - dust_speed_min) / maxf(dust_size_full - dust_speed_min, 0.1), 0.0, 1.0)
+	return lerpf(dust_density_start, dust_density_ceiling, t)
+
+func smoke_build(prev: float, press: float, dt: float) -> float:
+	# Integrates pressure instead of tracking it: a long drift builds a column, a stab does not,
+	# and letting off tapers away over smoke_decay_time rather than switching off.
+	if press > 0.12:
+		return clampf(prev + press * dt / maxf(smoke_build_time, 0.05), 0.0, 1.0)
+	return clampf(prev - dt / maxf(smoke_decay_time, 0.05), 0.0, 1.0)
 
 func smoke_frac(temp: float, fz: float, vslip: float, grip: float) -> float:
 	var thermal := clampf((temp - smoke_temp) / maxf(smoke_full_temp - smoke_temp, 1.0), 0.0, 1.0)
@@ -304,6 +370,11 @@ func _physics_process(delta: float) -> void:
 	var kick: Vector3 = (Vector3.UP + back * 0.55).normalized()
 	var lit := _light()
 
+	# size and density track SPEED, smoothed so live particles do not visibly pop when they change
+	# (scale_min/max are shader uniforms, read every frame - not baked at spawn)
+	_size["dust"] = move_toward(float(_size.get("dust", dust_size_start)), dust_scale_at(v), delta / 0.7)
+	_size["dens"] = move_toward(float(_size.get("dens", dust_density_start)), dust_density_at(v), delta / 0.7)
+
 	for i in range(mini(wheels.size(), 4)):
 		var w = wheels[i]
 		if not w.contact:
@@ -315,35 +386,46 @@ func _physics_process(delta: float) -> void:
 		var vs: float = slip_speed(w, v)
 		var sa: float = slip_frac(w, v, fz_ref)
 		if grip > asphalt_grip:
-			_emit_layer(i, "dust", 0.0, delta, cp, kick, Color.WHITE, lit)
-			_emit_layer(i, "grit", 0.0, delta, cp, kick, Color.WHITE, lit, release_grit)
-			var sf: float = smoke_frac(float(w.temp), float(w.Fz), vs, grip) * smoke_scale
-			_emit_layer(i, "smoke", sf, delta, cp, kick, Color(0.90, 0.90, 0.92), lit)
+			_emit_layer(i, "dust", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0)
+			_emit_layer(i, "grit", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0, release_grit)
+			var press: float = smoke_frac(float(w.temp), float(w.Fz), vs, grip)
+			_build[i] = smoke_build(_build[i], press, delta)
+			# the column's SIZE comes from the build-up, its opacity from the current pressure
+			var ssz: float = lerpf(smoke_size_start, smoke_size_max, _build[i])
+			var sdens: float = clampf(0.30 + 0.70 * _build[i], 0.05, 1.0)
+			_emit_layer(i, "smoke", maxf(press, _build[i] * 0.6) * smoke_scale, delta, cp, kick,
+					Color(0.90, 0.90, 0.92), lit, ssz, sdens)
 			if lay and sa > 0.12:
 				_lay_mark(cp, w.contact_normal, fwd, clampf(sa, 0.0, 1.0))
 		else:
-			_emit_layer(i, "smoke", 0.0, delta, cp, kick, Color.WHITE, lit)
+			_emit_layer(i, "smoke", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0)
+			_build[i] = maxf(_build[i] - delta / maxf(smoke_decay_time, 0.05), 0.0)
 			var col := ground_color(cp.x, cp.z)
-			_emit_layer(i, "dust", dust_frac(v, vs, sa), delta, cp, kick, col, lit)
-			_emit_layer(i, "grit", sa, delta, cp, kick, col.darkened(0.14), lit, release_grit)
+			_emit_layer(i, "dust", dust_frac(v, vs, sa), delta, cp, kick, col, lit,
+					float(_size["dust"]), float(_size["dens"]))
+			_emit_layer(i, "grit", sa, delta, cp, kick, col.darkened(0.14), lit, 1.0, 1.0, release_grit)
 
-func _emit_layer(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: Vector3, col: Color, lit: Color, rel: float = -1.0) -> void:
+func _emit_layer(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: Vector3, col: Color, lit: Color, size_mult: float, density: float, rel: float = -1.0) -> void:
 	var arr: Array = _sm[layer]
 	arr[i] = _smooth(arr[i], target, dt, rel)
 	var amt: float = arr[i]
-	var p: CPUParticles3D = _em[layer][i]
+	var p: GPUParticles3D = _em[layer][i]
 	if amt <= 0.01:
 		p.emitting = false
 		return
 	var spec: Dictionary = LAYERS[layer]
+	var pm: ParticleProcessMaterial = p.process_material
 	p.global_position = cp + Vector3.UP * 0.05
-	p.direction = kick if kick.length() > 0.01 else Vector3.UP
-	p.initial_velocity_min = float(spec["rise"]) * 0.35 * amt
-	p.initial_velocity_max = float(spec["rise"]) * amt
+	pm.direction = kick if kick.length() > 0.01 else Vector3.UP
+	pm.initial_velocity_min = float(spec["rise"]) * 0.35 * amt
+	pm.initial_velocity_max = float(spec["rise"]) * amt
+	pm.scale_min = 0.75 * size_mult
+	pm.scale_max = 1.35 * size_mult
+	p.amount_ratio = clampf(density * (0.4 + 0.6 * amt), 0.04, 1.0)
 	var a_max: float = float(spec["alpha"])
 	var c := Color(col.r * lit.r, col.g * lit.g, col.b * lit.b)
 	c.a = clampf(a_max * (0.35 + 0.65 * amt), 0.0, a_max)
-	p.color = c
+	pm.color = c
 	p.emitting = true
 
 func _lay_mark(pos: Vector3, nrm: Vector3, fwd: Vector3, amt: float) -> void:
