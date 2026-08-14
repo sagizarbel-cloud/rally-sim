@@ -88,6 +88,11 @@ class_name VehicleM2
 @export var com_height := -0.45              # B4: CoM height (m, body frame). Higher = more honest
 											# roll and load transfer, tamed by real ARBs/dampers.
 @export var camber_deg := 1.5                   # static negative camber (visual + a small grip cue)
+# C1: the roughness field (scripts/roughness.gd) offsets the suspension raycast's measured ground
+# distance, so texture the collision mesh cannot resolve still reaches the springs/dampers/bump
+# stop/Fz/grip/tyre heat downstream of it, for free. This is the ONE gain that turns it off - the
+# A/B that proves what the phase bought.
+@export var roughness_gain := 1.0
 
 # --- Appearance ---
 @export var livery_color := Color(0.16, 0.36, 0.82)
@@ -334,6 +339,7 @@ var _drive_mode := 0              # 0 = AWD, 1 = RWD, 2 = FWD (cycle with T)
 var _livery_mat: StandardMaterial3D
 var _flare_mat: StandardMaterial3D
 var surface_source               # set by world.gd; supplies grip_at(x,z) so asphalt grips > dirt > grass
+var roughness_field               # set by world.gd; supplies sample_enveloped(x,z,heading) (C1)
 const MODE_NAMES := ["AWD", "RWD", "FWD"]
 const MODE_COLORS := [Color(0.16, 0.36, 0.82), Color(0.78, 0.13, 0.12), Color(0.16, 0.55, 0.26)]
 # A1 clutch numerics (smoothing/actuation widths, not feel tunables - feel lives in the exports)
@@ -1147,9 +1153,19 @@ func _physics_process(delta: float) -> void:
 			continue
 		w.contact = true
 		var hit_pos: Vector3 = hit.position
-		w.contact_point = hit_pos
 		var n: Vector3 = hit.normal
 		w.contact_normal = n
+		# C1.3: shorten/lengthen the measured ground distance by the enveloped roughness field
+		# instead of adding a force - everything downstream (spring, damper, B3's bump stop, Fz,
+		# load-sensitive grip, weight transfer, tyre heat/wear) inherits it for free and correctly.
+		# Offset contact_point the same way so dust/marks/terrain dig/audio stay consistent (C1.3).
+		if roughness_field != null and roughness_gain != 0.0:
+			var fwd0 := -global_transform.basis.z
+			if w.steer:
+				fwd0 = fwd0.rotated(up, steer_angle)
+			var rough: float = roughness_field.sample_enveloped(hit_pos.x, hit_pos.z, Vector2(fwd0.x, fwd0.z)) * roughness_gain
+			hit_pos += up * rough
+		w.contact_point = hit_pos
 		var compression := clampf((rest_length + wheel_radius) - mount_world.distance_to(hit_pos), 0.0, max_travel)
 		var contact_off := hit_pos - global_position
 		var pv := linear_velocity + angular_velocity.cross(contact_off)

@@ -1303,7 +1303,60 @@ User drive-through, all in one session, keyboard:
   remain. Panel audit: 83 rows, 83 HELP entries, no gaps and no orphans. The two M1-only rows are
   kept deliberately (the panel skips rows the loaded car lacks). ROADMAP updated with M15 done and
   a "do not resurrect `_t_drive`" warning on the superseded Tier-3 entry.
-- [ ] C1 — Surface roughness (washboard + tarmac detail; procedural field, after Arc B)
+- [x] C1 — Surface roughness — implemented 2026-08-15 (`./check.sh` clean; all six headless
+  probes PASS, then removed). **AWAITING USER DRIVE VERDICT — checkbox ticked for "built and
+  probe-verified", not for feel; see the driving checklist below §9.**
+  **C1.0 centreline** (`scripts/centreline.gd`, new): arc-length table + binary-search inversion
+  + a spatial grid for `nearest_point`, exposing `point_at(s)` / `nearest_point(x,z)` / `length()`
+  / `is_loop()`. Built from `_road(th)`/`_asphalt_r(th)` exactly as `wear.gd`/`pace_notes.gd`
+  already sample them — no geometry change, same points through a shared interface. Probe 0a:
+  reconstructed position vs the direct polar formula at 2000 positions/circuit, **max deviation
+  0.0000 mm** (pass < 1 mm) on both the rally loop and the asphalt ring. Probe 0b: `s` from
+  `nearest_point` vs brute force agrees to 0.29 m against a 0.32 m sample spacing (pass), and
+  4 wheels x 120 Hz of queries cost **1.05 ms/tick** against the 1.84 ms/tick baseline — real, but
+  budgeted.
+  **C1.1 roughness field** (`scripts/roughness.gd`, new): ISO 8608 broadband noise as 5 octave-
+  spaced `FastNoiseLite` layers whose amplitude follows `Gd(n)=Gd(n0)*(n/n0)^-2`, one coefficient
+  per surface (`road_class_gravel` 128, `road_class_tarmac` 4, both x1e-6 m^3 — roughly ISO class
+  D vs A/B). Washboard is `washboard_amp * sin(2*PI*s/washboard_lambda)` keyed to the C1.0
+  centreline's `s` (not theta), masked by **`wear.gd`'s own corner/braking-zone field** via a new
+  `wear.is_tracked(x,z)` — the line that gets worn is the line that gets ribbed, per
+  `docs/PLAN-stages-ground-map.md` §6.4, no new mask invented. Tarmac gets expansion joints
+  (`joint_spacing`/`joint_amp`) + noise-thresholded patch repairs instead of washboard. Probe 1:
+  measured RMS ratio between successive octaves of the ACTUAL noise output (not just the formula)
+  averaged **~0.71** across both classes against the ISO-implied 0.5 (generous tolerance because
+  each octave is one finite noise sample) - PASS; gravel total RMS 0.00077 m vs tarmac's
+  0.00014 m, more than 5x - PASS.
+  **C1.2 enveloping filter**: `contact_patch_len` (0.2 m) sampled at 9 points, combined with a
+  weighted mean whose weight floor (`ENVELOPE_FLOOR` 0.5) biases toward the patch's own peak
+  without reproducing it outright — a plain mean already does the real filtering (a feature much
+  narrower than the patch is diluted by the samples that miss it). Probe 2, ridden dead-centre
+  (worst case): a 3 cm x 4 cm bump comes through at **31% of its raw amplitude** (pass < 40%),
+  a 0.6 m washboard crest comes through at **83%** (pass > 80%) - correctly differentiated.
+  **C1.3 injection**: `vehicle_m2.gd`'s suspension raycast offsets `hit_pos` along the wheel's own
+  `up` axis by the enveloped sample before computing compression, and `w.contact_point` moves with
+  it so dust/marks/terrain-dig/audio inherit it automatically. New export `roughness_gain`
+  (default 1.0, Tab row "Roughness gain (M2)") is the phase's A/B — 0 skips the sample entirely.
+  Excluded via `stage.deformable_patch_factor()` (a query, not a hardcoded radius, per §6.3) so
+  the centre patch's real geometry is never double-counted.
+  **C1.4 travel budget, headless autopilot probe (rally loop, curvature-governed speed, NOT a
+  clean 100 km/h — see caveat below):** `roughness_gain` 0.0: avg 47.8 km/h, peak Fz **22.8 kN**,
+  4/4 corners pegged, 350/5401 frames with a bottomed wheel. `roughness_gain` 1.0 (shipped
+  default): avg 41.0 km/h, peak Fz **22.6 kN**, 4/4 corners pegged, 335/5401 frames bottomed. The
+  gain-0 run lands within 1% of B3's recorded baseline (23.1 kN, 4/4 pegged) - the injection is
+  confirmed inert at 0, which is the load-bearing half of this measurement. The gain-1 run shows
+  only a small, second-order change (peak Fz and bottoming both slightly LOWER, not higher), which
+  does **not** confirm-or-refute B3's "C1 will make bottoming worse before better" prediction
+  either way. **Caveat, honestly: the probe's synthetic autopilot (pure-pursuit steering + a
+  curvature-governed speed target) only sustains ~45 km/h average on this track, well under the
+  100 km/h B2/B3 measured at** - it is not a racing driver, so the comparison is suggestive, not
+  load-bearing. Probe 3 (repeatability): identical field value at the same point, same frame,
+  and after a respawn (0.000185 m in all three reads) - PASS, the stage stays learnable.
+  **Files:** `scripts/centreline.gd` (new), `scripts/roughness.gd` (new), `scripts/wear.gd`
+  (+`is_tracked`), `scripts/stage.gd` (+`is_tarmac_at`, +`deformable_patch_factor`),
+  `scripts/vehicle_m2.gd` (+`roughness_gain`, +`roughness_field`, raycast injection),
+  `scripts/world.gd` (wires `Roughness` + the rally-loop `Centreline`), `scripts/tuning_panel.gd`
+  (+1 row, +1 HELP entry, 86/86).
 - [ ] C2 — Self-aligning torque (no hardware needed; do after B4)
 - [ ] C3 — Wheel input path (needs a wheel; pull forward the day one arrives)
 - [ ] C4 — FFB output (spike first — may honestly conclude "not feasible", see §7)

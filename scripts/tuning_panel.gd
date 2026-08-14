@@ -65,6 +65,7 @@ const HELP := {
 	"roll_couple_front": "SUSPENSION - what SHARE of total roll stiffness the FRONT axle carries (0.55 = 55%). More front = more understeer, less = more oversteer. This is the balance knob.",
 	"bumpstop_zone": "SUSPENSION - fraction of travel the bump stop occupies at the top (0.20 = the last 20%): the cushion before the suspension goes solid.",
 	"bumpstop_g": "SUSPENSION - bump-stop strength, in g of that corner's static load. Higher = less bottoming, but harsher and crashier over big hits.",
+	"roughness_gain": "SUSPENSION - master strength of the C1 surface-texture field (washboard, ISO-noise, tarmac joints). 0 = the pre-C1 glass-smooth ground, exactly - the A/B for the whole phase.",
 	"camber_deg": "SUSPENSION - static wheel lean. Negative camber gives the loaded outside tyre a flatter contact patch mid-corner.",
 	# --- chassis / tyres ---
 	"chassis_mass": "CHASSIS - the car's mass, and the one authority for it: moving this re-rates the springs, bars, tyre load reference and rolling resistance live.",
@@ -177,6 +178,7 @@ var _specs := [
 	["Bump stop zone (M2)",  "bumpstop_zone",          0.05,     0.50, 0.01, func(v): return "%d%% of travel" % int(v * 100.0)],
 	["Bump stop force (M2)", "bumpstop_g",             1.0,     15.0,  0.5,  func(v): return "%.1f g" % v],
 	["Camber (M2)",          "camber_deg",             0.0,      6.0,    0.5, func(v): return "%.1f deg" % v],
+	["Roughness gain (M2)",  "roughness_gain",         0.0,      2.0,   0.1,  func(v): return "%.1fx" % v],
 	# virtual pedals (input shaping)
 	["Throttle rise",        "throttle_rise_time",     0.0,      0.5,   0.02, func(v): return "%.2f s" % v],
 	["Throttle fall",        "throttle_fall_time",     0.0,      0.5,   0.02, func(v): return "%.2f s" % v],

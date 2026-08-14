@@ -123,6 +123,16 @@ func _accum(x: float, z: float, work: float, dt: float) -> void:
 		return
 	_wear[idx] = minf(_wear[idx] + wear_rate * work * dt, wear_full)
 
+func is_tracked(x: float, z: float) -> bool:
+	# C1: washboard forms where repeated braking/accelerating traffic packs the surface - the same
+	# corner+braking-zone mask this node already computes for the worn line, reused verbatim so the
+	# line that gets worn is the line that gets ribbed (docs/PLAN-drivetrain-suspension.md C1.1).
+	var dx := x - _center.x
+	var dz := z - _center.z
+	var i := int(round(atan2(dz, dx) / TAU * float(arc_samples)))
+	i = ((i % arc_samples) + arc_samples) % arc_samples
+	return _tracked[i] == 1
+
 func grip_at(x: float, z: float) -> float:
 	var base: float = stage.grip_at(x, z)
 	var idx := _cell(x, z)

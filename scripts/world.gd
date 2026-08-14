@@ -52,7 +52,8 @@ func _ready() -> void:
 	car.surface_source = stage                   # per-surface traction (asphalt grips > dirt > grass)
 	car.spawn_transform = stage.get_spawn()      # start on the road
 	car.respawn()
-	_build_wear(car, stage)                      # M6: surface degradation wraps grip_at (corners + braking zones)
+	var wn := _build_wear(car, stage)             # M6: surface degradation wraps grip_at (corners + braking zones)
+	_build_roughness(car, stage, wn)              # C1: procedural surface texture fed into the suspension raycast
 	_build_cameras(car)
 	_build_effects(car, stage)                   # M11: surface-aware dust, tyre smoke, fading marks
 	var hud := _build_hud(car)
@@ -122,13 +123,31 @@ func _build_component_hud(car: Node3D) -> void:
 	cl.add_child(ch)
 	add_child(cl)
 
-func _build_wear(car: Node3D, stage) -> void:
+func _build_wear(car: Node3D, stage) -> Node:
 	var wn: Node = load("res://scripts/wear.gd").new()
 	wn.name = "Wear"
 	wn.car = car
 	wn.stage = stage
 	add_child(wn)
 	car.surface_source = wn   # grip queries now flow through wear (which wraps stage.grip_at)
+	return wn
+
+func _build_roughness(car: Node3D, stage, wn: Node) -> Node:
+	# C1.0: express the existing polar rally loop as a Centreline - same points wear.gd/pace_notes.gd
+	# already sample from _road(th), reached through the shared arc-length interface (no geometry
+	# change). Only the rally loop needs one: it is the only surface with a washboard term.
+	var hwfn := func(th): return stage._road_halfwidth(th)
+	var cl := Centreline.from_polar(stage.road_center, Callable(stage, "_road"), hwfn,
+		Callable(stage, "_height"), 4000)
+	var rn: Node = load("res://scripts/roughness.gd").new()
+	rn.name = "Roughness"
+	rn.stage = stage
+	rn.wear = wn
+	rn.centreline_gravel = cl
+	rn.set_asphalt(stage.asphalt_radius)
+	add_child(rn)
+	car.roughness_field = rn
+	return rn
 
 func _build_timetrial(car: Node3D, stage) -> Node3D:
 	var tt: Node3D = load("res://scripts/time_trial.gd").new()

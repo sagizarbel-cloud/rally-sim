@@ -205,6 +205,21 @@ func grip_at(x: float, z: float) -> float:
 		return dirt_grip                                      # rally loop
 	return grass_grip
 
+func is_tarmac_at(x: float, z: float) -> bool:
+	# C1: the simple surface test road_class_at() amendment §6.1 asks for - one call site so
+	# Arc D's D1 can later replace the body with a per-position ground-map lookup and nothing
+	# downstream (roughness.gd) has to change.
+	return _asphalt_dist(x, z) < asphalt_width * 0.5 + 1.0 or _on_drag_strip(x, z)
+
+func deformable_patch_factor(x: float, z: float) -> float:
+	# 0 inside the centre reactive-dirt patch (terrain.gd owns real geometry there - a procedural
+	# roughness field would double-count it), ramping to 1 over the same grass blend the patch
+	# already uses. A query, not a hardcoded radius test at each call site, per §6.3.
+	var dx := x - road_center.x
+	var dz := z - road_center.z
+	var cheb := maxf(absf(dx), absf(dz))
+	return smoothstep(patch_radius, patch_radius + center_blend, cheb)
+
 func _build() -> void:
 	var verts := PackedVector3Array(); verts.resize(_n * _n)
 	var norms := PackedVector3Array(); norms.resize(_n * _n)

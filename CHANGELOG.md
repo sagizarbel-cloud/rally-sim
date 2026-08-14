@@ -20,6 +20,56 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-15 (C1 — the ground finally has texture: washboard, ISO gravel/tarmac noise, tyre enveloping)
+
+**"The rally loop was a smooth floor with a friction number" — that's the bug this closes.**
+Outside the centre deformable patch the collision grid is 2.25 m/cell, so no amount of suspension
+tuning (Arc B) could ever put real bump feel under the tyres; C1 adds a procedural roughness FIELD
+sampled per wheel and injected into the suspension raycast's ground distance, not baked geometry -
+repeatable (same bump every lap, so the stage stays learnable), and free of collider resolution.
+
+**C1.0 first: a real arc-length `Centreline` (`scripts/centreline.gd`), not a theta hack.** C1
+models washboard as `sin(2*PI*s/lambda)` with `s` = distance along the road; the only `s` that
+existed before this was theta-derived, and Arc D was always going to replace that with true spline
+arc length. Building the real thing first (moved forward from Arc D's D2 on 2026-08-13, see
+`docs/PLAN-stages-ground-map.md` §6.2) means the existing map's washboard ridges cannot silently
+shift out from under a drive-verified feel later. It reproduces the direct polar formula to
+**0.0000 mm** on both circuits and costs 1.05 ms/tick for 4 wheels x 120 Hz of `nearest_point`
+against the 1.84 ms/tick baseline - real but budgeted, thanks to a spatial grid instead of brute
+force.
+
+**The field itself: ISO 8608 broadband noise + washboard on gravel, joints/patches on tarmac.**
+One physically meaningful coefficient per surface (`road_class_gravel` 128, `road_class_tarmac` 4,
+roughly ISO class D vs A/B) sets an octave-spaced noise spectrum instead of a pile of bump knobs.
+Washboard corrugation reuses **`wear.gd`'s own corner/braking-zone mask** (new `wear.is_tracked`)
+so the line that gets worn is the line that gets ribbed - no second mask invented.
+
+**Enveloping filter, measured, not assumed: a tyre bridges anything shorter than its own contact
+patch.** Sampling 9 points across `contact_patch_len` (0.2 m) and combining with a peak-biased
+weighted mean, a synthetic 3 cm x 4 cm bump ridden dead-centre comes through at only **31% of its
+raw depth**, while a 0.6 m washboard crest comes through at **83%** - texture survives, buzz gets
+filtered, confirmed by feeding both synthetic profiles through the actual filter function.
+
+**Injection is one line in `vehicle_m2.gd`: shift the raycast's `hit_pos`, not add a force.**
+Everything downstream (spring, damper, B3's bump stop, `Fz`, load-sensitive grip, weight transfer,
+tyre heat/wear) inherits it for free and correctly, and `w.contact_point` moves with it so dust,
+tyre marks, terrain dig and audio all read the same offset ground. New Tab row `roughness_gain`
+(default 1.0) is the phase's whole A/B - 0 skips the sample and is bit-for-bit the pre-C1 car.
+Excluded over the centre deformable patch via a blend query (`stage.deformable_patch_factor`), not
+a hardcoded radius, so `terrain.gd`'s real geometry there is never double-counted.
+
+**Headless probes, all six PASS** (spectrum, enveloping, repeatability, centreline identity,
+`nearest_point` cost, travel budget) - full numbers in `docs/PLAN-drivetrain-suspension.md` §9.
+**One honest caveat on the travel-budget probe:** its synthetic autopilot only sustains ~45 km/h
+average on the rally loop (a curvature-governed pure-pursuit driver, not a racing line), well
+under the 100 km/h B2/B3 measured at - so while `roughness_gain=0` reproduces B3's baseline within
+1% (22.8 vs 23.1 kN peak, 4/4 pegged either way, confirming the injection is truly inert at zero),
+the gain=1 comparison (22.6 kN, slightly FEWER bottomed frames, not more) is suggestive rather than
+load-bearing. **This is a feel phase - the real verdict is the user's drive**, per the checklist in
+the plan: is washboard felt as a handling event under braking into a dirt corner, does the rally
+loop read as a surface at speed, does tarmac stay smooth-but-alive rather than dead glass, is there
+no buzz at parking speed or 250 km/h, and is bottoming no worse than B3's baseline.
+
 ## 2026-08-14 (particle density and cost — measured, not guessed)
 
 **These particles are FILL-RATE bound, not count bound. That is the whole story, and it should be
