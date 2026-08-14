@@ -246,6 +246,31 @@ or HELP lines yet — `tuning_panel.gd` was held by the B2 session at the time. 
 free, per the convention.* **Not yet drive-tested — this is a visual change and only driving can
 judge it.**
 
+## 2026-08-13 (slide fix — new lever + a latent bug found)
+
+**`_mf_peak_u` was silently clamping, putting the force peak in the wrong place.** Latent bug, no
+symptom until now. The solve bisects over a hard-coded `[0, 60]` bracket, but the peak parameter
+grows fast as the Pacejka shape factor C falls: C 1.65 -> ~4, 1.40 -> ~20, **1.20 -> ~73, 1.10 ->
+~181**. Anything below C ~1.3 hit the ceiling, so the derived B came out too small and the force
+peaked LATER than the exported angle asked for — measured 17.3 deg at C 1.20 and **42.3 deg at
+C 1.10**, against a requested 14. It never bit before because Cx (1.65) and Cy (1.40) both sit
+inside the bracket; it would have bitten the moment anyone lowered a shape factor. The bracket is
+now derived from C instead of fixed, and the peak holds at 14.0 deg at every C tested.
+
+**New lever for "the car lets go too easily once sideways": `cy_gravel`.** The lateral curve's
+post-peak SHAPE is now a surface property, like its peak location already was. `Cy` is the tarmac
+shape, `cy_gravel` the gravel one, both on the Tab panel, and `_lat_shape()` returns (B, C) per
+wheel so the two stay consistent. **Default `cy_gravel` = 1.40 = identical to the previous car**,
+verified — it is new tuning surface, not a feel change.
+What it buys, measured as the RESTORING SLOPE per degree past the peak (negative = sliding more
+gives less grip, so the slide amplifies itself): C 1.40 gives -0.0006 to -0.0011/deg, C 1.20 about
+halves that to -0.0005/-0.0006, and C 1.10 nearly removes it at -0.0002/-0.0001. The peak stays
+at 14 deg throughout, so this forgives an overshoot WITHOUT making the tyre unrealistically sticky.
+**Framing that matters for tuning:** the dominant term is still `peak_alpha_gravel`, because it
+decides where the strongly self-correcting region ENDS — the old By=10 car had roughly +0.006/deg
+of restoring gradient still pulling at 25 deg, where the B4 car has -0.0009. `cy_gravel` shapes
+what happens beyond the peak; `peak_alpha_gravel` decides where beyond starts.
+
 ## 2026-08-13 (B4 diagnosis — NOT yet resolved)
 
 **"Much easier to lose control of the slide", "maintaining a good entry has got harder" after B4.**

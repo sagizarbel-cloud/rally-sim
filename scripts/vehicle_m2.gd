@@ -156,7 +156,15 @@ class_name VehicleM2
 # beat between turning in and the car taking a set, and a flick cannot be timed. Longitudinal
 # already has natural lag through the wheel-spin ODE; this is the missing lateral half.
 @export var sigma_lat := 0.55               # m, relaxation length (~1.6x wheel radius)
-@export var Cy := 1.4
+# The Pacejka SHAPE factor: how sharply the lateral curve falls AFTER its peak. The curve settles
+# at sin(C*pi/2) of peak at large slip - C 1.40 -> 0.81, C 1.20 -> 0.95 - so a lower C is a flatter,
+# more forgiving tyre that keeps working when you overshoot the peak. Loose surfaces behave that
+# way in reality: the gravel layer itself shears, which spreads the peak out instead of letting go
+# cleanly. Splitting it per surface is what lets gravel forgive a slide WITHOUT moving the peak
+# (which is what `peak_alpha_*` does) and without touching tarmac's sharper breakaway.
+@export var Cy := 1.4                       # lateral curve shape on TARMAC
+@export var cy_gravel := 1.4                # lateral curve shape on GRAVEL (lower = more forgiving
+                                            # past the peak). Default matches Cy = today's car.
 @export var Ey := 0.97
 @export var roll_resist := 0.015
 
@@ -811,7 +819,14 @@ func _mf_peak_u(C: float, E: float) -> float:
 	# desired peak-slip location instead of hand-tuning it: B = u_star / peak_slip
 	var target := tan(PI / (2.0 * maxf(C, 1.01)))
 	var lo := 0.0
+	# The bracket has to SCALE WITH C: u* grows fast as C falls (C 1.65 -> ~4, 1.40 -> ~20,
+	# 1.20 -> ~73, 1.10 -> ~181), and a fixed upper bound silently clamps the solve, which puts
+	# the derived B - and therefore the force peak - in the wrong place with nothing to show for
+	# it. For large u the equation is dominated by the linear term, so (target - E*pi/2)/(1-E) is
+	# a close analytic estimate of where the root sits; bracket generously above it.
 	var hi := 60.0
+	if E < 0.999:
+		hi = maxf(hi, (target - E * PI * 0.5) / (1.0 - E) * 1.5 + 20.0)
 	for _i in range(40):
 		var mid := 0.5 * (lo + hi)
 		if (1.0 - E) * mid + E * atan(mid) < target:
@@ -948,16 +963,18 @@ func _launch_setup(split: float, ratio: float, t_fric: float) -> Vector2:
 	var t_need := clutch_margin * t_wheel / maxf(absf(ratio) * driveline_eff, 0.001) + t_fric
 	return Vector2(maxf(sr / maxf(n, 1.0), 0.02), _rpm_for_torque(t_need))
 
-func _by_at(w: Wheel) -> float:
-	# B4: derive the lateral Pacejka B from the surface's peak-slip-ANGLE, blended by grip exactly
-	# as the longitudinal bxw is. Same mechanism, same blend, so the two axes stay consistent.
+func _lat_shape(w: Wheel) -> Vector2:
+	# (By, Cy) for the surface under this wheel. Both blend on the same grip factor the longitudinal
+	# Bx uses, so the lateral curve's peak LOCATION and its post-peak SHAPE are surface properties
+	# together. B is derived from the blended peak ANGLE using the blended C, so the peak lands on
+	# peak_alpha_* whatever the shape factor is - the two knobs stay independent.
 	var sg := 1.0
 	if w.contact and surface_source != null:
 		sg = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
-	var u := _mf_peak_u(Cy, Ey)
-	var b_t := u / maxf(deg_to_rad(peak_alpha_tarmac), 0.01)
-	var b_g := u / maxf(deg_to_rad(peak_alpha_gravel), 0.01)
-	return lerpf(b_g, b_t, clampf((sg - 1.15) / 0.25, 0.0, 1.0))
+	var t := clampf((sg - 1.15) / 0.25, 0.0, 1.0)
+	var c := lerpf(cy_gravel, Cy, t)
+	var a := lerpf(peak_alpha_gravel, peak_alpha_tarmac, t)
+	return Vector2(_mf_peak_u(c, Ey) / maxf(deg_to_rad(a), 0.01), c)
 
 func _understeer_gradient() -> float:
 	# K_us [s^2/m] for the bicycle-model reference yaw rate psi_dot = v*delta / (L + K_us*v^2):
@@ -970,7 +987,8 @@ func _understeer_gradient() -> float:
 	var cr := 0.0
 	for w in _wheels:
 		var fz: float = maxf(w.Fz, 1.0)
-		var ca: float = _mu_load(mu_lat, fz) * fz * Cy * _by_at(w)
+		var ls: Vector2 = _lat_shape(w)
+		var ca: float = _mu_load(mu_lat, fz) * fz * ls.y * ls.x
 		if w.steer:
 			wf += fz
 			cf += ca
@@ -1586,7 +1604,8 @@ func _physics_process(delta: float) -> void:
 		# lags at all. v is floored at slip_ref_speed so it cannot oscillate at parking speed.
 		var v_roll := maxf(absf(v_long), slip_ref_speed)
 		w.alpha_rel += (w.slip_angle - w.alpha_rel) * clampf(v_roll / maxf(sigma_lat, 0.01) * delta, 0.0, 1.0)
-		var Fy := -_mf(w.alpha_rel, _by_at(w), Cy, Ey, muy * Fz)
+		var lat: Vector2 = _lat_shape(w)
+		var Fy := -_mf(w.alpha_rel, lat.x, lat.y, Ey, muy * Fz)
 		# elliptical combined-slip limit
 		var nx := Fx / (mux * Fz + 0.001)
 		var ny := Fy / (muy * Fz + 0.001)
