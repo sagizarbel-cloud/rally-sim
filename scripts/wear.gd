@@ -31,6 +31,9 @@ var _mm: MultiMeshInstance3D
 var _cell_of: PackedInt32Array           # multimesh instance -> wear index
 var _last: Array = []                    # last contact point per wheel (bridges short air-gaps -> continuous line)
 var _last_ok: Array = []
+var _dirty: Dictionary = {}              # wear cells changed since the last overlay push
+var _inst_of: Dictionary = {}            # wear cell index -> multimesh instance (reverse of _cell_of)
+var overlay_on := true                   # [F10] toggles the worn-line overlay, for A/B profiling
 
 func _ready() -> void:
 	_center = stage.road_center
@@ -121,7 +124,10 @@ func _accum(x: float, z: float, work: float, dt: float) -> void:
 	var idx := _cell(x, z)
 	if idx < 0:
 		return
-	_wear[idx] = minf(_wear[idx] + wear_rate * work * dt, wear_full)
+	var before: float = _wear[idx]
+	_wear[idx] = minf(before + wear_rate * work * dt, wear_full)
+	if _wear[idx] != before:
+		_dirty[idx] = true               # only changed cells get pushed to the GPU - see _update_visual
 
 func is_tracked(x: float, z: float) -> bool:
 	# C1: washboard forms where repeated braking/accelerating traffic packs the surface - the same
@@ -176,6 +182,8 @@ func _build_visual() -> void:
 		for j in range(lat_bins):
 			cells.append(i * lat_bins + j)
 	_cell_of = cells
+	for k in range(cells.size()):
+		_inst_of[cells[k]] = k
 
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -212,11 +220,27 @@ func _build_visual() -> void:
 	add_child(_mm)
 
 func _update_visual() -> void:
-	if _mm == null:
+	# Push ONLY the cells that changed this frame. This used to walk all ~5900 tracked cells every
+	# physics frame, which is 120 sweeps a second of work that is almost entirely unchanged - and it
+	# got WORSE the more of the line was worn in, because the "skip unworn" early-out stopped firing.
+	# Measured: 0.24 ms/frame with a fresh line rising to 0.57 ms once fully worn (28-68 ms of CPU
+	# per second at 120 Hz), against 0.0002 ms/frame for the four cells the wheels actually touch.
+	if _mm == null or _dirty.is_empty():
 		return
 	var mm := _mm.multimesh
-	for k in range(_cell_of.size()):
-		var wn := _wear[_cell_of[k]] / wear_full
-		if wn <= 0.001:
+	for idx in _dirty.keys():
+		var k = _inst_of.get(idx, -1)
+		if k == null or int(k) < 0:
 			continue
-		mm.set_instance_color(k, Color(0.08, 0.055, 0.04, clampf(wn * 1.05, 0.0, 0.84)))   # dark worn dirt
+		var wn: float = _wear[int(idx)] / wear_full
+		mm.set_instance_color(int(k), Color(0.08, 0.055, 0.04, clampf(wn * 1.05, 0.0, 0.84)))   # dark worn dirt
+	_dirty.clear()
+
+func _unhandled_input(e: InputEvent) -> void:
+	# [F10]: hide the worn-line overlay. Paired with [F9] on the effects node so a frame-rate drop
+	# can be attributed by elimination while driving, instead of guessed at.
+	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_F10:
+		overlay_on = not overlay_on
+		if _mm != null:
+			_mm.visible = overlay_on
+		print("[PERF] worn-line overlay: %s" % ("ON" if overlay_on else "OFF"))

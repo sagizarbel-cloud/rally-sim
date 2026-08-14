@@ -70,6 +70,44 @@ the plan: is washboard felt as a handling event under braking into a dirt corner
 loop read as a surface at speed, does tarmac stay smooth-but-alive rather than dead glass, is there
 no buzz at parking speed or 250 km/h, and is bottoming no worse than B3's baseline.
 
+## 2026-08-15 (frame-rate drops on loose surfaces — two real costs found, plus an A/B instrument)
+
+Symptom reported: *"massive fps drops when going over dirt/grass/gravel"*, and crucially *"even
+after dust plumes seem to disappear"*. That last clause is the useful one — it rules out anything
+whose cost ends with the visible particles, and points at work that continues.
+
+**1. The worn-line overlay was re-pushing every cell, every physics frame.** `wear.gd
+_update_visual()` walked all ~5900 tracked cells at 120 Hz, calling `set_instance_color` on each
+worn one. Worse, it DEGRADED as you drove: the "skip unworn cells" early-out stopped firing as the
+line developed. Measured: **0.24 ms/frame with a fresh line, rising to 0.57 ms once fully worn** —
+28 to 68 ms of CPU per second — against **0.0002 ms/frame** for the four cells the wheels actually
+touch. Now only changed cells are pushed (a dirty set filled in `_accum`), which is the same
+picture for ~1/2800th of the work. This is dirt-only and independent of particles, so it matches
+the "persists after the dust is gone" part of the symptom exactly.
+
+**2. Faded particles still cost full fill rate.** A particle at alpha 0.02 is rasterised exactly
+like an opaque one — the GPU shades every pixel of a 4.4 m sprite to blend nothing. With a 4.6 s
+plume life and a long fade, the plume kept costing full price for **seconds after it looked gone**.
+The growth curve now peaks mid-life and collapses to half diameter over the fade, so the invisible
+tail costs a quarter of the area it did. Measured: **peak diameter unchanged at 4.42 m**, whole-life
+area-seconds 941 → 820 (87%), and in the faded half specifically **653 → 434 (66%)**.
+Also dropped `draw_order` from VIEW_DEPTH back to INDEX: a per-frame depth sort of ~1900 particles
+buys nothing here, because the puffs are near-identical in colour so mis-ordered blending is
+invisible.
+
+**3. An A/B instrument, because the rest cannot be attributed from a description.**
+- **[F9]** kills every surface effect outright (dirt/dust plumes, dirt/gravel particles, asphalt
+  smoke) and prints the particle-slot count.
+- **[F10]** hides the worn-line overlay.
+Neither touches the input map, so nothing can clash. Drive the rally loop watching the frame
+counter and toggle one at a time: if F9 restores the frame rate the cost is particle fill; if F10
+does, it is the overlay; if neither does, it is neither and the next suspects are the deformable
+centre patch (`terrain.gd`) and the per-wheel `ground_color()` sampling.
+
+**Not yet attributed beyond these two.** GPU particles do not simulate under `--headless`, so
+fill-rate cost cannot be measured here — only reasoned about and reduced. The toggles turn the
+remaining question into one drive.
+
 ## 2026-08-14 (particle density and cost — measured, not guessed)
 
 **These particles are FILL-RATE bound, not count bound. That is the whole story, and it should be

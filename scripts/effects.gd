@@ -82,15 +82,20 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 @export var release := 1.60          # s for a CLOUD to fade back down (see _smooth)
 @export var release_gravel := 0.14   # s for GRAVEL PARTICLES - stones stop when the slip does
 
-# `grow` is [birth, knee_t, knee_frac, 1.0] as FRACTIONS of the final diameter: born at `birth`,
-# reaching `knee_frac` by `knee_t` of its life, then easing to full size. The knee is what makes a
-# puff expand fast at first and then settle, the way real dust does.
+# `grow` is [birth, peak_t, peak_frac, death] as FRACTIONS of the layer's diameter: born at
+# `birth`, reaching `peak_frac` by `peak_t` of its life, then easing to `death`.
+# THE TAIL SHRINKS ON PURPOSE, and it is a fill-rate fix, not a look choice. A particle that has
+# faded to alpha 0.02 costs exactly as much fill as an opaque one - the GPU still rasterises every
+# pixel of a 4.4 m sprite to blend nothing. With a 4.6 s life and a long fade, the plume kept
+# costing full price for seconds after it looked gone, which is the "drops persist after the dust
+# disappears" symptom. Collapsing the diameter to half over the fade quarters the area of that
+# invisible tail while the visible part of the life is unchanged.
 const LAYERS := {
 	"plume":  {"amount": 240, "life": 4.6, "gravity": -0.45, "rise": 2.4,
-			   "grow": [0.25, 0.32, 0.74, 1.0], "alpha": 0.52, "spread": 36.0, "damp": [1.1, 2.6],
+			   "grow": [0.25, 0.45, 1.0, 0.50], "alpha": 0.52, "spread": 36.0, "damp": [1.1, 2.6],
 			   "box": Vector3(0.32, 0.14, 0.32), "prio": 1, "spin": 20.0, "turb": 0.55},
 	"smoke":  {"amount": 170, "life": 3.0, "gravity": -0.30, "rise": 3.0,
-			   "grow": [0.25, 0.35, 0.72, 1.0], "alpha": 0.36, "spread": 30.0, "damp": [1.4, 3.0],
+			   "grow": [0.25, 0.50, 1.0, 0.60], "alpha": 0.36, "spread": 30.0, "damp": [1.4, 3.0],
 			   "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 16.0, "turb": 0.30},
 	"gravel": {"amount": 70, "life": 0.55, "gravity": -19.0, "rise": 9.0,
 			   "grow": [1.0, 0.5, 1.0, 1.0], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
@@ -107,6 +112,7 @@ var _marks: Array = []
 var _lay_accum := 0.0
 var _build := [0.0, 0.0, 0.0, 0.0]   # ASPHALT SMOKE column build-up per wheel, 0..1
 var _sz := {}                        # smoothed speed-driven quantities (see _physics_process)
+var enabled := true                  # [F9] master off-switch, for attributing frame-rate drops
 
 func _ready() -> void:
 	_atlas = _make_puff_atlas(atlas_cells, atlas_px)
@@ -115,6 +121,23 @@ func _ready() -> void:
 		_sm[lname] = [0.0, 0.0, 0.0, 0.0]
 	_build_marks()
 	_sun = _find_sun()
+
+func _unhandled_input(e: InputEvent) -> void:
+	# [F9]: kill every surface effect outright. Paired with [F10] on the wear node, this makes a
+	# frame-rate drop ATTRIBUTABLE while driving - toggle one, watch the counter - instead of
+	# guessed at from a description. Neither key touches the input map, so nothing else can clash.
+	if not (e is InputEventKey and e.pressed and not e.echo):
+		return
+	if e.keycode == KEY_F9:
+		enabled = not enabled
+		var live := 0
+		for lname in _em.keys():
+			for p in _em[lname]:
+				p.emitting = false
+				p.visible = enabled
+				live += p.amount
+		print("[PERF] surface effects: %s  (%d particle slots across %d emitters)" % [
+			"ON" if enabled else "OFF", live, _em.size() * 4])
 
 func _find_sun() -> DirectionalLight3D:
 	var p := get_parent()
@@ -262,7 +285,9 @@ func _make_emitter(spec: Dictionary) -> GPUParticles3D:
 	# and it is what pays for the density above.
 	p.fixed_fps = sim_fps
 	p.interpolate = true
-	p.draw_order = GPUParticles3D.DRAW_ORDER_VIEW_DEPTH    # correct back-to-front blending
+	# Index order, not VIEW_DEPTH: a per-frame depth sort of ~1900 particles buys very little here,
+	# because the puffs are near-identical in colour and alpha so mis-ordered blending is invisible.
+	p.draw_order = GPUParticles3D.DRAW_ORDER_INDEX
 	# A generous fixed visibility box. Without one Godot recomputes the bounds, and a moving emitter
 	# with world-space particles can otherwise cull a plume that is still perfectly visible.
 	p.visibility_aabb = AABB(Vector3(-25.0, -4.0, -25.0), Vector3(50.0, 22.0, 50.0))
@@ -405,7 +430,7 @@ func ground_color(x: float, z: float) -> Color:
 
 func _physics_process(delta: float) -> void:
 	_fade_marks(delta)
-	if car == null or stage == null:
+	if car == null or stage == null or not enabled:
 		return
 	var wheels: Array = car.get_wheels()
 	if wheels.is_empty():
