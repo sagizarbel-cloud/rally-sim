@@ -271,10 +271,15 @@ decides where the strongly self-correcting region ENDS — the old By=10 car had
 of restoring gradient still pulling at 25 deg, where the B4 car has -0.0009. `cy_gravel` shapes
 what happens beyond the peak; `peak_alpha_gravel` decides where beyond starts.
 
-## 2026-08-13 (B4 diagnosis — NOT yet resolved)
+## 2026-08-13 (B4 diagnosis — RESOLVED, see the entry above)
 
 **"Much easier to lose control of the slide", "maintaining a good entry has got harder" after B4.**
-Diagnosed, not yet fixed — awaiting the user's choice of remedy. Measured cause: **the old fixed
+**RESOLVED 2026-08-13 — re-drive verdict "feels good", on the UNCHANGED B4 defaults** (9/14 deg
+peaks, `sigma_lat` 0.55, `cy_gravel` 1.40). The fix was the `cy_gravel` lever plus the
+`_mf_peak_u` bracket bug above; the user did not need to move a slider in the end, and noted they
+may tune again later. **If it comes back: `peak_alpha_gravel` first (it decides where the
+self-correcting region ends), then `cy_gravel` (it shapes what happens past the peak).**
+Measured cause: **the old fixed
 `By = 10` put the lateral force peak at 114.8 degrees of slip angle**, i.e. beyond ANY angle a car
 can reach. Every slip angle you could actually drive was on the RISING side of the curve, so grip
 kept increasing the further you slid — at 40 deg you still had 0.988 of peak and climbing. The

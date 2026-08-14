@@ -103,11 +103,15 @@ numbers against the recorded baseline, and stop. The hydraulic stop is not C1's 
 
 ## State of the tree
 
-Arc A complete and drive-verified. **Arc B: B1, B2 and B3 done and drive-verified; B4 implemented
-and awaiting its drive verdict; B5's prune and panel audit done, but its value-bake and the §8
-end-to-end drive still need the user.** The B3 hydraulic-bump-stop revision is outstanding and is
+Arc A complete and drive-verified. **Arc B: B1–B4 all done and drive-verified. B5 is prune-,
+audit- and bake-complete; only its §8 end-to-end drive-through is outstanding, and that is the
+user's to run — it does not block C1.** Every export you will meet is a drive-verified value, so
+treat them as calibration, not as defaults to improve on. The B3 hydraulic-bump-stop revision is outstanding and is
 NOT C1's job. Physics 120 Hz, ~1.84 ms/tick measured. Suspension travel is 320 mm.
 Baseline to compare the travel probe against (rally loop, ~100 km/h, current build): 4/4 corners
 pegged, 177 frames on the stops, peak Fz 23.1 kN.
 `CHANGELOG.md` is the forensic history — grep it by SYMPTOM before diagnosing anything that smells
-like a recurrence.
+like a recurrence. Two entries are directly relevant to C1 and worth reading before you start:
+the B4 slide diagnosis (why the lateral peak location dominates how catchable the car is) and the
+`_mf_peak_u` bracket bug (a fixed search range silently mis-placed a derived curve peak — the same
+class of mistake C1's derived `Bx`/washboard maths could make).

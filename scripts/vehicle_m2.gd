@@ -164,7 +164,7 @@ class_name VehicleM2
 # (which is what `peak_alpha_*` does) and without touching tarmac's sharper breakaway.
 @export var Cy := 1.4                       # lateral curve shape on TARMAC
 @export var cy_gravel := 1.4                # lateral curve shape on GRAVEL (lower = more forgiving
-                                            # past the peak). Default matches Cy = today's car.
+											# past the peak). Default matches Cy = today's car.
 @export var Ey := 0.97
 @export var roll_resist := 0.015
 

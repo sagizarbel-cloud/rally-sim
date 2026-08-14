@@ -1279,14 +1279,25 @@ User drive-through, all in one session, keyboard:
   those sources with caution — one quotes gravel rates as "450–600 N/mm", which is an order of
   magnitude above a plausible wheel rate and is almost certainly a units error.
 
-- [ ] B4 — Relaxation length + By + CoM — implemented 2026-08-13, **awaiting drive verdict**
+- [x] B4 — Relaxation length + By + CoM — DONE 2026-08-13 (drive-verified: "feels good")
   (`./check.sh` clean; probe PASS, removed). Relaxation measured at 0.533 m (8 m/s) and 0.500 m
   (30 m/s) to reach 63% of a step — same distance at both speeds, proving it is a distance
   property. Derived `By` peaks land on exactly 9.0 deg (tarmac) and 14.0 deg (gravel). Straight-
   line stability 0.000 rad/s peak yaw at both 1 m/s and 250 km/h. `com_height` is now a slider,
   still at -0.45, for the A/B the plan asks for. `hs_blowoff` baked to 0.45 per the B2 drive.
-- [ ] B5 — Bake, prune, end-to-end — prune + audit DONE 2026-08-13; **the bake and the §8
-  end-to-end drive still need the user.** Prune found nothing outstanding: every retired system
+  **Post-drive follow-up, same day:** the first B4 drive reported "much easier to lose control of
+  the slide, harder to hold a good entry". Diagnosed and resolved without changing the B4 defaults
+  — see the CHANGELOG. Root cause: the retired `By = 10` put the lateral peak at **114.8 deg**, so
+  every drivable slip angle sat on the RISING side and a slide was always self-correcting; B4's
+  realistic 9/14 deg peaks flipped that to the falling side. A `cy_gravel` lever was added (post-
+  peak curve shape per surface, default = `Cy` = no change) and a latent `_mf_peak_u` bracket bug
+  fixed. Re-drive verdict: **"feels good"** on the shipped defaults, with the user noting they may
+  tune again later — `peak_alpha_gravel` first, then `cy_gravel`.
+- [ ] B5 — Bake, prune, end-to-end — prune + audit DONE 2026-08-13, and **the bake is now settled
+  too**: every phase's defaults are the drive-verified values (B1 1.4/1.6 Hz + zeta split, B2
+  0.55/0.85 with knee 0.08 and `hs_blowoff` 0.45, B3 320 mm travel + 3 g stop, B4 9/14 deg peaks,
+  `sigma_lat` 0.55, `Cy` = `cy_gravel` = 1.4, `com_height` -0.45). **Only the §8 end-to-end
+  drive-through still needs the user** — after that Arc B closes. Prune found nothing outstanding: every retired system
   was already removed by the phase that retired it (`_t_drive`, `lsd_lock`, `rear_grip_cut`,
   `brake_force`, `spring_k`/`damper_c`/`arb_*`, interim `zeta`) — only explanatory comments
   remain. Panel audit: 83 rows, 83 HELP entries, no gaps and no orphans. The two M1-only rows are
