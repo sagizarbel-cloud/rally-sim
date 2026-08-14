@@ -22,6 +22,21 @@ there is a separate dirt circle, so "dirt loop" reads as that one and has caused
 - Validate geometry/detection with a temporary `print()` probe, then REMOVE it before finishing.
 - **Update `CHANGELOG.md`** when a plan phase closes, a bug is fixed, or a measured finding changes what we believe about the car — including the user's drive verdicts, which are otherwise lost in chat. `docs/ROADMAP.md` stays the authoritative state; the changelog is how it got there. **It is a forensic tool** — when something breaks or an old bug returns, GREP IT FIRST for hints before touching code, and write every entry so that works: name the symptom in driving words ("pogos above 400 km/h", "inside rear cooking on gentle turns"), not just the fix, and record the measured numbers so a recurrence is recognisable when they drift back.
 
+## Surface-effect names - use these EXACTLY, never mix them
+Four separate effects, four separate systems (`scripts/effects.gd`). They have been confused
+before; the user named them so that a future session cannot blur them together:
+
+| Name | Surface | What it is | LAYERS key |
+|---|---|---|---|
+| **asphalt smoke** | tarmac | white-grey burnt rubber from long drifts, spinouts, hard stops | `smoke` |
+| **asphalt tire tracks** | tarmac | the dark rubber marks laid on the road (a MultiMesh, not particles) | marks |
+| **dirt/dust plumes** | gravel/dirt | the big billowing dust cloud the car trails | `plume` |
+| **dirt/gravel particles** | gravel/dirt | small stones and sand thrown ballistically from the tyre | `gravel` |
+
+Never call the plume "smoke", never call the gravel particles "dust", and never call the tire
+tracks "skid marks" in a way that could be read as the dust layer. When the user reports a problem
+with one of these, confirm WHICH of the four before changing anything - the fixes are unrelated.
+
 ## GDScript / Godot gotchas (these cause real bugs)
 - **Tabs, not spaces** for indentation — never mix.
 - `:=` CANNOT infer a type from a Variant (`dict[key]`, untyped `stage.*` calls, `Array` elements) → use `var x: Type = ...`.

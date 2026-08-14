@@ -1,86 +1,90 @@
 extends Node3D
 class_name SurfaceEffects
-## M11 - surface effects, built as a small data-driven particle system rather than three
-## hand-wired emitters. A LAYER is declared once in `LAYERS` (size, life, gravity, growth, colour
-## source, render order) and `_build_layer()` turns that declaration into four per-wheel emitters.
-## Adding a fourth layer - water spray, snow, mud - is a dictionary, not new code.
+## M11 - the four surface effects, as a data-driven particle system. NAMES MATTER HERE; see the
+## table in CLAUDE.md. These four are separate systems and must not be conflated:
 ##
-##   DUST  (loose surfaces) - the gravel plume. Needs SPEED and SLIP: a rally car trailing dust is
-##                            sliding, and dust at walking pace looks wrong.
-##   SMOKE (hard surfaces)  - white-grey burnt rubber from long drifts, spinouts and hard stops.
-##                            Deliberately thinner and smaller than dust.
-##   GRIT  (loose surfaces) - stones and sand thrown ballistically. Needs slip, stops with it.
+##   "plume"  - DIRT/DUST PLUMES      : the big billowing dust cloud trailed on gravel/dirt.
+##   "gravel" - DIRT/GRAVEL PARTICLES : stones and sand flicked ballistically from the tyre.
+##   "smoke"  - ASPHALT SMOKE         : white-grey burnt rubber on tarmac.
+##   marks    - ASPHALT TIRE TRACKS   : the dark rubber marks on the road (a MultiMesh).
+##
+## SIZES ARE IN TYRE DIAMETERS, not metres. The user specifies them that way ("4-6 times larger
+## than the tires", "half a tire", "2x tire size") and it is the honest unit: it stays correct if
+## the wheel size ever changes. The particle mesh is a 1x1 quad so a particle's SCALE *is* its
+## diameter in metres, which keeps the arithmetic readable.
 ##
 ## Look, and why (researched, see CHANGELOG):
-##  * Sprites are a 2x2 ATLAS of puffs, each puff a CLUSTER OF OVERLAPPING CIRCLES - which is what
-##    a real dust or smoke silhouette is. `BILLBOARD_PARTICLES` + `anim_offset` gives every
-##    particle its own random frame; a single texture per emitter made every particle identical,
-##    which is what read as "one weird oblong shape".
-##  * Particles are born SMALL and GROW while fading to nothing (`scale_amount_curve` up,
-##    `color_ramp` alpha down). Ending on alpha 0 is the single biggest factor in whether a
-##    particle effect reads as believable.
-##  * Emission is from a small BOX at each contact patch, not a point, so a cloud has body.
-##  * Particles are UNSHADED but tinted by the sun's current colour and energy. Shaded billboards
-##    are lit through a camera-facing normal, so their brightness changes as you swing the camera -
-##    which is what made the colour look wrong. Tinting keeps them in step with the time of day
-##    without that artefact.
+##  * Sprites are a 2x2 ATLAS of puffs, each a CLUSTER OF OVERLAPPING CIRCLES. `BILLBOARD_PARTICLES`
+##    + `anim_offset` gives every particle its own random frame; one texture per emitter made every
+##    particle identical, which read as a single oblong blob.
+##  * Particles are born small and GROW while fading to alpha 0 - the single biggest factor in
+##    whether a particle effect reads as believable.
+##  * GPUParticles3D, for `amount_ratio`: it scales emission density continuously with no restart.
+##    CPUParticles3D has no equivalent.
+##  * Particles are UNSHADED but tinted by the sun, because shaded billboards are lit through a
+##    camera-facing normal and change brightness as the camera swings.
 
 var car                              # untyped so get_wheels() resolves dynamically
 var stage                            # RallyStage: grip_at() + _surface_color()
 
-# --- gates: what it takes to disturb the surface ------------------------------------------
+# --- slip, shared by every layer ----------------------------------------------------------
 @export var slip_ref := 6.0          # m/s of contact-patch slip for a full-intensity effect
 @export var slip_floor := 1.2        # m/s below which the tyre is gripping and throws nothing
-@export var dust_speed_min := 5.6    # m/s (20 km/h) - dust starts here, as asked
-@export var dust_speed_ref := 26.0   # m/s (~94 km/h) at which the slip gate is fully open
-# Dust gets BIGGER and MORE FREQUENT with speed, up to a ceiling. Frequency has to scale because
-# particles are left in world space: at 100 km/h the same emission rate is smeared over three
-# times the distance it covers at 30, so a fixed rate visibly thins out exactly when the plume
-# should be at its biggest. Emission per METRE is the honest quantity, hence the speed ramp.
-@export var dust_size_start := 0.85  # scale multiplier at 20 km/h (slightly bigger than before)
-@export var dust_size_ceiling := 2.3 # scale multiplier once dust_size_full is reached
-@export var dust_size_full := 33.0   # m/s (~120 km/h) where size stops growing
-@export var dust_density_start := 0.35   # amount_ratio at 20 km/h
-@export var dust_density_ceiling := 1.0  # amount_ratio at dust_size_full and beyond
-@export var asphalt_grip := 1.2      # base grip above this = a hard surface: smoke, no dust
-# --- smoke (hard surfaces) ----------------------------------------------------------------
-@export var smoke_temp := 110.0      # C at which the tread starts to smoke (M7 optimum is 85)
-@export var smoke_full_temp := 165.0 # C at which heat alone smokes as hard as it ever will
-@export var smoke_power_ref := 60000.0  # W of friction power at the patch for full smoke, cold
-@export var smoke_scale := 0.55      # smoke is thinner and smaller than dust - "much less"
-# A tyre does not smoke at full volume the instant it slips: the column BUILDS while the tread is
-# under pressure and keeps drifting for a while after the pressure comes off. This accumulator is
-# that behaviour - it integrates pressure rather than tracking it, so a long drift smokes far more
-# than a quick stab, and letting off tapers instead of switching the smoke away.
-@export var smoke_build_time := 2.6  # s of sustained slip to reach a full smoke column
-@export var smoke_decay_time := 5.0  # s to subside once the pressure is off - deliberately slower
-@export var smoke_size_start := 0.75 # scale multiplier with no build-up (slightly bigger than before)
-@export var smoke_size_max := 2.0    # scale multiplier at a fully built column
-# --- skid marks ---------------------------------------------------------------------------
+@export var asphalt_grip := 1.2      # base grip above this = tarmac: smoke, no dust
+# --- DIRT/DUST PLUMES ---------------------------------------------------------------------
+# Plumes are SPEED-driven: they kick up from 20 km/h and are fully established by 40, with sliding
+# adding on top. Size is quoted in TYRE DIAMETERS and grows to a ceiling at 160 km/h.
+@export var plume_speed_start := 5.6   # m/s (20 km/h) - plumes begin
+@export var plume_speed_full := 11.1   # m/s (40 km/h) - speed gate fully open
+@export var plume_speed_ceiling := 44.4  # m/s (160 km/h) - size and rate stop growing
+@export var plume_d_min_tyres := 1.2   # plume diameter at death, in tyre diameters, at 20 km/h
+@export var plume_d_max_tyres := 6.5   # ...and at the 160 km/h ceiling (~4.2x at 100 km/h)
+@export var plume_birth_frac := 0.25   # born a quarter of its final diameter
+# Frequency has TWO parts. Per-metre: emission proportional to speed, because particles are left in
+# world space and a fixed rate is smeared over more ground the faster you go. Fluidity gain: an
+# EXTRA multiplier on top, so the plume also thickens in its own right rather than only keeping up
+# with distance - 40 km/h to 120 km/h is 3x from distance and another `fluid_gain` from this.
+@export var fluid_gain := 1.75
+# --- DIRT/GRAVEL PARTICLES ----------------------------------------------------------------
+@export var gravel_d := 0.07           # m - stones are stones; they do not scale with the tyre
+@export var gravel_speed_share := 0.22 # how much high speed alone flicks stones without sliding
+# --- ASPHALT SMOKE ------------------------------------------------------------------------
+@export var smoke_temp := 110.0        # C at which the tread starts to smoke (M7 optimum is 85)
+@export var smoke_full_temp := 165.0   # C at which heat alone smokes as hard as it ever will
+@export var smoke_power_ref := 60000.0 # W of friction power at the patch for full smoke, cold
+@export var smoke_d_birth_tyres := 0.5 # born at half a tyre diameter
+@export var smoke_d_death_tyres := 2.0 # grows to twice a tyre diameter - the BASELINE, not the max
+@export var smoke_build_gain := 1.4    # a fully built column grows beyond that baseline by this
+@export var smoke_density_floor := 0.45  # frequent from the start, not only once built up
+# A tyre does not smoke at full volume the instant it slips: the column BUILDS under pressure and
+# keeps drifting after the pressure comes off. This integrates pressure rather than tracking it.
+@export var smoke_build_time := 2.6    # s of sustained slip to reach a full column
+@export var smoke_decay_time := 5.0    # s to subside once the pressure is off - deliberately slower
+@export var smoke_scale := 0.55        # smoke stays thinner than the plumes
+# --- ASPHALT TIRE TRACKS ------------------------------------------------------------------
 @export var mark_pool := 900
 @export var mark_fade := 14.0
 @export var mark_interval := 0.03
 # --- shared -------------------------------------------------------------------------------
 @export var atlas_cells := 2         # 2x2 = 4 distinct puff sprites per atlas
-@export var atlas_px := 64           # pixels per frame
+@export var atlas_px := 64
 @export var attack := 0.18           # s for an effect to swell to a new intensity
 @export var release := 1.60          # s for a CLOUD to fade back down (see _smooth)
-@export var release_grit := 0.14     # s for GRIT - stones stop when the slip does
+@export var release_gravel := 0.14   # s for GRAVEL PARTICLES - stones stop when the slip does
 
-# A layer declaration. `grow` is start->end scale over life: >1 means the puff expands as it ages.
-# A layer declaration. `grow` is [birth, knee_t, knee_scale, death] - the puff is born at `birth`,
-# reaches `knee_scale` by `knee_t` of its life, then eases on to `death`. The knee is what makes it
-# expand FAST at first and then settle toward a ceiling, the way a real puff of dust does.
+# `grow` is [birth, knee_t, knee_frac, 1.0] as FRACTIONS of the final diameter: born at `birth`,
+# reaching `knee_frac` by `knee_t` of its life, then easing to full size. The knee is what makes a
+# puff expand fast at first and then settle, the way real dust does.
 const LAYERS := {
-	"dust":  {"amount": 90, "life": 4.6, "size": 0.52, "gravity": -0.45, "rise": 2.4,
-			  "grow": [0.75, 0.32, 2.30, 3.10], "alpha": 0.44, "spread": 36.0, "damp": [1.1, 2.6],
-			  "box": Vector3(0.32, 0.14, 0.32), "prio": 1, "spin": 20.0, "turb": 0.55},
-	"smoke": {"amount": 60, "life": 3.0, "size": 0.32, "gravity": -0.30, "rise": 1.8,
-			  "grow": [0.45, 0.35, 1.60, 2.20], "alpha": 0.30, "spread": 30.0, "damp": [1.4, 3.0],
-			  "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 16.0, "turb": 0.30},
-	"grit":  {"amount": 30, "life": 0.55, "size": 0.055, "gravity": -19.0, "rise": 9.0,
-			  "grow": [1.0, 0.5, 1.0, 0.9], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
-			  "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0, "turb": 0.0},
+	"plume":  {"amount": 150, "life": 4.6, "gravity": -0.45, "rise": 2.4,
+			   "grow": [0.25, 0.32, 0.74, 1.0], "alpha": 0.44, "spread": 36.0, "damp": [1.1, 2.6],
+			   "box": Vector3(0.32, 0.14, 0.32), "prio": 1, "spin": 20.0, "turb": 0.55},
+	"smoke":  {"amount": 100, "life": 3.0, "gravity": -0.30, "rise": 3.0,
+			   "grow": [0.25, 0.35, 0.72, 1.0], "alpha": 0.30, "spread": 30.0, "damp": [1.4, 3.0],
+			   "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 16.0, "turb": 0.30},
+	"gravel": {"amount": 40, "life": 0.55, "gravity": -19.0, "rise": 9.0,
+			   "grow": [1.0, 0.5, 1.0, 1.0], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
+			   "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0, "turb": 0.0},
 }
 
 var _em := {}                        # layer name -> Array[CPUParticles3D], one per wheel
@@ -91,8 +95,8 @@ var _mm: MultiMesh
 var _mark_next := 0
 var _marks: Array = []
 var _lay_accum := 0.0
-var _build := [0.0, 0.0, 0.0, 0.0]   # smoke column build-up per wheel, 0..1
-var _size := {}                      # layer -> smoothed scale multiplier (see _emit_layer)
+var _build := [0.0, 0.0, 0.0, 0.0]   # ASPHALT SMOKE column build-up per wheel, 0..1
+var _sz := {}                        # smoothed speed-driven quantities (see _physics_process)
 
 func _ready() -> void:
 	_atlas = _make_puff_atlas(atlas_cells, atlas_px)
@@ -186,7 +190,7 @@ func _make_emitter(spec: Dictionary) -> GPUParticles3D:
 	# node has no equivalent - its only rate control is `amount`, and writing that mid-drive
 	# restarts the system and wipes the live cloud.
 	var mesh := QuadMesh.new()
-	mesh.size = Vector2(spec["size"], spec["size"])
+	mesh.size = Vector2(1.0, 1.0)           # unit quad: a particle's SCALE is its diameter in metres
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED    # tinted by the sun instead - see _light()
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES    # required for per-particle atlas frames
@@ -279,33 +283,57 @@ func slip_frac(w, v: float, fz_ref: float) -> float:
 	var load: float = clampf(float(w.Fz) / maxf(fz_ref, 1.0), 0.0, 1.6)
 	return clampf((s - slip_floor) / maxf(slip_ref - slip_floor, 0.1), 0.0, 1.0) * load
 
-func dust_frac(v: float, vslip: float, slip_amt: float) -> float:
-	# Dust needs SPEED AND SLIP, multiplied - not added. A car pottering along a gravel road does
-	# not trail a plume, and neither does a car sliding at walking pace; the plume belongs to a
-	# rally car moving fast and sideways. The speed gate takes whichever is larger, road speed or
-	# slip speed, so a stationary burnout or a spinout still raises dust while a slow crawl cannot.
-	var work: float = maxf(v, vslip)
-	var speed_gate: float = clampf((work - dust_speed_min) / maxf(dust_speed_ref - dust_speed_min, 0.1), 0.0, 1.0)
-	return speed_gate * clampf(slip_amt, 0.0, 1.0)
+func tyre_d() -> float:
+	# Sizes are quoted in tyre diameters, so everything downstream stays correct if the wheel changes.
+	var r := 0.34
+	if car != null and car.get("wheel_radius") != null:
+		r = float(car.wheel_radius)
+	return r * 2.0
 
-func dust_scale_at(v: float) -> float:
-	# Size grows with speed to a ceiling: at 20 km/h a modest puff, at 120 km/h and beyond the
-	# full plume. Beyond the ceiling it stops growing rather than running away.
-	var t: float = clampf((v - dust_speed_min) / maxf(dust_size_full - dust_speed_min, 0.1), 0.0, 1.0)
-	return lerpf(dust_size_start, dust_size_ceiling, t)
+func plume_frac(v: float, slip_amt: float) -> float:
+	# DIRT/DUST PLUMES: speed-driven from 20 km/h, fully established by 40, sliding adds on top.
+	var s: float = clampf((v - plume_speed_start) / maxf(plume_speed_full - plume_speed_start, 0.1), 0.0, 1.0)
+	return s * lerpf(0.60, 1.0, clampf(slip_amt, 0.0, 1.0))
 
-func dust_density_at(v: float) -> float:
-	# Frequency has to rise with speed for the plume to stay dense: particles are left in world
-	# space, so a fixed rate is smeared over more ground the faster you go.
-	var t: float = clampf((v - dust_speed_min) / maxf(dust_size_full - dust_speed_min, 0.1), 0.0, 1.0)
-	return lerpf(dust_density_start, dust_density_ceiling, t)
+func plume_speed_t(v: float) -> float:
+	return clampf((v - plume_speed_start) / maxf(plume_speed_ceiling - plume_speed_start, 0.1), 0.0, 1.0)
+
+func plume_diameter_at(v: float) -> float:
+	# Final (death) diameter in METRES, from tyre diameters, growing to the 160 km/h ceiling.
+	return tyre_d() * lerpf(plume_d_min_tyres, plume_d_max_tyres, plume_speed_t(v))
+
+func plume_density_at(v: float) -> float:
+	# Per-metre emission (rate proportional to speed) TIMES a fluidity gain, so the plume thickens
+	# faster than distance alone would. Normalised so the 160 km/h ceiling lands exactly on 1.0.
+	var per_m: float = clampf(v / maxf(plume_speed_ceiling, 0.1), 0.0, 1.0)
+	var t: float = clampf((v - plume_speed_full) / maxf(33.3 - plume_speed_full, 0.1), 0.0, 1.0)
+	var gain: float = lerpf(1.0, fluid_gain, t)
+	return clampf(per_m * gain / maxf(fluid_gain, 0.01), 0.03, 1.0)
+
+func gravel_frac(v: float, slip_amt: float) -> float:
+	# DIRT/GRAVEL PARTICLES: mainly slides, but high speed alone flicks some stones too, and a slide
+	# at low speed throws fewer of them than the same slide at speed.
+	var sf: float = clampf(v / maxf(plume_speed_ceiling, 0.1), 0.0, 1.0)
+	var from_slip: float = clampf(slip_amt, 0.0, 1.0) * lerpf(0.45, 1.0, sf)
+	var from_speed: float = gravel_speed_share * clampf((sf - 0.45) / 0.55, 0.0, 1.0)
+	return clampf(from_slip + from_speed, 0.0, 1.0)
 
 func smoke_build(prev: float, press: float, dt: float) -> float:
 	# Integrates pressure instead of tracking it: a long drift builds a column, a stab does not,
-	# and letting off tapers away over smoke_decay_time rather than switching off.
+	# and letting off tapers over smoke_decay_time rather than switching off.
 	if press > 0.12:
 		return clampf(prev + press * dt / maxf(smoke_build_time, 0.05), 0.0, 1.0)
 	return clampf(prev - dt / maxf(smoke_decay_time, 0.05), 0.0, 1.0)
+
+func smoke_diameter_at(build: float) -> float:
+	# 0.5 -> 2.0 tyre diameters is the stated baseline (born half a tyre, grown to two), so it is
+	# what an unbuilt column already does; pressure then grows it BEYOND that rather than up to it.
+	return tyre_d() * smoke_d_death_tyres * lerpf(1.0, smoke_build_gain, clampf(build, 0.0, 1.0))
+
+func smoke_density_at(v: float, build: float) -> float:
+	# Frequent from the start (floor), then rising with speed and with the built column.
+	var d: float = maxf(plume_density_at(v), clampf(build, 0.0, 1.0))
+	return clampf(smoke_density_floor + (1.0 - smoke_density_floor) * d, smoke_density_floor, 1.0)
 
 func smoke_frac(temp: float, fz: float, vslip: float, grip: float) -> float:
 	var thermal := clampf((temp - smoke_temp) / maxf(smoke_full_temp - smoke_temp, 1.0), 0.0, 1.0)
@@ -370,10 +398,15 @@ func _physics_process(delta: float) -> void:
 	var kick: Vector3 = (Vector3.UP + back * 0.55).normalized()
 	var lit := _light()
 
-	# size and density track SPEED, smoothed so live particles do not visibly pop when they change
-	# (scale_min/max are shader uniforms, read every frame - not baked at spawn)
-	_size["dust"] = move_toward(float(_size.get("dust", dust_size_start)), dust_scale_at(v), delta / 0.7)
-	_size["dens"] = move_toward(float(_size.get("dens", dust_density_start)), dust_density_at(v), delta / 0.7)
+	# Speed-driven quantities, smoothed: scale_min/max and amount_ratio are shader uniforms read
+	# every frame, not values baked at spawn, so writing them raw resizes every LIVE particle at
+	# once. Easing them means a change reads as the cloud swelling rather than popping.
+	var p_d := plume_diameter_at(v)
+	var p_dens := plume_density_at(v)
+	var p_rise := lerpf(0.6, 1.7, plume_speed_t(v))     # faster cars throw it up harder, too
+	_sz["pd"] = move_toward(float(_sz.get("pd", p_d)), p_d, delta * 6.0)
+	_sz["pn"] = move_toward(float(_sz.get("pn", p_dens)), p_dens, delta / 0.7)
+	_sz["pr"] = move_toward(float(_sz.get("pr", p_rise)), p_rise, delta / 0.7)
 
 	for i in range(mini(wheels.size(), 4)):
 		var w = wheels[i]
@@ -386,26 +419,28 @@ func _physics_process(delta: float) -> void:
 		var vs: float = slip_speed(w, v)
 		var sa: float = slip_frac(w, v, fz_ref)
 		if grip > asphalt_grip:
-			_emit_layer(i, "dust", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0)
-			_emit_layer(i, "grit", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0, release_grit)
+			_emit(i, "plume", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0, 1.0)
+			_emit(i, "gravel", 0.0, delta, cp, kick, Color.WHITE, lit, gravel_d, 1.0, 1.0, release_gravel)
+			# ASPHALT SMOKE
 			var press: float = smoke_frac(float(w.temp), float(w.Fz), vs, grip)
 			_build[i] = smoke_build(_build[i], press, delta)
-			# the column's SIZE comes from the build-up, its opacity from the current pressure
-			var ssz: float = lerpf(smoke_size_start, smoke_size_max, _build[i])
-			var sdens: float = clampf(0.30 + 0.70 * _build[i], 0.05, 1.0)
-			_emit_layer(i, "smoke", maxf(press, _build[i] * 0.6) * smoke_scale, delta, cp, kick,
-					Color(0.90, 0.90, 0.92), lit, ssz, sdens)
+			_emit(i, "smoke", maxf(press, _build[i] * 0.6) * smoke_scale, delta, cp, kick,
+					Color(0.90, 0.90, 0.92), lit, smoke_diameter_at(_build[i]),
+					smoke_density_at(v, _build[i]), 1.0)
 			if lay and sa > 0.12:
-				_lay_mark(cp, w.contact_normal, fwd, clampf(sa, 0.0, 1.0))
+				_lay_mark(cp, w.contact_normal, fwd, clampf(sa, 0.0, 1.0))   # ASPHALT TIRE TRACKS
 		else:
-			_emit_layer(i, "smoke", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0)
+			_emit(i, "smoke", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0, 1.0)
 			_build[i] = maxf(_build[i] - delta / maxf(smoke_decay_time, 0.05), 0.0)
 			var col := ground_color(cp.x, cp.z)
-			_emit_layer(i, "dust", dust_frac(v, vs, sa), delta, cp, kick, col, lit,
-					float(_size["dust"]), float(_size["dens"]))
-			_emit_layer(i, "grit", sa, delta, cp, kick, col.darkened(0.14), lit, 1.0, 1.0, release_grit)
+			# DIRT/DUST PLUMES
+			_emit(i, "plume", plume_frac(v, sa), delta, cp, kick, col, lit,
+					float(_sz["pd"]), float(_sz["pn"]), float(_sz["pr"]))
+			# DIRT/GRAVEL PARTICLES
+			_emit(i, "gravel", gravel_frac(v, sa), delta, cp, kick, col.darkened(0.14), lit,
+					gravel_d, 1.0, 1.0, release_gravel)
 
-func _emit_layer(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: Vector3, col: Color, lit: Color, size_mult: float, density: float, rel: float = -1.0) -> void:
+func _emit(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: Vector3, col: Color, lit: Color, diameter: float, density: float, rise_mult: float, rel: float = -1.0) -> void:
 	var arr: Array = _sm[layer]
 	arr[i] = _smooth(arr[i], target, dt, rel)
 	var amt: float = arr[i]
@@ -417,11 +452,12 @@ func _emit_layer(i: int, layer: String, target: float, dt: float, cp: Vector3, k
 	var pm: ParticleProcessMaterial = p.process_material
 	p.global_position = cp + Vector3.UP * 0.05
 	pm.direction = kick if kick.length() > 0.01 else Vector3.UP
-	pm.initial_velocity_min = float(spec["rise"]) * 0.35 * amt
-	pm.initial_velocity_max = float(spec["rise"]) * amt
-	pm.scale_min = 0.75 * size_mult
-	pm.scale_max = 1.35 * size_mult
-	p.amount_ratio = clampf(density * (0.4 + 0.6 * amt), 0.04, 1.0)
+	var rise: float = float(spec["rise"]) * rise_mult
+	pm.initial_velocity_min = rise * 0.35 * amt
+	pm.initial_velocity_max = rise * amt
+	pm.scale_min = diameter * 0.82        # the mesh is a unit quad, so scale IS diameter in metres
+	pm.scale_max = diameter * 1.22
+	p.amount_ratio = clampf(density * (0.4 + 0.6 * amt), 0.03, 1.0)
 	var a_max: float = float(spec["alpha"])
 	var c := Color(col.r * lit.r, col.g * lit.g, col.b * lit.b)
 	c.a = clampf(a_max * (0.35 + 0.65 * amt), 0.0, a_max)

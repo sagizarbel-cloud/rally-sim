@@ -20,6 +20,46 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-14 (four named effects; plumes and gravel split apart)
+
+**The four surface effects now have fixed names, recorded in `CLAUDE.md`** so a future session
+cannot blur them: **asphalt smoke**, **asphalt tire tracks**, **dirt/dust plumes**, and
+**dirt/gravel particles**. They are four separate systems with unrelated fixes — the user named
+them precisely because confusing them was already causing wrong changes. LAYERS keys renamed to
+match (`plume`, `gravel`, `smoke`).
+
+**Sizes are now quoted in TYRE DIAMETERS, not metres**, because that is how they are specified
+("4-6 times larger than the tires", "half a tire", "2x tire size") and because it stays correct if
+the wheel size ever changes. The particle mesh is a 1x1 quad, so a particle's scale IS its diameter
+in metres and the arithmetic stays readable. Tyre diameter is read from `car.wheel_radius` (0.68 m).
+
+**DIRT/DUST PLUMES — now speed-driven, and much bigger.** They kick up from 20 km/h, are fully
+established by 40, and sliding adds on top (0.60 straight, 1.00 sliding) — a change from the
+previous slip-only gate, which meant a fast straight line on gravel threw nothing.
+Measured size: 40 km/h → 2.0 tyre diameters, 60 → 2.7, **100 → 4.2, 120 → 5.0, 160 → 6.5**, holding
+at the ceiling beyond (checked at 200 km/h). That puts 100 km/h+ in the requested 4–6x band.
+**Frequency has two parts now.** Per-metre emission (rate proportional to speed, because particles
+live in world space and a fixed rate smears over more ground the faster you go) TIMES a *fluidity
+gain* so the plume also thickens in its own right. Measured against 40 km/h: 60 → 1.78x, 100 →
+3.91x, **120 → 5.25x**, 160 → 6.99x. Of that 5.25x at 120, 3x is distance and **1.75x is the gain**,
+which is the 1.5–2x asked for. Rise speed scales with speed too (x0.6 → x1.7).
+
+**DIRT/GRAVEL PARTICLES — split from the plumes and gated separately.** Mainly slides, but high
+speed alone flicks some stones, and the same slide throws fewer of them when slow. Measured:
+20 km/h sliding 0.52, 60 sliding 0.66, 120 sliding 0.98; 120 straight 0.12, 160 straight 0.22,
+20 straight 0.00. Stones do not scale with the tyre — they stay 7 cm.
+
+**ASPHALT SMOKE — born half a tyre, grown to two.** Baseline is exactly the spec: born 0.34 m
+(0.5 tyres), reaching 1.36 m (2.0 tyres). The pressure build-up now grows it BEYOND that baseline
+(x1.4 at a full column → 2.8 tyres) rather than up to it. It is also more frequent from the start
+(density floor 0.45, so 0.71 at speed with no build-up at all) and rises faster (3.0 vs 1.8 m/s),
+and it uses the same speed-based frequency formula as the plumes.
+
+**Not drive-tested — visual.** Knobs: `plume_d_min_tyres` / `plume_d_max_tyres` for plume size,
+`fluid_gain` (1.75) for the extra frequency ramp, `plume_speed_start` / `_full` / `_ceiling` for
+where it begins and tops out, `gravel_speed_share` for stones without sliding, and
+`smoke_d_birth_tyres` / `smoke_d_death_tyres` / `smoke_build_gain` for the smoke column.
+
 ## 2026-08-14 (particles: speed-scaled dust, building smoke column)
 
 **Accepted look, refined behaviour** — user verdict on the rebuilt system: *"the particles look
