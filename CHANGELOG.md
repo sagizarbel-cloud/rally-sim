@@ -20,6 +20,54 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-14
+
+**Particle system rebuilt as THREE layers, plus two rendering artefacts fixed.**
+Symptoms this closes: *"the smoke flickers in brightness when braking"*, *"smoke fades in and out
+of the tyre tracks"*, *"the particles don't match the colour of the dirt tracks"*, *"the worn line
+doesn't darken with the ground at dusk"*.
+
+**Three layers, because they are three phenomena and not one effect at three sizes.**
+1. **SMOKE** on hard surfaces — white-grey burnt rubber, from drifts and hard stops.
+2. **PLUME** on loose surfaces — the big billowing cloud a rally car drags behind it. Driven by
+   SPEED, not just slip: a tyre shears loose material simply by rolling over it, which is why a
+   gravel car trails a cloud down a straight at constant throttle. Measured: 0.16 at 29 km/h
+   cruising with zero slip, 0.49 at 90 km/h, rising to 0.87 at 90 km/h with half slip. Born
+   `plume_back` (2.4 m) behind the car, big (0.85 m), slow, long-lived (2.8 s).
+3. **GRIT** on loose surfaces — small stones and sand thrown ballistically from the contact patch.
+   Heavy (gravity −19), short-lived (0.55 s), tight 26° fan, no air damping. Needs slip: cruising
+   throws a plume and no grit.
+
+**Flicker fix — the cause was mine and it is worth remembering.** `CPUParticles3D.color` is a
+UNIFORM over the whole system, not a per-particle value set at spawn. The code wrote it every
+physics frame from a raw intensity, so every live particle was re-tinted at once — and under
+braking the load pumps through the bump stops at a few Hz, which showed up as the entire cloud
+pulsing in brightness. The driving signal now goes through an **envelope follower with fast attack
+(0.18 s) and slow release (1.60 s)**: it swells the instant a slide starts but rides over the
+troughs instead of dipping into each one. Measured on a 4 Hz oscillating input: raw swings 0.64
+peak-to-peak, smoothed swings **0.13 — 80% of the flicker removed**, sitting at 0.87–1.00 rather
+than tracking down to 0.36. Grit gets its own short release (0.14 s) because stones are discrete:
+they stop when the slip stops, and a lingering trickle of gravel looks wrong.
+
+**Sorting fix.** Smoke drifting over a skid mark could flip behind it and back, because transparent
+surfaces are sorted per object. Explicit `render_priority` now pins the order: marks (−1) under
+grit (0), plume (1) and smoke (2).
+
+**Colour match.** Dust sampled `stage._surface_color()` — the BASE terrain — but `wear.gd` paints
+the driven line toward a dark worn brown at up to 0.84 alpha, and the car spends its life on
+exactly that line, so the dust was far too pale for the ground it came off. `ground_color()` now
+recovers the wear fraction from the grip the wear node reports versus the stage's base grip
+(`wn = (g_worn/g_base − 1) / wear_grip`) and applies the same tint the overlay does — no new
+plumbing, and it stays correct if wear.gd's tuning changes.
+
+**The wear line's own rendering issue: it was UNSHADED** while the terrain beneath it is lit. It
+kept its noon brightness through the whole time-of-day cycle, so it read as a glowing stripe at
+dusk and night instead of darkening with the ground it is painted on. Now `SHADING_MODE_PER_PIXEL`,
+as are the particles, so all three stay in the same light.
+
+**Not drive-tested — visual.** First knobs if it is wrong: `plume_speed_ref` (28 m/s for a full
+rolling plume), `slip_ref` (6 m/s), `smoke_power_ref` (45 kW), and `release` if any flicker remains.
+
 ## 2026-08-13 (evening, later)
 
 **Tyre smoke on hard stops, and particles that look like dust instead of flying squares.**
