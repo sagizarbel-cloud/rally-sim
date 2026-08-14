@@ -31,10 +31,10 @@ class_name RallyStage
 @export var grass_color := Color(0.44, 0.44, 0.26)   # dry Mediterranean scrub
 @export var road_color := Color(0.60, 0.53, 0.40)    # dusty grey-tan gravel (Acropolis-ish)
 
-# --- outer ASPHALT circuit: a winding technical loop (Monte-Carlo inspired) OUTSIDE the dirt loop.
+# --- outer ASPHALT circuit: a winding technical loop (Monte-Carlo inspired) OUTSIDE the rally loop.
 # A proper flat road (follows the hills along its centreline, level across its width) with an ABRUPT
 # edge + kerb, not a wide blend -- reads like a real road. ---
-@export var asphalt_radius := 300.0      # base radius (stays clear of the dirt loop's ~234 m bulge)
+@export var asphalt_radius := 300.0      # base radius (stays clear of the rally loop's ~234 m bulge)
 @export var asphalt_w1 := 20.0           # 2-lobe wind
 @export var asphalt_w2 := 13.0           # 3-lobe wind
 @export var asphalt_w3 := 8.0            # 5-lobe wind (tighter kinks -> technical, street-circuit feel)
@@ -59,7 +59,7 @@ class_name RallyStage
 @export var rail_span := 8.0             # beam / collision panel length (m)
 # --- per-surface traction multipliers (applied to tyre mu by the vehicle) ---
 @export var asphalt_grip := 1.52         # asphalt grips best (bumped a touch to calm high-gear wheelspin)
-@export var dirt_grip := 1.1             # dirt loop / centre patch - more grip in the turns
+@export var dirt_grip := 1.1             # rally loop / centre patch - more grip in the turns
 @export var grass_grip := 0.8            # loose off-track
 # --- flat disc in the CENTRE for the reactive/deformable dirt patch ---
 @export var patch_radius := 75.0         # matches the DeformableTerrain zone half-size (150/2)
@@ -202,7 +202,7 @@ func grip_at(x: float, z: float) -> float:
 	if sqrt(dx * dx + dz * dz) < patch_radius:
 		return dirt_grip                                      # centre reactive patch
 	if _road_t(x, z) > 0.4:
-		return dirt_grip                                      # dirt rally loop
+		return dirt_grip                                      # rally loop
 	return grass_grip
 
 func _build() -> void:
@@ -262,10 +262,10 @@ func _build() -> void:
 	add_child(col)
 
 func get_spawn() -> Transform3D:
-	return get_spawn_for(1)                           # default: the dirt rally loop
+	return get_spawn_for(1)                           # default: the rally loop
 
 func get_spawn_for(which: int) -> Transform3D:
-	# which: 0 = centre dirt circle, 1 = dirt rally loop, 2 = asphalt ring. Spawn a short run-up BEFORE
+	# which: 0 = centre dirt circle, 1 = rally loop, 2 = asphalt ring. Spawn a short run-up BEFORE
 	# the finish ray (theta=0) so that crossing it starts the lap + ghost.
 	var rchar := center_lap_radius
 	if which == 1:
@@ -299,7 +299,7 @@ func _markers() -> void:
 			var p := c + radial * (_road_halfwidth(th) + 1.5) * float(s)
 			p.y = _height(p.x, p.z)
 			_post(p, col)
-	# start / finish gates on the timed circuits (centre circle + dirt loop + asphalt ring)
+	# start / finish gates on the timed circuits (centre circle + rally loop + asphalt ring)
 	_start_finish_gate(0)
 	_start_finish_gate(1)
 	_start_finish_gate(2)
@@ -483,7 +483,7 @@ func _post(pos: Vector3, color: Color) -> void:
 	add_child(mi)
 
 func _start_finish_gate(which: int) -> void:
-	# a striped-post gate straddling the finish ray (theta=0) on circuit `which` (1=dirt loop, 2=asphalt),
+	# a striped-post gate straddling the finish ray (theta=0) on circuit `which` (1=rally loop, 2=asphalt),
 	# with a banner beam + billboard text. The two posts sit just outside each road edge (radially).
 	var r0 := _circuit_r(which, 0.0)
 	var hw: float = asphalt_width * 0.5

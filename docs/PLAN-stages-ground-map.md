@@ -63,8 +63,8 @@ that authority rather than beside it.
 **New maps go in a NEW area; the existing map is preserved untouched as the test and
 calibration bed.** The three concentric circuits, the centre deformable patch and the 4 km drag
 strip stay exactly as they are, because every calibration baseline this project owns is
-expressed in their terms: top speed down the strip, dirt-loop lap feel, B3's bottoming
-statistics at 100 km/h on the dirt loop, A2's coast-down figures. A stage that modified them
+expressed in their terms: top speed down the strip, rally-loop lap feel, B3's bottoming
+statistics at 100 km/h on the rally loop, A2's coast-down figures. A stage that modified them
 would silently invalidate the entire regression surface mid-arc.
 
 Every Arc D feature is therefore **additive**. A change that can only be made by editing the
@@ -155,7 +155,7 @@ existing circuits' geometry is out of scope for this arc.
 
 ### 2.2 Everything is hard-wired to the polar form — and this is the arc's biggest structural fact
 
-Every road is `r = f(θ)` about the origin: `_road(θ)` (dirt loop), `_asphalt_r(θ)` (asphalt
+Every road is `r = f(θ)` about the origin: `_road(θ)` (rally loop), `_asphalt_r(θ)` (asphalt
 ring), a centre skid pad, and the drag-strip spur. All three circuits are concentric and share
 the θ=0 finish ray. What that costs, system by system — **and this table is the honest answer
 to "which of these is a rewrite and which is a re-parameterisation":**
@@ -357,7 +357,7 @@ moves.
 - [ ] Drive all three circuits: nothing feels different, at all. (This is a success, not a
       disappointment — D1 is scaffolding.)
 - [ ] Skid marks still appear only on asphalt; tyre audio still changes on the same lines.
-- [ ] The wear line still darkens and still adds grip on the dirt loop.
+- [ ] The wear line still darkens and still adds grip on the rally loop.
 
 ---
 
@@ -435,7 +435,7 @@ swapping the source is a one-place change. Design it; do not build it.
    with sensible distances, not a monotone run of identical corners nor noise. **This is the
    generator's real acceptance test** and it costs nothing to run.
 4. **Vertical budget** (§8.2): bottomed-frame count and peak `Fz` over the generated stage
-   against B3's dirt-loop baseline.
+   against B3's rally-loop baseline.
 
 **User drive checklist:**
 - [ ] The generated road is drivable end to end and feels like a road, not like noise.
@@ -516,7 +516,7 @@ Every baseline this project owns depends on it.
       visible pop-in at either mouth.
 - [ ] Reversing back out mid-tunnel does something sensible rather than breaking.
 - [ ] Arriving back at the old map, the car behaves exactly as it did before you left — run a
-      drag-strip top-speed pass and a dirt-loop lap and compare against your remembered
+      drag-strip top-speed pass and a rally-loop lap and compare against your remembered
       baseline.
 - [ ] Lap timing, ghosts and pace notes all work in whichever area you are in, and the other
       area's bests are still there when you return.
@@ -658,7 +658,7 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
 - **The whole vehicle model.** Arc D touches the ground under the car and nothing else. The
   suspension raycast block is the only vehicle code it modifies (C1's injection point), and
   Arc B/C's tuning must not shift as a side effect.
-- **The calibration baselines themselves:** drag-strip top speed, dirt-loop lap feel, B3's
+- **The calibration baselines themselves:** drag-strip top speed, rally-loop lap feel, B3's
   bottoming statistics, A2's coast-down figures. These are the reason §1.1 exists.
 
 ---
@@ -671,7 +671,7 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
    positions on the old map are unchanged.
 
 2. **The vertical budget — reframed 2026-08-13, and it is NOT a travel problem.** B3 recorded all
-   four corners pegging 100% of travel on the dirt loop at 100 km/h, and the obvious reading was
+   four corners pegging 100% of travel on the rally loop at 100 km/h, and the obvious reading was
    "not enough travel, raise the ride height". Research says otherwise. Gravel WRC cars run
    **250–300 mm of total suspension travel**; this car has `max_travel` 0.45 m with 0.127 m of
    static sag, i.e. **323 mm of bump travel — more than a real rally car's entire stroke.**

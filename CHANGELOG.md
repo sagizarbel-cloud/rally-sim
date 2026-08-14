@@ -109,14 +109,14 @@ replaced and a future session reading it cold would otherwise rebuild it.
 **B2 CLOSED — drive verdict: "feels good".** Asymmetric digressive damper accepted.
 
 **Suspension travel cut from 500 mm to 320 mm — the "vertical budget" was never the problem.**
-Symptom this closes: *"all four corners bottom out on the dirt loop"*, *"suspension bottoming
+Symptom this closes: *"all four corners bottom out on the rally loop"*, *"suspension bottoming
 going uphill at 100 km/h"*, and the instinct that follows it — *"the car needs more travel"* /
 *"raise the ride height"*. It does not. Real gravel WRC cars run **250-300 mm of TOTAL wheel
 travel**; this car had 500 mm, i.e. **373 mm of BUMP travel alone — more than a real rally car's
 entire stroke — and it still pegged 100%**. Travel was never the constraint, and the ride-height
 lever taken earlier (0.45 → 0.50) made it worse, not better. Ground clearance had reached 538 mm
 against a real gravel car's ~300 mm.
-Measured on the dirt loop at ~100 km/h, 500 mm vs 320 mm: peak travel 100% in both, 4/4 corners
+Measured on the rally loop at ~100 km/h, 500 mm vs 320 mm: peak travel 100% in both, 4/4 corners
 pegged in both, frames on the stops **50 → 177**, and — the counter-intuitive part — **peak Fz
 28.8 kN → 23.1 kN**. Less travel produced LOWER peak loads, because the spring keeps building
 force over the whole stroke: at full compression it made 12.1 kN of spring force at 500 mm

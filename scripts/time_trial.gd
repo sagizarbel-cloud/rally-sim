@@ -1,7 +1,7 @@
 extends Node3D
 ## Time-trial ghost for THREE concentric circuits. They all share the finish ray at theta=0 (x>0);
 ## the RADIUS band selects which one you're timing:
-##   0 = centre dirt circle (skid-pad in the deformable patch), 1 = dirt rally loop, 2 = asphalt ring.
+##   0 = DIRT CIRCLE (skid-pad in the deformable patch), 1 = RALLY LOOP, 2 = ASPHALT RING.
 ## Toggle the active circuit with [B]; that also respawns you at its start. Each circuit keeps its own
 ## best lap + ghost. The ghost is time-synced to your current lap: if it's ahead, you're down on your best.
 ## Your best survives a respawn (R) so a crash doesn't cost you the ghost.
@@ -18,7 +18,7 @@ const RMIN := [8.0, 100.0, 255.0]
 const RMAX := [92.0, 250.0, 365.0]
 const SECTORS := 3                                     # M10: split each lap into 3 sectors (by angle)
 
-var _active := 1                                       # matches the startup spawn (dirt rally loop)
+var _active := 1                                       # matches the startup spawn (the RALLY LOOP)
 
 # per-circuit best + last-lap time
 var _best: Array = []                                  # 3x {t:PackedFloat32Array, p:PackedVector3Array, q:Array, time:float}

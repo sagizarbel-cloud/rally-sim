@@ -55,16 +55,21 @@ recorded as the top risk in `docs/PLAN-stages-ground-map.md` §6.2.
 
 ## The bottoming interaction — read before you touch ride height
 
-B3 recorded all four corners pegging 100% of suspension travel on the dirt loop at 100 km/h, and
-C1 adds vertical input on top of that. C1's fourth probe re-measures it. **If it degrades, do not
-reach for ride height and do not shrink `roughness_gain` to hide it.** Research on 2026-08-13
-reframed this (drivetrain plan, B3 revision): gravel WRC cars run 250–300 mm of *total* travel
-while this car has ~323 mm of *bump* travel alone, so "not enough travel" is very likely the wrong
-diagnosis. The suspected causes in order are (a) the bump stop is a pure displacement spring that
-returns energy instead of dissipating it, where real end-of-travel control is hydraulic and
-velocity-sensitive, and (b) **B2 is not implemented yet** and its asymmetric bump/rebound split is
-the most likely actual fix. **Report the numbers and stop; the decision is the user's, and it
-probably belongs to B2, not to C1.**
+All four corners peg 100% of suspension travel on the rally loop at 100 km/h, and C1 adds vertical
+input on top of that. C1's fourth probe re-measures it. **If it degrades, do not reach for ride
+height and do not shrink `roughness_gain` to hide it** — both have already been tried and ruled
+out, and the elimination is complete:
+- **Travel is NOT the constraint.** Gravel WRC cars run 250–300 mm of TOTAL travel. This car was
+  taken to 500 mm and still pegged; it is now at **320 mm** (`rest_length` = `max_travel` = 0.32),
+  and cutting it actually *lowered* peak Fz from 28.8 to 23.1 kN, because the spring builds force
+  over the whole stroke. More travel was manufacturing its own load spikes.
+- **B2 was the leading hypothesis and is disproven.** The asymmetric digressive damper shipped and
+  is drive-verified; it cut peak Fz 23% but slightly *increased* stop contact (31 → 50 frames).
+- **What remains is the bump stop itself**, which is still a pure displacement spring: it stores
+  the impact and hands it back. Real end-of-travel control is hydraulic — velocity-sensitive and
+  dissipating energy as heat. That is the outstanding B3 revision.
+**So: expect the car to ride its stops often — that is correct, a real rally car does — report the
+numbers against the recorded baseline, and stop. The hydraulic stop is not C1's job.**
 
 ## Working rules for this session
 
@@ -93,11 +98,16 @@ probably belongs to B2, not to C1.**
 2. Enveloping: a 3 cm × 4 cm bump is strongly attenuated while a 0.6 m washboard passes at near
    full amplitude. **This is the phase's key correctness test.**
 3. Repeatability: identical field values at the same world position across frames and respawns.
-4. Travel budget: peak `Fz`, max compression and bottomed-frame count on the dirt loop at
+4. Travel budget: peak `Fz`, max compression and bottomed-frame count on the rally loop at
    100 km/h, before vs after, against B3's recorded numbers.
 
 ## State of the tree
 
-Arc A complete and drive-verified. B1 implemented and awaiting the user's drive verdict, B3 done
-(with the revision above outstanding), B2/B4/B5 open. Physics 120 Hz, ~1.84 ms/tick measured.
-Last commits: the linear-damping top-speed fix, the 4 km drag strip, and the Arc D plan.
+Arc A complete and drive-verified. **Arc B: B1, B2 and B3 done and drive-verified; B4 implemented
+and awaiting its drive verdict; B5's prune and panel audit done, but its value-bake and the §8
+end-to-end drive still need the user.** The B3 hydraulic-bump-stop revision is outstanding and is
+NOT C1's job. Physics 120 Hz, ~1.84 ms/tick measured. Suspension travel is 320 mm.
+Baseline to compare the travel probe against (rally loop, ~100 km/h, current build): 4/4 corners
+pegged, 177 frames on the stops, peak Fz 23.1 kN.
+`CHANGELOG.md` is the forensic history — grep it by SYMPTOM before diagnosing anything that smells
+like a recurrence.

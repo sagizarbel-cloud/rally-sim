@@ -1,7 +1,7 @@
 extends Node
-## M6 surface degradation — the worn racing line on the DIRT rally loop (corners + braking zones).
+## M6 surface degradation — the worn racing line on the rally loop (corners + braking zones).
 ##
-## Accumulates "wear" where the tyres work the surface (slip + slip angle) along the dirt rally loop,
+## Accumulates "wear" where the tyres work the surface (slip + slip angle) along the rally loop,
 ## ONLY inside corners and their braking zones. The worked line clears loose gravel and a repeatable
 ## racing line emerges, gaining grip (tunable). This node PROXIES grip_at() (wraps the stage's) so the
 ## vehicle feels it; a MultiMesh overlay draws the line. Skid marks are separate (world.gd) and are
@@ -15,7 +15,7 @@ var stage
 
 @export var arc_samples := 1080          # centreline samples around the loop (finer along the path)
 @export var lat_bins := 24               # lateral cells across the tracked width (finer -> matches the car's line, not a fat band)
-@export var curv_min := 0.018            # corner threshold (1/m) ~ radius 55 m: the dirt loop's genuine corners
+@export var curv_min := 0.018            # corner threshold (1/m) ~ radius 55 m: the rally loop's genuine corners
 @export var brake_dist := 32.0           # metres of braking zone tracked BEFORE each corner
 @export var wear_rate := 3.0             # accumulation per unit tyre-work per second (visible in ~5 passes)
 @export var wear_full := 1.0             # wear value treated as a fully-developed line (wear is 0..1)
@@ -48,7 +48,7 @@ func _build_field() -> void:
 	var pts := PackedVector2Array(); pts.resize(arc_samples)
 	for i in range(arc_samples):
 		var th := TAU * float(i) / float(arc_samples)
-		var r: float = stage._road(th)           # dirt rally loop centreline
+		var r: float = stage._road(th)           # rally loop centreline
 		_road_r[i] = r
 		_hw[i] = stage._road_halfwidth(th)
 		pts[i] = Vector2(cos(th) * r, sin(th) * r)
@@ -190,7 +190,12 @@ func _build_visual() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.vertex_color_use_as_albedo = true
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	# SHADED, not unshaded: the terrain underneath is lit by the sun and the time-of-day cycle, so
+	# an unshaded overlay drifts out of step with it - the worn line keeps its noon brightness at
+	# dusk and reads as a glowing stripe at night, instead of darkening with the ground it is
+	# painted on. It also has to match the dust thrown off it, which is shaded for the same reason.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.render_priority = -1              # under the effect particles, so neither flickers over the other
 	mat.albedo_color = Color.WHITE
 	_mm.material_override = mat
 	_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF

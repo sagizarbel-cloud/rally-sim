@@ -10,7 +10,7 @@ var car          # RigidBody3D
 var stage        # RallyStage (uses _road / _asphalt_r / _height / road_center)
 
 @export var samples := 1440           # samples per circuit centreline
-@export var curv_min_dirt := 0.011    # dirt loop corner threshold (1/m ~ 90 m radius)
+@export var curv_min_dirt := 0.011    # rally loop corner threshold (1/m ~ 90 m radius)
 @export var curv_min_asph := 0.003    # asphalt ring threshold (big-radius street circuit -> gentler)
 @export var asph_sev_scale := 0.30    # asphalt corners are big-radius but FAST -> scale radius down for severity
 @export var merge_gap := 14.0         # merge same-direction corner fragments closer than this (m)
@@ -38,9 +38,9 @@ func _ready() -> void:
 	_build_ui()
 	_init_tts()
 	if stage != null and stage.has_method("_road"):
-		_routes.append(_build_route(0, "DIRT", curv_min_dirt, 1.0))
+		_routes.append(_build_route(0, "RALLY LOOP", curv_min_dirt, 1.0))
 		if stage.has_method("_asphalt_r"):
-			_routes.append(_build_route(1, "ASPHALT", curv_min_asph, asph_sev_scale))
+			_routes.append(_build_route(1, "ASPHALT RING", curv_min_asph, asph_sev_scale))
 	if debug_print:
 		_dump()
 

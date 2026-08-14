@@ -90,7 +90,7 @@ and tuned once, on the stable foundation.
 - **Transitions:** a left-right flick chain on dirt has readable rhythm — the body takes a
   set, returns predictably, and a Scandinavian flick can be timed and repeated.
 - **Road texture:** washboard, ruts and berms read through the car without launching it —
-  the suspension is felt "working"; the car stays planted at speed on the rough dirt loop.
+  the suspension is felt "working"; the car stays planted at speed on the rough rally loop.
 - **Sound follows physics for free:** free-revving in neutral, bogging, blips and engine
   braking are all audible because engine rpm is finally a real state (`sound.gd` already
   pitches the drone from `get_engine().rpm` — zero audio work needed).
@@ -319,7 +319,7 @@ regression.
 
 **Compile gate:** `./check.sh` clean.
 **User drive checklist:**
-- [ ] Baseline intact: top speed on the drag strip still ≈ 259 km/h in 6th; dirt-loop lap
+- [ ] Baseline intact: top speed on the drag strip still ≈ 259 km/h in 6th; rally-loop lap
   time within a couple of seconds of the ghost; no new vibration/jitter at speed or at rest.
 - [ ] Brake taps now modulate — trail braking into a dirt corner is possible without
   instant lockup.
@@ -443,7 +443,7 @@ plumbing), `tuning_panel.gd`.
    coupling moderate).
 
 **Compile gate:** `./check.sh` clean.
-**User drive checklist** (drive each on the dirt loop hairpins + asphalt ring):
+**User drive checklist** (drive each on the rally loop hairpins + asphalt ring):
 - [ ] FWD + OPEN front: inside front spins out of hairpins, car washes wide (watch the
   HUD per-wheel slip).
 - [ ] FWD + CLUTCH-PACK front (moderate power ramp): pulls straight and tight on exit —
@@ -531,7 +531,7 @@ plumbing), `tuning_panel.gd`.
 
 **Compile gate:** `./check.sh` clean.
 **User drive checklist:**
-- [ ] The car is immediately softer and more alive over the dirt loop (1.4/1.6 Hz + ζ 0.65
+- [ ] The car is immediately softer and more alive over the rally loop (1.4/1.6 Hz + ζ 0.65
   vs the old 1.8 Hz / ζ 1.13) without floating or bottoming everywhere.
 - [ ] `roll_gradient_target` slider: 2.5 = flat/dead, 6 = wallowy — pick the sweet spot.
 - [ ] `roll_couple_front` slider audibly/visibly shifts balance (more front = understeer).
@@ -590,7 +590,7 @@ plumbing), `tuning_panel.gd`.
 **User drive checklist:**
 - [ ] Jump landings and kerb strikes on the asphalt ring feel progressive — firm, not
   crashy, no physics spikes.
-- [ ] Deliberately slam the biggest dirt-loop crest flat-out: the car survives with a
+- [ ] Deliberately slam the biggest rally-loop crest flat-out: the car survives with a
   hard-but-controlled bottoming, and the HUD Fz numbers stay sane.
 
 ### Phase B4 — Transition rhythm: lateral relaxation + surface-derived `By` + CoM height
@@ -765,7 +765,7 @@ double-counting would give that patch texture twice. Blend the field out over it
 
 #### C1.4 Known interaction — the travel budget (read B3's open item first)
 
-B3 recorded that **all four corners already peg at 100% of travel on the rough dirt loop at
+B3 recorded that **all four corners already peg at 100% of travel on the rough rally loop at
 100 km/h**, because B1's softer springs moved static sag from 7.7 cm to 12.7 cm. C1 adds
 input on top of that, so it will make bottoming worse before it makes it better. C1 must
 re-measure the bottoming statistics and, if they degrade, force the decision B3 left open:
@@ -787,7 +787,7 @@ would be tuning a magic number to hide a real geometry problem.
    0.6 m washboard passes at near full amplitude. This is the phase's key correctness test.
 3. **Repeatability:** sample the same world position twice, on different frames and after a
    respawn — identical values, or the stage is not learnable.
-4. **Travel budget:** peak `Fz`, max compression and bottomed-frame count on the dirt loop at
+4. **Travel budget:** peak `Fz`, max compression and bottomed-frame count on the rally loop at
    100 km/h, before vs after, against B3's recorded numbers.
 
 **User drive checklist:**
@@ -795,7 +795,7 @@ would be tuning a magic number to hide a real geometry problem.
   refactor and must be invisible on its own.
 - [ ] Braking hard into a dirt corner: washboard is felt — the car skips and dances, and it
   is a handling event to manage, not a cosmetic vibration.
-- [ ] The dirt loop reads as a SURFACE at speed rather than a smooth floor, and tarmac reads
+- [ ] The rally loop reads as a SURFACE at speed rather than a smooth floor, and tarmac reads
   smooth-but-alive (joints and patches, not dead glass).
 - [ ] `roughness_gain` 0 restores today's glass-smooth car exactly — the A/B that proves what
   the phase bought.
@@ -1004,7 +1004,7 @@ User drive-through, all in one session, keyboard:
    with anti-stall ON; deliberately stall with manual clutch ON; restart.
 2. **Drag strip:** launch-assist OFF manual launch, then ON — compare; full upshift run
    to ~259 km/h in 6th (baseline preserved); money-shift guard test at speed.
-3. **Dirt loop, 3 laps AWD:** flick chain through the esses (rhythm), handbrake hairpin,
+3. **Rally loop, 3 laps AWD:** flick chain through the esses (rhythm), handbrake hairpin,
    lift-off rotation test, washboard section planted, one deliberate crest slam
    (bump-stop event, no spike), lap time within reach of the pre-plan ghost (feel must
    not have cost pace unless the user prefers it).
@@ -1195,7 +1195,7 @@ User drive-through, all in one session, keyboard:
   below the knee vs 1058 above it = **0.35× exactly** ✓; and with `zeta_bump = zeta_rebound = 0.65`
   and `hs_blowoff = 1.0` it reproduces B1's linear damper with a **max error of 0.000000 N** —
   that exact equivalence is the A/B that proves what the phase bought.
-  **Bottoming re-measure, dirt loop at ~100 km/h (this is the interesting part, and it did NOT go
+  **Bottoming re-measure, rally loop at ~100 km/h (this is the interesting part, and it did NOT go
   as predicted).** The B3 revision named B2 as the most likely fix for the pegging. It is not.
   B1 linear damper: 4/4 corners pegged, 31 frames on the stops, **max Fz 37.2 kN**. B2 asymmetric +
   digressive: 4/4 corners still pegged, **50** frames on the stops, **max Fz 28.8 kN**.
@@ -1211,7 +1211,7 @@ User drive-through, all in one session, keyboard:
   candidate, and it should be measured on **energy absorbed per impact**, not peak load.
   **Travel reverted to realistic 2026-08-13 (user's call).** `rest_length` / `max_travel`
   500 → **320 mm**, the top of the real gravel-WRC range, keeping B1's spring rates untouched.
-  Measured 500 vs 320 on the dirt loop at 100 km/h: still 4/4 pegged either way, frames on the
+  Measured 500 vs 320 on the rally loop at 100 km/h: still 4/4 pegged either way, frames on the
   stops 50 → 177, but **peak Fz 28.8 → 23.1 kN** — less travel gave LOWER peak load, because the
   spring builds force over the whole stroke (12.1 kN of spring force at full compression at
   500 mm vs 7.7 kN at 320 mm). The inflated travel was manufacturing its own load spikes. Body
@@ -1223,7 +1223,7 @@ User drive-through, all in one session, keyboard:
   so it scales with the car; `w.bottomed` is set while engaged and is now available to M7 as the
   clean hard-hit puncture trigger the roadmap asked for (still a one-line opt-in, NOT wired).
   B1's interim `_fz_cap` is gone — loads are bounded by the stop instead of a flat clamp.
-  Default `bumpstop_g` 3.0 chosen from a sweep on the dirt loop at 100 km/h, which showed the stop
+  Default `bumpstop_g` 3.0 chosen from a sweep on the rally loop at 100 km/h, which showed the stop
   trades peak load against collapsed time very steeply: 0g = 26.5 kN peak / 235 frames pegged,
   3g = 35.7 / 188, 6g = 44.9 / 194, 10g = 57.1 / 160. Past ~3g loads climb far faster than the
   bottoming falls — that is the "crashy" §5 warns against.
@@ -1237,7 +1237,7 @@ User drive-through, all in one session, keyboard:
   CoM height, so ~16% more roll moment).
   **RESOLVED 2026-08-13 (user's call): jacked up.** `rest_length` and `max_travel` are both 0.50.
   The ride frequencies were deliberately NOT touched, because stiffening them would walk back the
-  softness B1 exists to provide. Measured after (headless, settled on the dirt loop, probe removed):
+  softness B1 exists to provide. Measured after (headless, settled on the rally loop, probe removed):
   no corner bottomed at rest, per-wheel static compression 0.091 / 0.157 / 0.140 / 0.049 m on the
   loop's camber, and the bump stop now engages from 0.40 m instead of 0.36 m — roughly **+4 cm of
   free bump travel per corner, +15% total bump travel**. Spring rates are unchanged (they derive

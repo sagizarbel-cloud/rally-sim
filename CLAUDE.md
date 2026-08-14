@@ -9,6 +9,13 @@ After editing `.gd` files, run **`./check.sh`** (or the command below). It must 
 ```
 I verify that code **compiles/loads**; the **user drives to test feel** (grip, handling, sound). I cannot verify feel headlessly — don't claim a feel change works, ask the user to test it.
 
+## Naming the three circuits — use these exact names
+`time_trial.gd` holds the canon: **DIRT CIRCLE** (the centre skid-pad inside the deformable
+patch), **RALLY LOOP** (the main winding loop — the one nearly every measurement in this project
+is taken on), **ASPHALT RING** (the outer circuit). Say **"rally loop"**, never "dirt loop":
+there is a separate dirt circle, so "dirt loop" reads as that one and has caused real ambiguity.
+`get_spawn_for(0/1/2)` follows the same order.
+
 ## Conventions
 - **Functions over constants**: improve realism/fun via physical functions, not by tuning magic-number constants. Always prefer a physical model, and say so.
 - Expose new tunables as `@export` vars; add sliders to `tuning_panel.gd` (Tab in-game) when useful.
@@ -25,6 +32,6 @@ I verify that code **compiles/loads**; the **user drives to test feel** (grip, h
 ## Key files (scripts/)
 - `world.gd` — bootstrap + wiring, input map, environment / time-of-day.
 - `vehicle_m2.gd` — the car: slip-ratio drivetrain, combined-slip tyre (already has a friction ellipse), tyre thermal/wear/puncture, damage.
-- `stage.gd` — procedural terrain: dirt rally loop, asphalt ring, centre deformable patch, drag strip, collidable obstacles.
+- `stage.gd` — procedural terrain: rally loop, asphalt ring, dirt circle (centre deformable patch), drag strip, collidable obstacles.
 - `time_trial.gd` — 3-circuit lap timing + ghost + sector splits.
 - `pace_notes.gd` · `wear.gd` · `sound.gd` · `hud.gd` · `component_hud.gd` · `terrain.gd` · `tuning_panel.gd`.

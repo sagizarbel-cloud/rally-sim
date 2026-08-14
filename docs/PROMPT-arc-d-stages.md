@@ -41,7 +41,7 @@ should be built on top of that authority rather than beside it.
 - **The world is one 720 m square, 320² cells = 2.25 m/cell** (`stage.gd:10-11`), hills at
   `hill_octaves 2` (`stage.gd:14`). Nothing below 2.25 m exists geometrically outside the centre
   deformable patch. This is exactly why C1 exists.
-- **Every road is polar: `r = f(θ)` around the origin.** `_road(θ)` (dirt loop), `_asphalt_r(θ)`
+- **Every road is polar: `r = f(θ)` around the origin.** `_road(θ)` (rally loop), `_asphalt_r(θ)`
   (asphalt ring), a centre skid pad, and a drag-strip spur. All three circuits are concentric and
   share the θ=0 finish ray.
 - **Every downstream system is hard-wired to that polar form**, and this is the single biggest
@@ -63,7 +63,7 @@ should be built on top of that authority rather than beside it.
   already not a 720 m square — the strip spurs far outside the heightmap, on flat slabs.
 - **Physics runs at 120 Hz with large headroom on the M1** — 1.84 ms/tick measured at Phase 0.
 - **Arc B is mid-flight:** B1 implemented and awaiting the user's drive verdict, B3 done, B2/B4/B5
-  open. **B3 left an open item:** all four corners peg 100% of suspension travel on the dirt loop
+  open. **B3 left an open item:** all four corners peg 100% of suspension travel on the rally loop
   at 100 km/h because B1's softer springs took static sag 7.7 → 12.7 cm. C1 will make that worse,
   and Arc D's terrain choices (crests, jumps, ruts, ditches) will make it worse again. Any stage
   feature that adds vertical input must be planned against that budget, not on top of it blindly.
@@ -74,7 +74,7 @@ should be built on top of that authority rather than beside it.
 calibration bed** (user's call, 2026-08-13). The three concentric circuits, the centre
 deformable patch and the 4 km drag strip stay exactly as they are, because every calibration
 baseline this project has is expressed in their terms — 259 km/h in 6th down the strip,
-dirt-loop lap feel, B3's bottoming statistics at 100 km/h on the dirt loop, A2's coast-down
+rally-loop lap feel, B3's bottoming statistics at 100 km/h on the rally loop, A2's coast-down
 figures. A new stage that modified them would silently invalidate the entire regression surface
 mid-arc.
 

@@ -33,7 +33,7 @@ class_name VehicleM2
 # any Arc D crests/jumps to spend this travel again.
 # Suspension travel, set to REAL gravel-rally figures (2026-08-13). Gravel WRC cars run
 # 250-300 mm of TOTAL wheel travel; this was 500 mm, which left 373 mm of bump travel alone -
-# more than a real rally car's entire stroke - and it was still pegging 100% on the dirt loop,
+# more than a real rally car's entire stroke - and it was still pegging 100% on the rally loop,
 # which is what proved travel was never the constraint. rest_length also sets ride height here
 # (body origin sits rest_length + wheel_radius - sag above the contact), so 500 mm was giving
 # ~54 cm of ground clearance against a real gravel car's ~30 cm. 320 mm is the top of the real
@@ -81,12 +81,12 @@ class_name VehicleM2
 # hard-hit puncture trigger the roadmap asked for).
 @export var bumpstop_zone := 0.20           # fraction of max_travel the stop occupies
 @export var bumpstop_g := 3.0                # extra load at full engagement, in g of static corner load
-# Chosen from a sweep on the dirt loop at 100 km/h. The stop trades peak load against how long a
+# Chosen from a sweep on the rally loop at 100 km/h. The stop trades peak load against how long a
 # corner spends collapsed, and it does so steeply: 0g = 26.5 kN peak / 235 frames on the stops,
 # 3g = 35.7 kN / 188, 6g = 44.9 kN / 194, 10g = 57.1 kN / 160. Past ~3g the loads climb far faster
 # than the bottoming falls, which is the "crashy" the plan warns against - so 3g it is.
 @export var com_height := -0.45              # B4: CoM height (m, body frame). Higher = more honest
-                                            # roll and load transfer, tamed by real ARBs/dampers.
+											# roll and load transfer, tamed by real ARBs/dampers.
 @export var camber_deg := 1.5                   # static negative camber (visual + a small grip cue)
 
 # --- Appearance ---
