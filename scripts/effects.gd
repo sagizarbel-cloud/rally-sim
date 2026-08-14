@@ -1,160 +1,193 @@
 extends Node3D
 class_name SurfaceEffects
-## M11 - surface effects in THREE layers, each with its own physical cause:
+## M11 - surface effects, built as a small data-driven particle system rather than three
+## hand-wired emitters. A LAYER is declared once in `LAYERS` (size, life, gravity, growth, colour
+## source, render order) and `_build_layer()` turns that declaration into four per-wheel emitters.
+## Adding a fourth layer - water spray, snow, mud - is a dictionary, not new code.
 ##
-##   1. SMOKE (hard surfaces)  - white-grey burnt rubber, from drifts and hard stops.
-##   2. PLUME (loose surfaces) - the big billowing cloud a rally car drags behind it on gravel.
-##   3. GRIT  (loose surfaces) - the small stones and sand thrown ballistically from the tyre.
+##   DUST  (loose surfaces) - the gravel plume. Needs SPEED and SLIP: a rally car trailing dust is
+##                            sliding, and dust at walking pace looks wrong.
+##   SMOKE (hard surfaces)  - white-grey burnt rubber from long drifts, spinouts and hard stops.
+##                            Deliberately thinner and smaller than dust.
+##   GRIT  (loose surfaces) - stones and sand thrown ballistically. Needs slip, stops with it.
 ##
-## They are separate because they are separate phenomena, not one effect at three sizes. A car
-## cruising a gravel straight throws a PLUME and no grit (the tyre shears loose material just by
-## rolling over it); a car spinning its wheels throws GRIT hard and adds to the plume; a car on
-## tarmac throws neither and smokes instead.
-##
-## Everything is driven by quantities the physics already computes - contact-patch slip velocity,
-## vertical load, tyre temperature, friction power - so the effects show the tuned model rather
-## than decorating it.
+## Look, and why (researched, see CHANGELOG):
+##  * Sprites are a 2x2 ATLAS of puffs, each puff a CLUSTER OF OVERLAPPING CIRCLES - which is what
+##    a real dust or smoke silhouette is. `BILLBOARD_PARTICLES` + `anim_offset` gives every
+##    particle its own random frame; a single texture per emitter made every particle identical,
+##    which is what read as "one weird oblong shape".
+##  * Particles are born SMALL and GROW while fading to nothing (`scale_amount_curve` up,
+##    `color_ramp` alpha down). Ending on alpha 0 is the single biggest factor in whether a
+##    particle effect reads as believable.
+##  * Emission is from a small BOX at each contact patch, not a point, so a cloud has body.
+##  * Particles are UNSHADED but tinted by the sun's current colour and energy. Shaded billboards
+##    are lit through a camera-facing normal, so their brightness changes as you swing the camera -
+##    which is what made the colour look wrong. Tinting keeps them in step with the time of day
+##    without that artefact.
 
 var car                              # untyped so get_wheels() resolves dynamically
 var stage                            # RallyStage: grip_at() + _surface_color()
 
-# --- what counts as "working the surface" -------------------------------------------------
-@export var slip_ref := 6.0          # m/s of contact-patch slip for full-intensity effects
-@export var slip_floor := 0.8        # m/s below which a tyre is gripping and throws nothing
+# --- gates: what it takes to disturb the surface ------------------------------------------
+@export var slip_ref := 6.0          # m/s of contact-patch slip for a full-intensity effect
+@export var slip_floor := 1.2        # m/s below which the tyre is gripping and throws nothing
+@export var dust_speed_min := 8.0    # m/s (~29 km/h) of work before gravel dust starts at all
+@export var dust_speed_ref := 26.0   # m/s (~94 km/h) at which the speed gate is fully open
 @export var asphalt_grip := 1.2      # base grip above this = a hard surface: smoke, no dust
-# --- 1. tyre smoke (hard surfaces) --------------------------------------------------------
-# Smoke has TWO causes and needs both. A long drift smokes because the tread got hot; a hard stop
-# smokes instantly on COLD tyres because a locked patch dumps enormous friction power in a
-# fraction of a second. Temperature lags that by seconds - the smoke does not.
+# --- smoke (hard surfaces) ----------------------------------------------------------------
 @export var smoke_temp := 110.0      # C at which the tread starts to smoke (M7 optimum is 85)
 @export var smoke_full_temp := 165.0 # C at which heat alone smokes as hard as it ever will
-@export var smoke_power_ref := 45000.0  # W of friction power at the patch for full smoke, cold
-@export var smoke_amount := 40
-@export var smoke_lifetime := 2.1
-@export var smoke_size := 0.30
-@export var smoke_color := Color(0.90, 0.90, 0.92)   # white-grey burnt rubber
-# --- 2. dust plume (loose surfaces) -------------------------------------------------------
-# A gravel car trails a plume even in a straight line at constant throttle, because the tyre
-# shears loose material simply by rolling over it - the rate scales with how much surface passes
-# under the contact patch, i.e. with SPEED. Sliding adds to it but is not required.
-@export var plume_amount := 60
-@export var plume_lifetime := 2.8    # s - a plume hangs in the air long after the car has gone
-@export var plume_size := 0.85       # m - big, soft, slow
-@export var plume_speed_ref := 28.0  # m/s (~100 km/h) at which rolling alone makes a full plume
-@export var plume_back := 2.4        # m behind the car's centre that the cloud is born
-@export var plume_rise := 1.6        # m/s - barely buoyant; it billows rather than shoots
-# --- 3. grit (loose surfaces) -------------------------------------------------------------
-@export var grit_amount := 30
-@export var grit_lifetime := 0.55    # s - stones are ballistic and land quickly
-@export var grit_size := 0.055       # m - specks, not clods
-@export var grit_speed := 9.0        # m/s thrown at full slip
-@export var grit_gravity := -19.0    # heavy: they arc and fall, they do not float
+@export var smoke_power_ref := 60000.0  # W of friction power at the patch for full smoke, cold
+@export var smoke_scale := 0.55      # smoke is thinner and smaller than dust - "much less"
 # --- skid marks ---------------------------------------------------------------------------
 @export var mark_pool := 900
 @export var mark_fade := 14.0
 @export var mark_interval := 0.03
-# --- shared ---------------------------------------------------------------------------------
-@export var blob_variants := 5       # distinct procedural puff sprites
-@export var attack := 0.18           # s for an effect to swell up to a new intensity
-@export var release := 1.60          # s for a CLOUD to die back down - long on purpose, see _smooth
-@export var release_grit := 0.14     # s for GRIT: stones are discrete, they stop when the slip does
-@export var shaded := true           # particles take the sun like the ground does (see _make_emitter)
+# --- shared -------------------------------------------------------------------------------
+@export var atlas_cells := 2         # 2x2 = 4 distinct puff sprites per atlas
+@export var atlas_px := 64           # pixels per frame
+@export var attack := 0.18           # s for an effect to swell to a new intensity
+@export var release := 1.60          # s for a CLOUD to fade back down (see _smooth)
+@export var release_grit := 0.14     # s for GRIT - stones stop when the slip does
 
-var _smoke: Array = []
-var _grit: Array = []
-var _plume: CPUParticles3D
-var _blobs: Array[ImageTexture] = []
+# A layer declaration. `grow` is start->end scale over life: >1 means the puff expands as it ages.
+const LAYERS := {
+	"dust":  {"amount": 34, "life": 3.2, "size": 0.42, "gravity": -0.55, "rise": 2.2,
+			  "grow": [0.30, 1.85], "alpha": 0.44, "spread": 34.0, "damp": [1.2, 2.8],
+			  "box": Vector3(0.30, 0.12, 0.30), "prio": 1, "spin": 22.0},
+	"smoke": {"amount": 26, "life": 2.4, "size": 0.30, "gravity": -0.35, "rise": 1.7,
+			  "grow": [0.26, 1.60], "alpha": 0.30, "spread": 30.0, "damp": [1.4, 3.0],
+			  "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 18.0},
+	"grit":  {"amount": 26, "life": 0.55, "size": 0.055, "gravity": -19.0, "rise": 9.0,
+			  "grow": [1.0, 0.9], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
+			  "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0},
+}
+
+var _em := {}                        # layer name -> Array[CPUParticles3D], one per wheel
+var _sm := {}                        # layer name -> Array[float], smoothed intensity per wheel
+var _atlas: ImageTexture
+var _sun: DirectionalLight3D
 var _mm: MultiMesh
 var _mark_next := 0
 var _marks: Array = []
 var _lay_accum := 0.0
-var _sm_smoke := [0.0, 0.0, 0.0, 0.0]     # smoothed intensities - see _smooth()
-var _sm_grit := [0.0, 0.0, 0.0, 0.0]
-var _sm_plume := 0.0
 
 func _ready() -> void:
-	for b in range(blob_variants):
-		_blobs.append(_make_blob(1000 + b * 977))
-	for i in range(4):
-		_smoke.append(_make_emitter(smoke_amount, smoke_lifetime, smoke_color, -0.7, smoke_size, i + 2, 2))
-		_grit.append(_make_emitter(grit_amount, grit_lifetime, Color(0.55, 0.47, 0.34), grit_gravity, grit_size, i, 0))
-	_plume = _make_emitter(plume_amount, plume_lifetime, Color(0.56, 0.48, 0.34), -0.9, plume_size, 1, 1)
-	_plume.spread = 30.0
-	for g in _grit:
-		g.spread = 26.0                    # stones fly in a tight fan, not a cloud
-		g.damping_min = 0.0                # and they are ballistic: no air drag worth modelling
-		g.damping_max = 0.4
-		g.color_ramp = null                # no fade-in; a stone is there the instant it leaves
+	_atlas = _make_puff_atlas(atlas_cells, atlas_px)
+	for lname in LAYERS.keys():
+		_em[lname] = _build_layer(LAYERS[lname])
+		_sm[lname] = [0.0, 0.0, 0.0, 0.0]
 	_build_marks()
+	_sun = _find_sun()
 
-func _make_blob(seed_v: int) -> ImageTexture:
-	# A procedural puff sprite: soft-edged and IRREGULAR, so particles do not read as a cloud of
-	# identical squares. Each variant gets its own lobed silhouette and internal mottling from its
-	# own seed. Generated in code like everything else here - no image assets.
-	var n := 48
+func _find_sun() -> DirectionalLight3D:
+	var p := get_parent()
+	if p == null:
+		return null
+	for c in p.get_children():
+		if c is DirectionalLight3D:
+			return c
+	return null
+
+# --- sprite generation ---------------------------------------------------------------------
+
+func _make_puff_atlas(cells: int, px: int) -> ImageTexture:
+	# One texture holding cells x cells puff frames. Each frame is drawn as a CLUSTER OF CIRCLES
+	# rather than one blob: overlapping lobes are what give smoke and dust their bumpy, rounded
+	# silhouette, and taking the max of soft circular falloffs merges them into a single shape
+	# instead of a bag of separate dots.
+	var n := cells * px
 	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	img.fill(Color(1, 1, 1, 0))
 	var rng := RandomNumberGenerator.new()
-	rng.seed = seed_v
-	var l1 := rng.randf_range(0.16, 0.40)
-	var l2 := rng.randf_range(0.08, 0.26)
-	var p1 := rng.randf_range(0.0, TAU)
-	var p2 := rng.randf_range(0.0, TAU)
-	var k1 := float(rng.randi_range(2, 4))
-	var k2 := float(rng.randi_range(5, 8))
-	var m1 := rng.randf_range(0.0, TAU)
-	for y in range(n):
-		for x in range(n):
-			var dx := (float(x) + 0.5) / float(n) * 2.0 - 1.0
-			var dy := (float(y) + 0.5) / float(n) * 2.0 - 1.0
-			var r := sqrt(dx * dx + dy * dy)
-			var th := atan2(dy, dx)
-			var edge := 1.0 + l1 * sin(k1 * th + p1) + l2 * sin(k2 * th + p2)
-			var a := clampf(1.0 - r / maxf(edge * 0.94, 0.05), 0.0, 1.0)
-			a = a * a * (3.0 - 2.0 * a)
-			a *= 0.80 + 0.20 * sin(6.0 * th + m1 + 9.0 * r)
-			img.set_pixel(x, y, Color(1, 1, 1, clampf(a, 0.0, 1.0)))
+	rng.seed = 20260814
+	for cy in range(cells):
+		for cx in range(cells):
+			_draw_puff(img, cx * px, cy * px, px, rng)
 	return ImageTexture.create_from_image(img)
 
-func _make_emitter(amount: int, life: float, col: Color, gravity: float, size: float, variant: int, prio: int) -> CPUParticles3D:
+func _draw_puff(img: Image, ox: int, oy: int, sz: int, rng: RandomNumberGenerator) -> void:
+	var lobes: Array = []
+	for i in range(rng.randi_range(4, 7)):
+		var a := rng.randf_range(0.0, TAU)
+		var d := rng.randf_range(0.0, 0.24)
+		lobes.append([0.5 + cos(a) * d, 0.5 + sin(a) * d, rng.randf_range(0.17, 0.30)])
+	for y in range(sz):
+		for x in range(sz):
+			var u := (float(x) + 0.5) / float(sz)
+			var v := (float(y) + 0.5) / float(sz)
+			var a := 0.0
+			for L in lobes:
+				var dx: float = u - L[0]
+				var dy: float = v - L[1]
+				var r: float = sqrt(dx * dx + dy * dy) / L[2]
+				a = maxf(a, clampf(1.0 - r, 0.0, 1.0))
+			a = a * a * (3.0 - 2.0 * a)                    # soft shoulder, never a hard rim
+			var edge: float = minf(minf(u, 1.0 - u), minf(v, 1.0 - v))
+			a *= clampf(edge / 0.07, 0.0, 1.0)             # frames must not bleed into each other
+			img.set_pixel(ox + x, oy + y, Color(1, 1, 1, clampf(a, 0.0, 1.0)))
+
+func _curve(a: float, b: float) -> Curve:
+	var c := Curve.new()
+	c.max_value = maxf(maxf(a, b), 1.0)
+	c.add_point(Vector2(0.0, a))
+	c.add_point(Vector2(1.0, b))
+	return c
+
+func _build_layer(spec: Dictionary) -> Array:
+	var out: Array = []
+	for i in range(4):
+		out.append(_make_emitter(spec))
+	return out
+
+func _make_emitter(spec: Dictionary) -> CPUParticles3D:
 	var mesh := QuadMesh.new()
-	mesh.size = Vector2(size, size)
+	mesh.size = Vector2(spec["size"], spec["size"])
 	var mat := StandardMaterial3D.new()
-	# SHADED, not unshaded: the ground is lit by the sun and the time-of-day cycle, so unshaded
-	# particles drift out of step with it - they stay bright at dusk and glow at night. Billboard
-	# normals face the camera, which for soft dust reads fine and keeps it in the same light.
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL if shaded else BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED    # tinted by the sun instead - see _light()
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES    # required for per-particle atlas frames
+	mat.billboard_keep_scale = true
+	mat.particles_anim_h_frames = atlas_cells
+	mat.particles_anim_v_frames = atlas_cells
+	mat.particles_anim_loop = false
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.vertex_color_use_as_albedo = true
-	mat.albedo_texture = _blobs[variant % _blobs.size()]
-	# Transparent surfaces are sorted per object, so smoke drifting over a skid mark could flip
-	# behind it and back. An explicit priority pins the order: marks (-1) under grit, plume, smoke.
-	mat.render_priority = prio
+	mat.albedo_texture = _atlas
+	mat.proximity_fade_enabled = true       # soft particles: fade where the sprite cuts the ground,
+	mat.proximity_fade_distance = 0.5       # instead of showing a hard intersection line
+	mat.render_priority = spec["prio"]
 	mesh.material = mat
 	var p := CPUParticles3D.new()
 	p.mesh = mesh
 	p.emitting = false
-	p.amount = amount
-	p.lifetime = life
-	p.lifetime_randomness = 0.45
+	p.amount = spec["amount"]
+	p.lifetime = spec["life"]
+	p.lifetime_randomness = 0.5
 	p.direction = Vector3.UP
-	p.spread = 42.0
-	p.gravity = Vector3(0, gravity, 0)
-	p.color = col
-	p.scale_amount_min = 0.35
-	p.scale_amount_max = 1.7
+	p.spread = spec["spread"]
+	p.gravity = Vector3(0, spec["gravity"], 0)
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX   # a volume, so the cloud has body
+	p.emission_box_extents = spec["box"]
+	# every particle draws a RANDOM frame from the atlas: anim_speed 0 holds whichever it picked
+	p.anim_offset_min = 0.0
+	p.anim_offset_max = 1.0
+	p.anim_speed_min = 0.0
+	p.anim_speed_max = 0.0
+	p.scale_amount_min = 0.7
+	p.scale_amount_max = 1.5
+	p.scale_amount_curve = _curve(spec["grow"][0], spec["grow"][1])   # born small, swells as it ages
 	p.angle_min = -180.0
 	p.angle_max = 180.0
-	p.angular_velocity_min = -55.0
-	p.angular_velocity_max = 55.0
-	p.damping_min = 1.4
-	p.damping_max = 3.2
-	var ramp := Gradient.new()
+	p.angular_velocity_min = -spec["spin"]
+	p.angular_velocity_max = spec["spin"]
+	p.damping_min = spec["damp"][0]
+	p.damping_max = spec["damp"][1]
+	var ramp := Gradient.new()              # ending on alpha 0 is what stops it looking like sprites
 	ramp.set_color(0, Color(1, 1, 1, 0.0))
 	ramp.set_color(1, Color(1, 1, 1, 0.0))
-	ramp.add_point(0.12, Color(1, 1, 1, 1.0))
-	ramp.add_point(0.45, Color(1, 1, 1, 0.85))
+	ramp.add_point(0.10, Color(1, 1, 1, 1.0))
+	ramp.add_point(0.40, Color(1, 1, 1, 0.75))
 	p.color_ramp = ramp
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.local_coords = false
@@ -176,11 +209,11 @@ func _build_marks() -> void:
 	mmi.multimesh = _mm
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(1, 1, 1, 1)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL if shaded else BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.vertex_color_use_as_albedo = true
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.render_priority = -1              # always under the particles
+	mat.render_priority = -1
 	mmi.material_override = mat
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mmi)
@@ -188,52 +221,50 @@ func _build_marks() -> void:
 # --- physical drivers ----------------------------------------------------------------------
 
 func slip_speed(w, v: float) -> float:
-	# How fast the rubber slides across the ground, m/s: the longitudinal component from the slip
-	# ratio and the lateral one from the slip angle. This is what tears material off a tyre.
 	var long_slip: float = absf(float(w.kappa)) * maxf(v, 2.0)
 	var lat_slip: float = absf(sin(float(w.slip_angle))) * v
 	return sqrt(long_slip * long_slip + lat_slip * lat_slip)
 
-func intensity(w, v: float, fz_ref: float) -> float:
+func slip_frac(w, v: float, fz_ref: float) -> float:
 	var s: float = slip_speed(w, v)
 	if s < slip_floor:
 		return 0.0
 	var load: float = clampf(float(w.Fz) / maxf(fz_ref, 1.0), 0.0, 1.6)
 	return clampf((s - slip_floor) / maxf(slip_ref - slip_floor, 0.1), 0.0, 1.0) * load
 
+func dust_frac(v: float, vslip: float, slip_amt: float) -> float:
+	# Dust needs SPEED AND SLIP, multiplied - not added. A car pottering along a gravel road does
+	# not trail a plume, and neither does a car sliding at walking pace; the plume belongs to a
+	# rally car moving fast and sideways. The speed gate takes whichever is larger, road speed or
+	# slip speed, so a stationary burnout or a spinout still raises dust while a slow crawl cannot.
+	var work: float = maxf(v, vslip)
+	var speed_gate: float = clampf((work - dust_speed_min) / maxf(dust_speed_ref - dust_speed_min, 0.1), 0.0, 1.0)
+	return speed_gate * clampf(slip_amt, 0.0, 1.0)
+
 func smoke_frac(temp: float, fz: float, vslip: float, grip: float) -> float:
 	var thermal := clampf((temp - smoke_temp) / maxf(smoke_full_temp - smoke_temp, 1.0), 0.0, 1.0)
 	var power := clampf(grip * fz * vslip / maxf(smoke_power_ref, 1.0), 0.0, 1.0)
 	return maxf(thermal, power)
 
-func plume_frac(v: float, slip_amt: float) -> float:
-	# Rolling shears material out of a loose surface on its own, so speed alone raises a plume;
-	# sliding throws more on top. This is why a gravel car trails a cloud down a straight.
-	var roll := clampf(v / maxf(plume_speed_ref, 1.0), 0.0, 1.0)
-	return clampf(0.55 * roll + 0.75 * slip_amt, 0.0, 1.0)
-
 func _smooth(prev: float, target: float, dt: float, rel: float = -1.0) -> float:
-	# The single most important line for how this LOOKS. CPUParticles3D.color is a uniform over
-	# the whole system, not a per-particle value, so writing it from a raw per-frame intensity
-	# re-tints every live particle at once - and under braking the load pumps through the bump
-	# stops at a few Hz, which showed up as the whole cloud flickering in brightness. Smoothing
-	# the driving signal (fast to swell, slower to fade, like a real cloud) removes it entirely.
-	# Fast attack, SLOW release - an envelope follower, not a symmetric filter. The asymmetry is
-	# the point: the cloud must swell the instant a slide starts (or it feels disconnected), but
-	# must not dip on every trough of a few-Hz load oscillation. A symmetric filter fast enough to
-	# attack well is fast enough to flicker; this one rides over the dips and only fades when the
-	# slip has genuinely stopped. Grit passes a short release, because stones are discrete: they
-	# stop the moment the wheel stops throwing them, and a lingering trickle of gravel looks wrong.
+	# Fast attack, slow release. CPUParticles3D.color is a uniform over the whole system, so a raw
+	# per-frame intensity re-tints every live particle at once and the load pumping through the
+	# bump stops under braking showed up as the cloud flickering. This rides over the troughs.
 	var tau: float = attack if target > prev else (release if rel < 0.0 else rel)
 	return move_toward(prev, target, dt / maxf(tau, 0.01))
 
+func _light() -> Color:
+	# Particles are unshaded, so they must be told what the light is doing or they stay at noon
+	# brightness through dusk and night while the ground darkens around them.
+	if _sun == null:
+		return Color(1, 1, 1)
+	var e: float = clampf(_sun.light_energy, 0.18, 1.35)
+	return _sun.light_color.lerp(Color.WHITE, 0.45) * e
+
 func ground_color(x: float, z: float) -> Color:
-	# The colour the player actually SEES at that spot - which is not the terrain's own colour
-	# wherever the wear line has been painted over it. wear.gd tints the driven line toward a dark
-	# worn brown, and the car spends its life on exactly that line, so sampling the base terrain
-	# gave dust that was far too pale for the ground it came off. The wear fraction is recovered
-	# from the grip the wear node reports versus the stage's base grip - no extra plumbing, and it
-	# stays correct if wear.gd's tuning changes.
+	# The colour the player actually SEES there - not the terrain's own colour, because wear.gd
+	# paints the driven line dark and the car lives on that line. The wear fraction is recovered
+	# from the grip the wear node reports against the stage's base grip, so no extra plumbing.
 	var base := Color(0.56, 0.48, 0.34)
 	if stage != null and stage.has_method("_surface_color"):
 		base = stage._surface_color(x, z)
@@ -245,7 +276,9 @@ func ground_color(x: float, z: float) -> Color:
 		if g0 > 0.001 and absf(wg) > 0.001:
 			var wn: float = clampf((g1 / g0 - 1.0) / wg, 0.0, 1.0)
 			base = base.lerp(Color(0.08, 0.055, 0.04), clampf(wn * 1.05, 0.0, 0.84))
-	return base
+	# airborne dust is finer than the packed surface and scatters more light, so it reads a shade
+	# lighter than the ground it came off - but only a shade, or it stops matching
+	return base.lightened(0.10)
 
 # --- per-frame ----------------------------------------------------------------------------
 
@@ -268,63 +301,49 @@ func _physics_process(delta: float) -> void:
 	var fwd: Vector3 = -car.global_transform.basis.z
 	var travel: Vector3 = car.linear_velocity
 	var back: Vector3 = -travel.normalized() if travel.length() > 1.0 else -fwd
-	var kick: Vector3 = (Vector3.UP + back * 0.65).normalized()
-	var loose_amt := 0.0
-	var loose_col := Color(0.56, 0.48, 0.34)
-	var loose_pos := Vector3.ZERO
-	var loose_n := 0
+	var kick: Vector3 = (Vector3.UP + back * 0.55).normalized()
+	var lit := _light()
 
 	for i in range(mini(wheels.size(), 4)):
 		var w = wheels[i]
 		if not w.contact:
-			_smoke[i].emitting = false
-			_grit[i].emitting = false
+			for nm in _em.keys():
+				_em[nm][i].emitting = false
 			continue
 		var cp: Vector3 = w.contact_point
 		var grip: float = stage.grip_at(cp.x, cp.z)
-		var amt: float = intensity(w, v, fz_ref)
 		var vs: float = slip_speed(w, v)
+		var sa: float = slip_frac(w, v, fz_ref)
 		if grip > asphalt_grip:
-			_grit[i].emitting = false
-			# smoke is gated on its OWN physics, not on `amt`: a locked wheel in a hard stop is the
-			# smokiest thing a tyre does, and it is barely "slipping" by the intensity measure
-			var sf: float = smoke_frac(float(w.temp), float(w.Fz), vs, grip)
-			_sm_smoke[i] = _smooth(_sm_smoke[i], sf, delta)
-			_drive(_smoke[i], cp, _sm_smoke[i], 1.5, smoke_color, kick, 0.55)
-			if lay and amt > 0.12:
-				_lay_mark(cp, w.contact_normal, fwd, clampf(amt, 0.0, 1.0))
+			_emit_layer(i, "dust", 0.0, delta, cp, kick, Color.WHITE, lit)
+			_emit_layer(i, "grit", 0.0, delta, cp, kick, Color.WHITE, lit, release_grit)
+			var sf: float = smoke_frac(float(w.temp), float(w.Fz), vs, grip) * smoke_scale
+			_emit_layer(i, "smoke", sf, delta, cp, kick, Color(0.90, 0.90, 0.92), lit)
+			if lay and sa > 0.12:
+				_lay_mark(cp, w.contact_normal, fwd, clampf(sa, 0.0, 1.0))
 		else:
-			_smoke[i].emitting = false
+			_emit_layer(i, "smoke", 0.0, delta, cp, kick, Color.WHITE, lit)
 			var col := ground_color(cp.x, cp.z)
-			_sm_grit[i] = _smooth(_sm_grit[i], amt, delta, release_grit)
-			_drive(_grit[i], cp, _sm_grit[i], grit_speed, col.darkened(0.10), kick, 0.95)
-			loose_amt = maxf(loose_amt, amt)
-			loose_col = col
-			loose_pos += cp
-			loose_n += 1
+			_emit_layer(i, "dust", dust_frac(v, vs, sa), delta, cp, kick, col, lit)
+			_emit_layer(i, "grit", sa, delta, cp, kick, col.darkened(0.14), lit, release_grit)
 
-	# the plume is a property of the CAR on a loose surface, not of any one wheel
-	if loose_n > 0:
-		var target: float = plume_frac(v, loose_amt)
-		_sm_plume = _smooth(_sm_plume, target, delta)
-		var origin: Vector3 = loose_pos / float(loose_n) + back * plume_back + Vector3.UP * 0.25
-		_drive(_plume, origin, _sm_plume, plume_rise, loose_col.lightened(0.06), kick, 0.34)
-	else:
-		_sm_plume = _smooth(_sm_plume, 0.0, delta)
-		_drive(_plume, _plume.global_position, _sm_plume, plume_rise, loose_col, kick, 0.34)
-
-func _drive(p: CPUParticles3D, cp: Vector3, amt: float, rise: float, col: Color, kick: Vector3, alpha_max: float) -> void:
+func _emit_layer(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: Vector3, col: Color, lit: Color, rel: float = -1.0) -> void:
+	var arr: Array = _sm[layer]
+	arr[i] = _smooth(arr[i], target, dt, rel)
+	var amt: float = arr[i]
+	var p: CPUParticles3D = _em[layer][i]
 	if amt <= 0.01:
 		p.emitting = false
 		return
-	p.global_position = cp
+	var spec: Dictionary = LAYERS[layer]
+	p.global_position = cp + Vector3.UP * 0.05
 	p.direction = kick if kick.length() > 0.01 else Vector3.UP
-	p.initial_velocity_min = rise * 0.30 * amt
-	p.initial_velocity_max = rise * amt
-	p.scale_amount_min = 0.30 + 0.25 * amt
-	p.scale_amount_max = 0.9 + 1.3 * amt
-	col.a = clampf(0.18 + (alpha_max - 0.18) * amt, 0.0, alpha_max)
-	p.color = col
+	p.initial_velocity_min = float(spec["rise"]) * 0.35 * amt
+	p.initial_velocity_max = float(spec["rise"]) * amt
+	var a_max: float = float(spec["alpha"])
+	var c := Color(col.r * lit.r, col.g * lit.g, col.b * lit.b)
+	c.a = clampf(a_max * (0.35 + 0.65 * amt), 0.0, a_max)
+	p.color = c
 	p.emitting = true
 
 func _lay_mark(pos: Vector3, nrm: Vector3, fwd: Vector3, amt: float) -> void:

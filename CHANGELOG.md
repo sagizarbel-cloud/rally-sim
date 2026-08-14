@@ -20,6 +20,53 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-14 (particles rebuilt on research)
+
+**Particle system rebuilt as a data-driven layer table, after the first attempt looked wrong.**
+Symptoms this closes: *"the plumes are in the middle and move to each side the moment I touch
+steering"*, *"they look identical, like a weird oblong shape"*, *"wrong colour"*, *"the single
+streak on gravel starts at any speed"*.
+
+**The identical-shape bug, which is worth remembering.** A `CPUParticles3D` has ONE mesh with ONE
+texture, so every particle in a system draws the SAME sprite. The previous "5 variants" only varied
+between emitters, not between particles — so a 60-particle plume was 60 copies of one shape, which
+is exactly what read as a single oblong blob. The fix is the standard flipbook route: a **2x2 atlas**
+with `billboard_mode = BILLBOARD_PARTICLES`, `particles_anim_h/v_frames = 2`, and per-emitter
+`anim_offset_min/max = 0/1` with `anim_speed = 0`, so each particle picks a random static frame.
+Verified: the 4 frames differ in coverage 0.097–0.194 (2x) with distinct centroids.
+**Sprites are now clusters of overlapping circles** (max of soft circular falloffs, merged into one
+lumpy silhouette), because that is what a dust or smoke puff actually looks like.
+**Born small, swelling, fading to nothing:** `scale_amount_curve` takes dust 0.30 → 1.85 over its
+life while `color_ramp` alpha ends at 0. Ending on alpha 0 is documented as the single biggest
+factor in whether a particle effect reads as believable.
+**Emission is from a small BOX** at each contact patch rather than a point, so a cloud has body.
+**Soft particles:** `proximity_fade` fades the sprite where it cuts the ground instead of showing a
+hard intersection line.
+
+**No more centre streak.** The plume was ONE car-level emitter offset along the velocity vector, so
+it sat in the middle and swung sideways the instant the velocity direction changed under steering.
+All three layers are now per-wheel, born at the contact patch, and left in world space — the plume
+forms behind the car because the car drives away from it, not because it is placed there.
+
+**Dust now needs SPEED and SLIP, multiplied — not added.** The old version added a rolling term, so
+it trailed a plume at walking pace. The speed gate takes whichever is larger, road speed or slip
+speed, so a spinout still raises dust while a crawl cannot. Measured: crawling 0.00, cruising
+90 km/h gripping 0.00, 90 km/h light slide 0.42, 90 km/h big drift 0.94, 40 km/h big drift 0.22,
+standing burnout 0.67.
+
+**Colour.** Particles are UNSHADED again but tinted by the sun's current colour and energy. Shaded
+billboards are lit through a camera-facing normal, so their brightness changed as the camera swung
+— that was the "wrong colour". Tinting keeps them in step with the time of day without the artefact.
+Base colour still comes from `ground_color()`, which includes the wear line's dark tint.
+
+**Smoke is deliberately much less than dust**, as asked: alpha ceiling 0.30 against dust's 0.44,
+scaled by a further `smoke_scale` 0.55, smaller (0.30 m vs 0.42 m) and shorter-lived (2.4 s vs 3.2 s).
+
+**Structure.** Layers are now declared in a `LAYERS` dictionary — amount, life, size, gravity,
+growth curve, alpha ceiling, spread, damping, emission box, render order — and `_build_layer()`
+turns a declaration into four per-wheel emitters. Adding water spray, snow or mud is a dictionary
+entry, not new code. **Not drive-tested — visual.**
+
 ## 2026-08-14
 
 **Particle system rebuilt as THREE layers, plus two rendering artefacts fixed.**
