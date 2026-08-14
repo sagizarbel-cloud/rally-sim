@@ -20,6 +20,47 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-14 (particle density and cost — measured, not guessed)
+
+**These particles are FILL-RATE bound, not count bound. That is the whole story, and it should be
+grepped before anyone "adds more particles" again.** Every transparent sprite is drawn back-to-front
+whether or not something later covers it, so cost scales with AREA on screen, not with how many
+there are. Measured at the 160 km/h ceiling: one dirt/dust plume particle is 4.42 m across = 15.3 m2
+of sprite, and 600 of them is ~9 200 m2 — roughly **23x full-screen overdraw** if they overlapped in
+view. Doubling the count doubles that while barely looking denser, because the cloud is already
+opaque where it overlaps.
+
+**So density was bought from alpha and from the sprite, not mainly from count.**
+- Alpha ceilings up: plume 0.44 → 0.52, asphalt smoke 0.30 → 0.36. Free — same pixels, more opacity.
+- The puff sprite now has a **denser core and a shorter fringe** (alpha x1.35, clamped). A wide band
+  of near-transparent pixels costs exactly as much fill as opaque ones and shows almost nothing;
+  after the change one frame still carries 564 of 4096 pixels in the near-invisible 0.02–0.25 band,
+  which is where any further fill savings would come from.
+- Counts raised moderately, paid for by the savings below: plume 150 → 240/wheel, smoke 100 → 170,
+  gravel 40 → 70. Total 1160 → 1920 particles across 12 emitters.
+
+**Optimisations applied, all verified present in the API before use:**
+- **`fixed_fps = 30` + `interpolate = true`** — particles simulate at 30 Hz instead of every rendered
+  frame and are interpolated between steps. Dust has no fast transients to miss, so this is most of
+  the simulation cost back, and it is what pays for the extra count.
+- **Mipmaps on the atlas** — distant particles sample a smaller level, which stops them shimmering
+  and cuts texture-cache pressure when a plume fills the screen. Frames already fade to alpha 0 at
+  their borders, so lower mips do not bleed one frame into its neighbour.
+- **A fixed `visibility_aabb`** — without one Godot recomputes bounds, and a moving emitter with
+  world-space particles can cull a plume that is still plainly visible.
+- **`draw_order = VIEW_DEPTH`** for correct back-to-front blending between particles.
+- **`density`** export (build-time multiplier on every layer's ceiling) so the ceiling can be raised
+  deliberately with the cost understood, rather than by editing three numbers.
+
+**Known next step, not taken:** the 12 emitters (3 layers x 4 wheels) could collapse to 3 using
+`emit_particle()` to spawn at arbitrary transforms from one pool per layer — fewer draw calls, and
+density could pool where it is needed instead of being split four ways. `emit_particle` is confirmed
+to exist, but GPU particles do not simulate under `--headless`, so it cannot be verified without
+driving; it was left rather than changed blind.
+
+**Not drive-tested.** If the frame rate drops, `density` is the first knob (try 0.6), then
+`plume_d_max_tyres` — halving the diameter quarters the fill cost, which no count change can match.
+
 ## 2026-08-14 (four named effects; plumes and gravel split apart)
 
 **The four surface effects now have fixed names, recorded in `CLAUDE.md`** so a future session

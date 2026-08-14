@@ -66,6 +66,16 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 @export var mark_fade := 14.0
 @export var mark_interval := 0.03
 # --- shared -------------------------------------------------------------------------------
+# DENSITY AND COST ARE THE SAME KNOB. These particles are fill-rate bound, not count bound: every
+# transparent sprite is drawn back-to-front whether or not something covers it later, so cost
+# scales with AREA on screen. At the 160 km/h ceiling one plume particle is 4.4 m across = 15 m2 of
+# sprite, and 600 of them is ~9200 m2 - roughly 23x full-screen overdraw if they all overlapped in
+# view. Doubling the COUNT therefore doubles the cost while barely looking denser, because the
+# cloud is already opaque where it overlaps. Perceived density is bought far more cheaply from
+# per-particle ALPHA and from the sprite carrying more of its own detail. `density` is here so the
+# ceiling can still be raised deliberately, with the cost understood.
+@export var density := 1.0           # build-time multiplier on every layer's particle ceiling
+@export var sim_fps := 30            # particles simulate at this rate, interpolated - see _make_emitter
 @export var atlas_cells := 2         # 2x2 = 4 distinct puff sprites per atlas
 @export var atlas_px := 64
 @export var attack := 0.18           # s for an effect to swell to a new intensity
@@ -76,13 +86,13 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 # reaching `knee_frac` by `knee_t` of its life, then easing to full size. The knee is what makes a
 # puff expand fast at first and then settle, the way real dust does.
 const LAYERS := {
-	"plume":  {"amount": 150, "life": 4.6, "gravity": -0.45, "rise": 2.4,
-			   "grow": [0.25, 0.32, 0.74, 1.0], "alpha": 0.44, "spread": 36.0, "damp": [1.1, 2.6],
+	"plume":  {"amount": 240, "life": 4.6, "gravity": -0.45, "rise": 2.4,
+			   "grow": [0.25, 0.32, 0.74, 1.0], "alpha": 0.52, "spread": 36.0, "damp": [1.1, 2.6],
 			   "box": Vector3(0.32, 0.14, 0.32), "prio": 1, "spin": 20.0, "turb": 0.55},
-	"smoke":  {"amount": 100, "life": 3.0, "gravity": -0.30, "rise": 3.0,
-			   "grow": [0.25, 0.35, 0.72, 1.0], "alpha": 0.30, "spread": 30.0, "damp": [1.4, 3.0],
+	"smoke":  {"amount": 170, "life": 3.0, "gravity": -0.30, "rise": 3.0,
+			   "grow": [0.25, 0.35, 0.72, 1.0], "alpha": 0.36, "spread": 30.0, "damp": [1.4, 3.0],
 			   "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 16.0, "turb": 0.30},
-	"gravel": {"amount": 40, "life": 0.55, "gravity": -19.0, "rise": 9.0,
+	"gravel": {"amount": 70, "life": 0.55, "gravity": -19.0, "rise": 9.0,
 			   "grow": [1.0, 0.5, 1.0, 1.0], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
 			   "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0, "turb": 0.0},
 }
@@ -130,6 +140,10 @@ func _make_puff_atlas(cells: int, px: int) -> ImageTexture:
 	for cy in range(cells):
 		for cx in range(cells):
 			_draw_puff(img, cx * px, cy * px, px, rng)
+	# Mipmaps: distant particles then sample a smaller level, which both stops them shimmering and
+	# cuts texture-cache pressure when a plume fills the screen. Frames fade to alpha 0 at their
+	# borders (see _draw_puff), so lower mips do not bleed one frame into its neighbour.
+	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 func _draw_puff(img: Image, ox: int, oy: int, sz: int, rng: RandomNumberGenerator) -> void:
@@ -149,6 +163,10 @@ func _draw_puff(img: Image, ox: int, oy: int, sz: int, rng: RandomNumberGenerato
 				var r: float = sqrt(dx * dx + dy * dy) / L[2]
 				a = maxf(a, clampf(1.0 - r, 0.0, 1.0))
 			a = a * a * (3.0 - 2.0 * a)                    # soft shoulder, never a hard rim
+			a = clampf(a * 1.35, 0.0, 1.0)                 # denser core, shorter fringe: a wide band
+			                                               # of near-transparent pixels costs exactly
+			                                               # as much fill as opaque ones and shows
+			                                               # nothing, so spend the area on the middle
 			var edge: float = minf(minf(u, 1.0 - u), minf(v, 1.0 - v))
 			a *= clampf(edge / 0.07, 0.0, 1.0)             # frames must not bleed into each other
 			img.set_pixel(ox + x, oy + y, Color(1, 1, 1, clampf(a, 0.0, 1.0)))
@@ -235,10 +253,19 @@ func _make_emitter(spec: Dictionary) -> GPUParticles3D:
 	var p := GPUParticles3D.new()
 	p.process_material = pm
 	p.draw_pass_1 = mesh
-	p.amount = spec["amount"]               # the CEILING; amount_ratio scales it per frame
+	p.amount = maxi(8, int(round(float(spec["amount"]) * maxf(density, 0.05))))   # CEILING; amount_ratio scales it live
 	p.lifetime = spec["life"]
 	p.randomness = 0.5
 	p.amount_ratio = 1.0
+	# Simulate at sim_fps rather than every rendered frame, and interpolate between those steps.
+	# Dust has no fast transients to miss, so a third of the simulation cost is free real estate -
+	# and it is what pays for the density above.
+	p.fixed_fps = sim_fps
+	p.interpolate = true
+	p.draw_order = GPUParticles3D.DRAW_ORDER_VIEW_DEPTH    # correct back-to-front blending
+	# A generous fixed visibility box. Without one Godot recomputes the bounds, and a moving emitter
+	# with world-space particles can otherwise cull a plume that is still perfectly visible.
+	p.visibility_aabb = AABB(Vector3(-25.0, -4.0, -25.0), Vector3(50.0, 22.0, 50.0))
 	p.local_coords = false                  # particles stay where they were born
 	p.emitting = false
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
