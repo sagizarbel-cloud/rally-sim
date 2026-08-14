@@ -166,6 +166,27 @@ or HELP lines yet — `tuning_panel.gd` was held by the B2 session at the time. 
 free, per the convention.* **Not yet drive-tested — this is a visual change and only driving can
 judge it.**
 
+## 2026-08-13 (B4 diagnosis — NOT yet resolved)
+
+**"Much easier to lose control of the slide", "maintaining a good entry has got harder" after B4.**
+Diagnosed, not yet fixed — awaiting the user's choice of remedy. Measured cause: **the old fixed
+`By = 10` put the lateral force peak at 114.8 degrees of slip angle**, i.e. beyond ANY angle a car
+can reach. Every slip angle you could actually drive was on the RISING side of the curve, so grip
+kept increasing the further you slid — at 40 deg you still had 0.988 of peak and climbing. The
+tyre never let go, and a slide was always self-correcting.
+B4's derived `By` moved the peak to **14 deg on gravel and 9 deg on tarmac** (realistic; real tyres
+peak at 6–10 deg on tarmac). Past those angles the curve FALLS. So normal cornering moved from the
+rising side to the falling side, and that flips the sign of the feedback: on the rising side more
+slip gives more restoring force (self-correcting), on the falling side more slip gives less
+(self-amplifying). **The magnitude of the drop is tiny — 0.989 of peak at 30 deg on gravel — so
+this is not about losing grip, it is about losing the SLOPE that used to catch the car for you.**
+Post-peak the curve settles at 0.809 of peak (set by `Cy` 1.40 via sin(Cy*pi/2)).
+Secondary contributor: relaxation length adds ~28 ms of lag at 20 m/s before the correction
+arrives (`sigma_lat` 0.55 m).
+Levers, all on the Tab panel: `peak_alpha_gravel` / `peak_alpha_tarmac` (widen the stable window)
+and `sigma_lat` (shorten the lag). If those are not enough the code option is a surface-dependent
+`Cy` — a flatter curve on gravel, which forgives past the peak WITHOUT moving the peak.
+
 ## 2026-08-13 (B4 + B5)
 
 **B4 — the car takes a set instead of darting.** Symptom this addresses: *"steering feels darty"*,
