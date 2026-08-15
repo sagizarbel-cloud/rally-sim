@@ -236,11 +236,16 @@ func _update_visual() -> void:
 		mm.set_instance_color(int(k), Color(0.08, 0.055, 0.04, clampf(wn * 1.05, 0.0, 0.84)))   # dark worn dirt
 	_dirty.clear()
 
-func _unhandled_input(e: InputEvent) -> void:
-	# [F10]: hide the worn-line overlay. Paired with [F9] on the effects node so a frame-rate drop
-	# can be attributed by elimination while driving, instead of guessed at.
-	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_F10:
-		overlay_on = not overlay_on
-		if _mm != null:
-			_mm.visible = overlay_on
-		print("[PERF] worn-line overlay: %s" % ("ON" if overlay_on else "OFF"))
+var _kh := false
+
+func _process(_dt: float) -> void:
+	# [H] hides the worn-line overlay. Polled, and a letter rather than an F-key: macOS reserves
+	# F9/F10 for Mission Control and volume, so the first attempt at this toggle never received them.
+	if Input.is_key_pressed(KEY_H) != _kh:
+		_kh = not _kh
+		if _kh:
+			overlay_on = not overlay_on
+			if _mm != null:
+				_mm.visible = overlay_on
+			print("[PERF] worn-line overlay: %s (%d instances)" % [
+				"ON" if overlay_on else "OFF", _cell_of.size()])

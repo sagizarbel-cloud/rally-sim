@@ -112,32 +112,85 @@ var _marks: Array = []
 var _lay_accum := 0.0
 var _build := [0.0, 0.0, 0.0, 0.0]   # ASPHALT SMOKE column build-up per wheel, 0..1
 var _sz := {}                        # smoothed speed-driven quantities (see _physics_process)
-var enabled := true                  # [F9] master off-switch, for attributing frame-rate drops
+var enabled := true                  # [G] master off-switch, for attributing frame-rate drops
+var _perf: Label                     # [J] on-screen performance readout
+var _perf_t := 0.0
+var _kg := false
+var _kj := false
+var _curves := {}                    # layer -> [CurveTexture], growth curves from slow to fast
+var _cbucket := {}                   # layer -> which bucket is currently assigned
+const GROW_BUCKETS := 6              # speed steps for how FAST a puff expands (see _build_curves)
 
 func _ready() -> void:
 	_atlas = _make_puff_atlas(atlas_cells, atlas_px)
 	for lname in LAYERS.keys():
+		_build_curves(lname, LAYERS[lname])
 		_em[lname] = _build_layer(LAYERS[lname])
 		_sm[lname] = [0.0, 0.0, 0.0, 0.0]
 	_build_marks()
 	_sun = _find_sun()
 
-func _unhandled_input(e: InputEvent) -> void:
-	# [F9]: kill every surface effect outright. Paired with [F10] on the wear node, this makes a
-	# frame-rate drop ATTRIBUTABLE while driving - toggle one, watch the counter - instead of
-	# guessed at from a description. Neither key touches the input map, so nothing else can clash.
-	if not (e is InputEventKey and e.pressed and not e.echo):
-		return
-	if e.keycode == KEY_F9:
-		enabled = not enabled
-		var live := 0
-		for lname in _em.keys():
-			for p in _em[lname]:
-				p.emitting = false
-				p.visible = enabled
-				live += p.amount
-		print("[PERF] surface effects: %s  (%d particle slots across %d emitters)" % [
-			"ON" if enabled else "OFF", live, _em.size() * 4])
+func _process(_dt: float) -> void:
+	# Keys are POLLED, not taken from _unhandled_input, and they are letters rather than F-keys.
+	# The first attempt used F9/F10, which macOS reserves for Mission Control and volume - the app
+	# never receives them, so the toggles looked broken when they were merely unreachable.
+	#   [G] all surface effects off/on      [H] worn-line overlay off/on      [J] perf readout
+	if Input.is_key_pressed(KEY_G) != _kg:
+		_kg = not _kg
+		if _kg:
+			_toggle_effects()
+	if Input.is_key_pressed(KEY_J) != _kj:
+		_kj = not _kj
+		if _kj:
+			_toggle_perf()
+	if _perf != null and _perf.visible:
+		_perf_t += _dt
+		if _perf_t > 0.25:
+			_perf_t = 0.0
+			_update_perf()
+
+func _toggle_effects() -> void:
+	enabled = not enabled
+	var slots := 0
+	for lname in _em.keys():
+		for p in _em[lname]:
+			p.emitting = false
+			p.visible = enabled
+			slots += p.amount
+	print("[PERF] surface effects %s (%d particle slots, %d emitters)" % [
+		"ON" if enabled else "OFF", slots, _em.size() * 4])
+
+func _toggle_perf() -> void:
+	if _perf == null:
+		var cl := CanvasLayer.new()
+		cl.layer = 4
+		add_child(cl)
+		_perf = Label.new()
+		_perf.position = Vector2(16, 16)
+		_perf.add_theme_font_size_override("font_size", 15)
+		_perf.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+		_perf.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+		_perf.add_theme_constant_override("outline_size", 6)
+		cl.add_child(_perf)
+	_perf.visible = not _perf.visible
+
+func _update_perf() -> void:
+	# The numbers that separate the candidates. DRAW CALLS and PRIMITIVES move with particles and
+	# other geometry; PROCESS/PHYSICS time moves with script cost. If the frame rate falls while
+	# draw calls and primitives stay flat, it is not the particles - it is fill rate or CPU.
+	var live := 0
+	for lname in _em.keys():
+		for p in _em[lname]:
+			if p.emitting:
+				live += int(round(float(p.amount) * p.amount_ratio))
+	_perf.text = "FPS %d   frame %.1f ms\nprocess %.2f ms   physics %.2f ms\ndraw calls %d   primitives %s\nemitting ~%d particles   effects %s" % [
+		int(Performance.get_monitor(Performance.TIME_FPS)),
+		Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0 + Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+		Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+		Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+		String.num_uint64(int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME))),
+		live, "ON" if enabled else "OFF"]
 
 func _find_sun() -> DirectionalLight3D:
 	var p := get_parent()
@@ -202,6 +255,32 @@ func _curve(g: Array) -> Curve:
 	c.add_point(Vector2(clampf(float(g[1]), 0.05, 0.95), float(g[2])))
 	c.add_point(Vector2(1.0, float(g[3])))
 	return c
+
+func _build_curves(lname: String, spec: Dictionary) -> void:
+	# The faster the car is going, the sooner a puff should reach full size - a plume torn off at
+	# 140 km/h billows out almost at once, while one lifted at 30 loafs upward. Final SIZE already
+	# scales with speed; this scales the RATE. The curve is a baked texture, so rather than rebuild
+	# it every frame we bake a handful with progressively earlier peaks and swap between them, which
+	# is a texture-pointer assignment.
+	var g: Array = spec["grow"]
+	var arr: Array = []
+	for i in range(GROW_BUCKETS):
+		var t := float(i) / float(GROW_BUCKETS - 1)
+		var peak_t: float = lerpf(float(g[1]), float(g[1]) * 0.32, t)   # peaks up to 3x sooner
+		arr.append(_curve_tex([g[0], peak_t, g[2], g[3]]))
+	_curves[lname] = arr
+	_cbucket[lname] = -1
+
+func _grow_bucket(lname: String, v: float) -> void:
+	if not _curves.has(lname):
+		return
+	var b: int = clampi(int(round(plume_speed_t(v) * float(GROW_BUCKETS - 1))), 0, GROW_BUCKETS - 1)
+	if _cbucket[lname] == b:
+		return
+	_cbucket[lname] = b
+	for p in _em[lname]:
+		var pm: ParticleProcessMaterial = p.process_material
+		pm.scale_curve = _curves[lname][b]
 
 func _curve_tex(g: Array) -> CurveTexture:
 	var t := CurveTexture.new()
@@ -459,6 +538,8 @@ func _physics_process(delta: float) -> void:
 	_sz["pd"] = move_toward(float(_sz.get("pd", p_d)), p_d, delta * 6.0)
 	_sz["pn"] = move_toward(float(_sz.get("pn", p_dens)), p_dens, delta / 0.7)
 	_sz["pr"] = move_toward(float(_sz.get("pr", p_rise)), p_rise, delta / 0.7)
+	_grow_bucket("plume", v)      # faster car -> the puff reaches full size sooner, not just bigger
+	_grow_bucket("smoke", v)
 
 	for i in range(mini(wheels.size(), 4)):
 		var w = wheels[i]

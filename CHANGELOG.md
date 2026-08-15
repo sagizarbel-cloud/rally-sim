@@ -20,6 +20,39 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-15 (the A/B toggles were unreachable on macOS; real perf readout added)
+
+**The [F9]/[F10] toggles added earlier never worked, and the reason is worth remembering:
+macOS reserves F9 and F10 for Mission Control and volume, so the application never receives them.**
+The handlers were fine — nothing in the project calls `set_input_as_handled`, and Tab reaches
+`_unhandled_input` normally — the KEYS were unreachable. Any future in-game debug key must avoid
+F-keys on this machine.
+
+Replaced with polled letter keys, which cannot be swallowed by input handling either:
+- **[G]** all surface effects off/on (dirt/dust plumes, dirt/gravel particles, asphalt smoke)
+- **[H]** worn-line overlay off/on
+- **[J]** on-screen performance readout
+
+**The readout is the point.** It shows FPS, frame time, **process ms**, **physics ms**, **draw
+calls**, **primitives**, and the live emitting-particle count. Those separate the candidates that
+a description cannot: if the frame rate falls while draw calls and primitives stay flat, it is not
+the particles — it is CPU. If physics ms is what climbs, it is the physics tick, not rendering.
+
+**A suspect worth naming, since the report attributed the drop to the particle-rate increase:
+C1 landed at almost the same time**, and it adds a per-wheel roughness sample at 120 Hz whose own
+measured cost is **1.05 ms/tick against a 1.84 ms/tick baseline** — a ~57% increase in physics tick
+cost, and it is active on exactly the loose surfaces where the drop is reported. That is not an
+accusation, it is the other thing that changed; the [J] readout distinguishes them in one drive by
+showing whether *physics ms* or *draw calls* is what moves. `roughness_gain = 0` in the Tab panel
+disables C1's sampling for the same A/B.
+
+**Also: plumes and asphalt smoke now expand FASTER at speed, not just larger.** Final size already
+scaled with speed; this scales the rate. A puff reaches full size 2.07 s after birth at 20 km/h,
+1.23 s at 100, and **0.66 s at 160** — three times sooner, which is what a plume torn off at speed
+actually does. Implemented as a handful of pre-baked growth curves selected by speed bucket, since
+the curve is a texture and rebuilding it per frame would be wasteful; swapping is a pointer
+assignment.
+
 ## 2026-08-15 (C1 — the ground finally has texture: washboard, ISO gravel/tarmac noise, tyre enveloping)
 
 **"The rally loop was a smooth floor with a friction number" — that's the bug this closes.**
