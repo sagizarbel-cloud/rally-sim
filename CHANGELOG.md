@@ -375,6 +375,26 @@ or HELP lines yet — `tuning_panel.gd` was held by the B2 session at the time. 
 free, per the convention.* **Not yet drive-tested — this is a visual change and only driving can
 judge it.**
 
+## 2026-08-13 (later — gravel lateral peak to 16 deg, and four sliders renamed)
+
+**`peak_alpha_gravel` 14 -> 16 deg** (user's call, after the "feels good" verdict). Widens the
+self-correcting window on gravel: the car stays on the RISING side of the lateral curve to 16 deg
+of slip instead of 14, which is where a slide still pulls itself straight. Still inside realistic
+gravel numbers.
+
+**"Couldn't find the peak slip angle gravel slider" — four sliders were named almost identically.**
+The panel sorts A-Z, and there were FOUR rows beginning "Peak slip", landing adjacent: "Peak slip
+angle gravel/tarmac" (LATERAL, degrees of slip angle) and "Peak slip gravel/tarmac" (LONGITUDINAL,
+% slip ratio). Two pairs governing completely different axes, distinguished only by the word
+"angle" buried mid-label. Renamed so the axis is the first thing you read and the four still group
+together:
+`Grip peak LAT gravel` / `Grip peak LAT tarmac` (degrees) and `Grip peak LONG gravel` /
+`Grip peak LONG tarmac` (% slip). The HELP lines now open with **TYRE, LATERAL (cornering)** or
+**TYRE, LONGITUDINAL (drive/brake)** for the same reason. Audit after: 86 rows, no duplicate
+labels, no row missing help, no orphaned help.
+*Convention reinforced: when two tunables differ only by which AXIS they act on, the axis belongs
+at the FRONT of the label, not buried in it.*
+
 ## 2026-08-13 (slide fix — new lever + a latent bug found)
 
 **`_mf_peak_u` was silently clamping, putting the force peak in the wrong place.** Latent bug, no

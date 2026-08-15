@@ -155,7 +155,7 @@ class_name VehicleM2
 # sharply; gravel peaks much later and slides progressively - that difference IS the "lean on it"
 # gravel feel, and a single fixed By could never express it.
 @export var peak_alpha_tarmac := 9.0        # deg of slip angle at peak lateral grip on asphalt
-@export var peak_alpha_gravel := 14.0       # deg of slip angle at peak lateral grip on dirt/gravel
+@export var peak_alpha_gravel := 16.0       # deg of slip angle at peak lateral grip on dirt/gravel
 # B4: relaxation length - a tyre has to ROLL about sigma metres before its lateral force builds.
 # Without it the car is darty: force appears the instant the wheel is steered, so there is no
 # beat between turning in and the car taking a set, and a flick cannot be timed. Longitudinal
