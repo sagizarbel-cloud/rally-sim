@@ -66,6 +66,11 @@ const HELP := {
 	"bumpstop_zone": "SUSPENSION - fraction of travel the bump stop occupies at the top (0.20 = the last 20%): the cushion before the suspension goes solid.",
 	"bumpstop_g": "SUSPENSION - bump-stop strength, in g of that corner's static load. Higher = less bottoming, but harsher and crashier over big hits.",
 	"roughness_gain": "SUSPENSION - master strength of the C1 surface-texture field (washboard, ISO-noise, tarmac joints). 0 = the pre-C1 glass-smooth ground, exactly - the A/B for the whole phase.",
+	"road_class_gravel": "SUSPENSION - ISO 8608 road-class coefficient for the rally loop's background 'grain' (higher = rougher gravel, independent of the washboard ridges).",
+	"road_class_tarmac": "SUSPENSION - ISO 8608 road-class coefficient for the asphalt ring's background 'grain' (higher = coarser tarmac, independent of the joints/patches).",
+	"washboard_amp": "SUSPENSION - depth of the gravel washboard corrugation in corner/braking zones (real roads run up to ~5 cm). This is the one most likely to need turning UP to be felt.",
+	"joint_amp": "SUSPENSION - height of the periodic tarmac expansion-joint bumps.",
+	"patch_amp": "SUSPENSION - height of the occasional tarmac patch-repair bumps.",
 	"camber_deg": "SUSPENSION - static wheel lean. Negative camber gives the loaded outside tyre a flatter contact patch mid-corner.",
 	# --- chassis / tyres ---
 	"chassis_mass": "CHASSIS - the car's mass, and the one authority for it: moving this re-rates the springs, bars, tyre load reference and rolling resistance live.",
@@ -179,6 +184,11 @@ var _specs := [
 	["Bump stop force (M2)", "bumpstop_g",             1.0,     15.0,  0.5,  func(v): return "%.1f g" % v],
 	["Camber (M2)",          "camber_deg",             0.0,      6.0,    0.5, func(v): return "%.1f deg" % v],
 	["Roughness gain (M2)",  "roughness_gain",         0.0,      2.0,   0.1,  func(v): return "%.1fx" % v],
+	["Road class gravel (M2)","road_class_gravel",      2.0,    512.0,  2.0,  func(v): return "Gd0 %d" % int(v)],
+	["Road class tarmac (M2)","road_class_tarmac",      0.5,    128.0,  0.5,  func(v): return "Gd0 %d" % int(v)],
+	["Washboard depth (M2)", "washboard_amp",           0.0,     0.06, 0.002, func(v): return "%.1f cm" % (v * 100.0)],
+	["Tarmac joint bump (M2)","joint_amp",              0.0,     0.03, 0.001, func(v): return "%.1f cm" % (v * 100.0)],
+	["Tarmac patch bump (M2)","patch_amp",              0.0,     0.05, 0.001, func(v): return "%.1f cm" % (v * 100.0)],
 	# virtual pedals (input shaping)
 	["Throttle rise",        "throttle_rise_time",     0.0,      0.5,   0.02, func(v): return "%.2f s" % v],
 	["Throttle fall",        "throttle_fall_time",     0.0,      0.5,   0.02, func(v): return "%.2f s" % v],

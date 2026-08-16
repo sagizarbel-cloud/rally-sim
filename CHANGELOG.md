@@ -20,6 +20,25 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-15 (C1 follow-up: live Tab sliders for the individual roughness amplitudes)
+
+**First drive report: "feels pretty smooth, only the asphalt kerb edges feel like anything."**
+Clarified first — the kerb is real geometry that predates C1 entirely, unrelated to this phase;
+washboard only lives on the rally loop's corner/braking zones (`wear.gd`'s mask), and tarmac gets
+joints/patches, not washboard. The most likely explanation is that the C1.1 defaults (2 cm
+washboard, 6 mm joints, 12 mm patches) are genuine physically-grounded starting points but too
+small to clear the perception threshold against 20+ kN of cornering/braking load already in play -
+exactly the "let the drive test move it" case the plan called out in advance.
+
+**So the individual amplitudes are now live-tunable, not just `roughness_gain`.** They were
+exports on the `Roughness` node, which the Tab panel can't reach (it only ever reads/writes
+`vehicle` properties). Mirrored five of them onto `vehicle_m2.gd` instead — `road_class_gravel`,
+`road_class_tarmac`, `washboard_amp`, `joint_amp`, `patch_amp` — synced into `roughness_field` once
+per physics tick before the raycast pass, so the car stays the single source of truth the panel
+already knows how to edit. This lets the amplitudes be dialled up hard (e.g. washboard to 5 cm) as
+a quick pass/fail: if a strongly exaggerated value is still not felt, that points to an actual bug
+rather than a tuning gap. Panel: 91 rows, 91 HELP entries, no gaps.
+
 ## 2026-08-15 (the A/B toggles were unreachable on macOS; real perf readout added)
 
 **The [F9]/[F10] toggles added earlier never worked, and the reason is worth remembering:

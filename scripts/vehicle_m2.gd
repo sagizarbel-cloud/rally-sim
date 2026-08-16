@@ -93,6 +93,15 @@ class_name VehicleM2
 # stop/Fz/grip/tyre heat downstream of it, for free. This is the ONE gain that turns it off - the
 # A/B that proves what the phase bought.
 @export var roughness_gain := 1.0
+# Individual term amplitudes, mirrored onto the car (not left on the Roughness node) purely so the
+# Tab panel - which only ever reads/writes `vehicle` properties - can reach them live. Synced into
+# roughness_field once per tick, before the raycast pass. Defaults are the C1.1 physically-derived
+# starting points; the drive test is expected to move them, same as B1's ride-frequency numbers.
+@export var road_class_gravel := 128.0   # ISO 8608 Gd(n0), rally loop broadband "grain"
+@export var road_class_tarmac := 4.0     # ISO 8608 Gd(n0), asphalt broadband "grain"
+@export var washboard_amp := 0.02        # m, gravel corner/braking-zone corrugation depth
+@export var joint_amp := 0.006           # m, tarmac expansion-joint bump height
+@export var patch_amp := 0.012           # m, tarmac patch-repair height
 
 # --- Appearance ---
 @export var livery_color := Color(0.16, 0.36, 0.82)
@@ -1137,6 +1146,15 @@ func _physics_process(delta: float) -> void:
 		_shift_mat.albedo_color = Color(0.9, 0.0, 0.0) if on else Color(0.2, 0.0, 0.0)
 	var space := get_world_3d().direct_space_state
 	var up := global_transform.basis.y
+
+	# C1: push the car's own (Tab-tunable) roughness amplitudes into the field once per tick,
+	# before it gets sampled below - the car is the single source of truth the panel can reach.
+	if roughness_field != null:
+		roughness_field.road_class_gravel = road_class_gravel
+		roughness_field.road_class_tarmac = road_class_tarmac
+		roughness_field.washboard_amp = washboard_amp
+		roughness_field.joint_amp = joint_amp
+		roughness_field.patch_amp = patch_amp
 
 	# --- suspension + tire-frame pass ---
 	var info := {}
