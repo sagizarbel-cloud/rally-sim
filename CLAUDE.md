@@ -42,6 +42,7 @@ with one of these, confirm WHICH of the four before changing anything - the fixe
 - `:=` CANNOT infer a type from a Variant (`dict[key]`, untyped `stage.*` calls, `Array` elements) → use `var x: Type = ...`.
 - Unshaded `StandardMaterial3D` ignores emission → toggle `albedo_color` instead.
 - macOS has NO `timeout` command → use Godot's `--quit-after N` (N = FRAMES).
+- **iOS/Xogot (2026-08-12):** the project runs on an iPhone 14 Pro Max under Xogot with a DS4 over Bluetooth — smooth ~95% of the time, no code change needed. Good for editing and smoke tests; **phase sign-off is still a Mac drive** (see `docs/ROADMAP.md` → "Platform reach"). There is no touch input in the project, so a pad is mandatory there. A fresh clone needs one Godot import pass before `class_name` resolves, or `world.gd` fails to parse.
 - Controllers: the **PS4 DualShock 4 IS detected** (confirmed driving since 2026-08-09) — analog throttle/brake are live and bypass the virtual-pedal shaping, pad layout in `world.gd` `_setup_input()`. The **wired Xbox One pad is still not detected** on Godot 4/macOS (engine bug). The HUD `input` line names whichever pad is live.
 
 ## Key files (scripts/)

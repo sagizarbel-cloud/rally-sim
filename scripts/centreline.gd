@@ -26,6 +26,7 @@ var _grid: Dictionary = {}
 var _cell_size := 20.0
 var _min_x := 0.0
 var _min_z := 0.0
+var _grid_span := 0          # grid extent in cells; bounds the outward ring search in nearest_point
 
 static func from_polar(center: Vector3, radius_fn: Callable, halfwidth_fn: Callable,
 		height_fn: Callable, samples: int) -> Centreline:
@@ -112,6 +113,7 @@ func _build_grid() -> void:
 	var avg_step := _length / maxf(float(_n), 1.0)
 	_cell_size = maxf(avg_step * 8.0, 1.0)   # a handful of samples per cell, not thousands
 	_min_x = minx; _min_z = minz
+	_grid_span = int(ceil(maxf(maxx - minx, maxz - minz) / _cell_size)) + 1
 	for i in range(_n):
 		var key := _key(_pts[i].x, _pts[i].z)
 		if not _grid.has(key):
@@ -135,10 +137,32 @@ func nearest_point(x: float, z: float) -> Dictionary:
 				if d2 < best_d2:
 					best_d2 = d2; best_i = idx
 	if best_i < 0:
-		for i in range(_n):                     # off-grid fallback (should not happen on-map)
-			var d2 := Vector2(_pts[i].x - x, _pts[i].z - z).length_squared()
-			if d2 < best_d2:
-				best_d2 = d2; best_i = i
+		# Off-grid: the query sits further from the line than one ring of cells. This used to fall
+		# straight through to a scan of every sample - O(n) per call. With the C1 washboard mask
+		# broken (fixed in c8d2d18) that path ran 9 patch samples x 4 wheels x 120 Hz on grass and
+		# was the frame drop. The mask now gates it, but a bounded search means no future caller
+		# can reopen the same hole. Grow outward a ring at a time: the first ring holding any
+		# sample also holds the nearest to within a cell, so one more ring after it is exact.
+		var r := 2
+		var found_at := -1
+		while r <= _grid_span and (found_at < 0 or r <= found_at + 1):
+			for dxi in range(-r, r + 1):
+				var edge_x: bool = (dxi == -r or dxi == r)
+				for dzi in range(-r, r + 1):
+					if not edge_x and dzi != -r and dzi != r:
+						continue        # perimeter only; the interior was searched already
+					var key := Vector2i(ck.x + dxi, ck.y + dzi)
+					if not _grid.has(key):
+						continue
+					for idx in _grid[key]:
+						var d2 := Vector2(_pts[idx].x - x, _pts[idx].z - z).length_squared()
+						if d2 < best_d2:
+							best_d2 = d2; best_i = idx
+			if best_i >= 0 and found_at < 0:
+				found_at = r
+			r += 1
+	if best_i < 0:
+		best_i = 0                              # empty grid; degenerate, but never unindexed
 	# refine against the two segments touching the nearest sample: project onto each, keep the
 	# closer one, and read s/lateral/heading off that projection rather than the raw sample
 	var best_s := _s[best_i]
