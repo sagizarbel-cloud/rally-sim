@@ -64,7 +64,7 @@ func _ready() -> void:
 	hud.time_trial = tt                          # HUD shows the active circuit's lap/last/best
 	_build_tuning(car)
 	_build_rearview(car)
-	_build_reactive_patch(car)
+	_build_reactive_patch(car, stage)
 	_build_sound(car, stage)
 
 func _physics_process(delta: float) -> void:
@@ -157,7 +157,7 @@ func _build_timetrial(car: Node3D, stage) -> Node3D:
 	add_child(tt)
 	return tt
 
-func _build_reactive_patch(car: Node3D) -> void:
+func _build_reactive_patch(car: Node3D, stage) -> void:
 	# small deformable dirt patch in the CENTRE (M3 reactive terrain). It sits on the stage's flat
 	# centre disc (bed 0.15 above the graded ground), so the wheels dig ruts / kick berms there.
 	var patch: Node = load("res://scripts/terrain.gd").new()
@@ -165,6 +165,10 @@ func _build_reactive_patch(car: Node3D) -> void:
 	patch.zone_center = Vector3(0, 0, 0)          # set BEFORE add_child so its _ready() uses them
 	patch.track_center = Vector3(0, 0, 0)
 	patch.zone_size = 150.0                        # bigger centre dirt area (+20 m each side)
+	# One colour authority: the stage paints the ground under and around the tiles, so the tiles
+	# take their dirt from it. Set BEFORE add_child so the shader picks it up in _ready().
+	if stage != null and stage.get("patch_dirt_color") != null:
+		patch.dirt_color = stage.patch_dirt_color
 	add_child(patch)
 	patch.vehicle = car                            # feeds get_wheels()/velocity for the dig model
 

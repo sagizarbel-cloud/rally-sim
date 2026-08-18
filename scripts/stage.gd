@@ -30,6 +30,10 @@ class_name RallyStage
 @export var berm_width := 2.0            # berm falloff width
 @export var grass_color := Color(0.44, 0.44, 0.26)   # dry Mediterranean scrub
 @export var road_color := Color(0.60, 0.53, 0.40)    # dusty grey-tan gravel (Acropolis-ish)
+# The centre reactive patch's dirt. terrain.gd draws the deformable tiles and this stage draws the
+# ground under and around them, so ONE of the two has to own the colour or they drift apart and the
+# tiles visibly pop as they stream in. The stage owns it; world.gd pushes it into the patch.
+@export var patch_dirt_color := Color(0.66, 0.48, 0.26)
 
 # --- outer ASPHALT circuit: a winding technical loop (Monte-Carlo inspired) OUTSIDE the rally loop.
 # A proper flat road (follows the hills along its centreline, level across its width) with an ABRUPT
@@ -183,6 +187,15 @@ func _on_drag_strip(x: float, z: float) -> bool:
 
 func _surface_color(x: float, z: float) -> Color:
 	var c := grass_color.lerp(road_color, _road_t(x, z))       # grass or dirt road
+	# Centre reactive-dirt patch. This term was missing, and it caused two visible bugs at once:
+	#   - dust plumes on the patch sampled grass (effects.ground_color() reads this function), so
+	#     the dirt patch threw the same colour plume as the scrub beside it;
+	#   - the ground painted here stayed grass-coloured under the deformable tiles, which draw
+	#     terrain.gd's own dirt colour, so a tile popped from olive to brown as it streamed in.
+	# grip_at() has always special-cased the patch; only the colour did not. Reuse
+	# deformable_patch_factor() rather than a second radius test, so the colour edge tracks the
+	# SQUARE patch and its blend ramp exactly as the geometry does (§6.3: query, don't re-derive).
+	c = c.lerp(patch_dirt_color, 1.0 - deformable_patch_factor(x, z))
 	var ad := _asphalt_dist(x, z)
 	var ta := 1.0 - smoothstep(asphalt_width * 0.5, asphalt_width * 0.5 + 1.5, ad)   # crisp asphalt edge
 	c = c.lerp(asphalt_color, ta)                              # circuit asphalt
