@@ -215,10 +215,20 @@ Hooks worth building now, cheap at this stage and expensive to retrofit:
 1. Ribbon vs particles for the far LOD. A ribbon collapses when viewed edge-on and cannot respond to
    wind per-segment; particles cost fill. The aggregate puffs of §2 may make the ribbon unnecessary
    — decide after P3 measures the saving.
-2. Does the eddy count `n` scale with speed or with wheel angular velocity? Strouhal says the latter,
-   but speed is what the player perceives.
-3. Should dust colour sample the ground once at birth or continuously? Once is cheaper and correct
-   for a puff of thrown material; continuous looks better crossing a surface boundary.
+2. ~~Does the eddy count `n` scale with speed or with wheel angular velocity?~~ **RESOLVED: use the
+   tyre's surface speed, `max(v, |omega|*r)`.** Neither alone survives the edge cases. Pure car speed
+   `v` gives a stationary wheelspin no ripple at all, though that is exactly when the wheel is
+   stirring the air hardest. Pure `|omega|*r` gives a fully locked wheel no ripple while the car
+   slides at 100 km/h, which is worse. The physical driver is how fast the tyre surface moves
+   relative to the ground it is throwing, and taking the max of the two is the cheap correct answer
+   for both. Then `n = St * u_surf * T / D` with `St` ~ 0.2, `T` the particle lifetime and `D` the
+   tyre diameter - all quantities the vehicle already tracks.
+3. ~~Should dust colour sample the ground once at birth or continuously?~~ **DECIDED 2026-08-18:
+   once at birth.** A puff is a parcel of material physically thrown off the surface at one instant;
+   it carries that material's colour and has no mechanism to change it in flight. Crossing a
+   surface boundary therefore shows a gradient of mixed puffs trailing behind the car rather than a
+   whole plume switching colour at once - which is both cheaper and what actually happens. This
+   makes `ground_color()` a per-emission call, not a per-frame one.
 4. Where does the deformable patch's dug material fit? Digging a rut should throw *more* and
    *coarser* material than skimming a packed surface, and `terrain.gd` already knows how deep the
    rut is.
