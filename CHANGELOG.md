@@ -20,7 +20,29 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
-## 2026-08-15 (C1 follow-up: live Tab sliders for the individual roughness amplitudes)
+## 2026-08-15 (real bug: washboard was firing on open grass, "out of control" - root cause of a loose-surface FPS drop)
+
+**User verdict from a parallel session: the frame-rate drops on loose surfaces traced to C1
+roughness "being out of control on grass."** Confirmed and fixed - `wear.is_tracked(x,z)`, added
+in C1.1 as the washboard placement mask, only checked the ANGULAR SECTOR (theta from the map
+centre), never the lateral distance from the actual road. So any point at ANY radius that shared
+an angle with one of the rally loop's tracked corner/braking zones read as "tracked" - including
+open grass hundreds of metres out, far past the drivable corridor. Full-amplitude washboard
+(`sin(2*PI*s/lambda)`, default depth up to 6 cm now that it's Tab-tunable) was landing on wide-open
+grass wherever the driver's angle-from-centre happened to line up with a corner zone, which is
+most of the map's angular span once you account for `brake_dist` (32 m of arc before every
+corner). At speed and off-road, the raycast's spatial sampling rate can alias the washboard's
+0.3-1.0 m wavelength into effectively frame-to-frame noise, which explains both the "out of
+control" feel and the FPS cost (erratic Fz/compression every tick from a term that should never
+have been active there at all).
+
+**Fix: `is_tracked` now delegates to `_cell(x,z) >= 0`** instead of re-deriving half its logic -
+`_cell()` already checks BOTH the tracked flag AND the lateral corridor bound (`lat_extent` around
+the centreline) correctly, and is the same test the worn-line placement itself uses. Verified
+headless: a point at a tracked angle but 250 m further out than the road now reads `is_tracked =
+false` and `washboard = 0.0` (previously would have returned the full sine amplitude). Washboard
+is now provably confined to the actual tracked corridor on the actual road - it cannot leak onto
+grass regardless of angle or distance.
 
 **First drive report: "feels pretty smooth, only the asphalt kerb edges feel like anything."**
 Clarified first — the kerb is real geometry that predates C1 entirely, unrelated to this phase;

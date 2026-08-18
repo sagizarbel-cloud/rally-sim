@@ -133,11 +133,12 @@ func is_tracked(x: float, z: float) -> bool:
 	# C1: washboard forms where repeated braking/accelerating traffic packs the surface - the same
 	# corner+braking-zone mask this node already computes for the worn line, reused verbatim so the
 	# line that gets worn is the line that gets ribbed (docs/PLAN-drivetrain-suspension.md C1.1).
-	var dx := x - _center.x
-	var dz := z - _center.z
-	var i := int(round(atan2(dz, dx) / TAU * float(arc_samples)))
-	i = ((i % arc_samples) + arc_samples) % arc_samples
-	return _tracked[i] == 1
+	# BUG FIXED 2026-08-15: this originally checked only the angular sector (theta from the map
+	# centre), not lateral distance from the road - so ANY point at ANY radius sharing an angle
+	# with a tracked corner/braking zone read as tracked, including open grass hundreds of metres
+	# out. _cell() already does this correctly (tracked flag AND the lateral corridor bound), so
+	# delegate to it instead of re-deriving half its logic.
+	return _cell(x, z) >= 0
 
 func grip_at(x: float, z: float) -> float:
 	var base: float = stage.grip_at(x, z)

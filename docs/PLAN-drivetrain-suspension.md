@@ -1357,6 +1357,23 @@ User drive-through, all in one session, keyboard:
   `scripts/vehicle_m2.gd` (+`roughness_gain`, +`roughness_field`, raycast injection),
   `scripts/world.gd` (wires `Roughness` + the rally-loop `Centreline`), `scripts/tuning_panel.gd`
   (+1 row, +1 HELP entry, 86/86).
+  **Follow-up same day, first drive report ("feels pretty smooth, only the asphalt kerb edges feel
+  like anything"):** the individual amplitudes (`road_class_gravel/tarmac`, `washboard_amp`,
+  `joint_amp`, `patch_amp`) were exports on the `Roughness` node, unreachable from the Tab panel
+  (it only touches `vehicle` properties) — mirrored onto `vehicle_m2.gd` and synced into
+  `roughness_field` once per tick so they're live-tunable for exactly this kind of pass/fail test.
+  Panel: 91/91, no dupes.
+  **REAL BUG FOUND AND FIXED same day, from a second session's verdict ("out of control on
+  grass"):** `wear.is_tracked(x,z)` — the washboard placement mask above — only checked the
+  angular sector from the map centre, never lateral distance from the road, so full-amplitude
+  washboard was firing on open grass wherever the angle happened to match a tracked corner/braking
+  zone, potentially hundreds of metres off the actual corridor. Fixed by delegating to `_cell(x,z)
+  >= 0`, which already does the correct two-part test (tracked flag AND lateral corridor bound).
+  Verified headless: a tracked-angle point 250 m past the road now reads `is_tracked = false`,
+  `washboard = 0.0` (previously full amplitude). See `CHANGELOG.md` 2026-08-15 for the full
+  writeup — this is very possibly also the root cause of the "FPS drops on loose surfaces" the
+  other parallel session was chasing (erratic, aliased Fz/compression from a term that should
+  never have been active off the drivable corridor).
 - [ ] C2 — Self-aligning torque (no hardware needed; do after B4)
 - [ ] C3 — Wheel input path (needs a wheel; pull forward the day one arrives)
 - [ ] C4 — FFB output (spike first — may honestly conclude "not feasible", see §7)
