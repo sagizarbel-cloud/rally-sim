@@ -1391,7 +1391,20 @@ User drive-through, all in one session, keyboard:
   road-aware damper would return ~4.98 kN at the same input. Harmless before C1 (smooth ground);
   C1 is what makes it matter. **Open item, deliberately not fixed in C1** — it is a real physics
   change with real harshness risk, and wants its own energy-per-impact probe and drive test, the
-  same way B3's hydraulic bump stop does. Fixing (3) is the highest-value next move for C1's feel.
+  same way B3's hydraulic bump stop does.
+  **REVISION SHIPPED 2026-08-15, same day — findings (1) and (3) are both fixed, awaiting drive.**
+  (a) `comp_vel` now includes the road's own vertical velocity (local slope x ground speed), the
+  slope coming free from a least-squares fit through the samples the enveloping filter already
+  takes. (b) The enveloping footprint now spans `contact_patch_len + speed*dt`, the strip the tyre
+  actually sweeps in a tick — simultaneously the honest footprint and the correct anti-aliasing
+  filter, so transmission rolls off as a sinc (82/66/49/26/9% at 0/30/60/100/150 km/h) instead of
+  aliasing past Nyquist. Measured on real washboard: the old spring-only path gave **123 N at
+  100 km/h against a ~4 kN static corner (3%)**, and the damper term gives **4 216 N (34x the
+  spring)** — and the effect now GROWS with speed, inverting the reported symptom. Stability
+  verified (900 frames under power, max Fz 23.4 kN, all finite, vs B3's 23.1 kN baseline); zero
+  road velocity at standstill by construction. New Tab toggle `damper_reads_road` (ON) isolates it.
+  Full table in `CHANGELOG.md`. Finding (2) stands unfixed by design: the body still should not
+  heave at 46 Hz, and C2's steering signal is the channel that carries this to the driver.
 - [x] C2 — Self-aligning torque — implemented 2026-08-15 (`./check.sh` clean; headless probe PASS
   on every item, then removed). **AWAITING USER DRIVE VERDICT.**
   `Mz = Fy * (t_pneumatic + t_mechanical)` per front wheel, summed and divided by `steer_ratio`,

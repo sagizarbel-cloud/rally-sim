@@ -144,17 +144,41 @@ func _envelope_profile(vals: PackedFloat32Array) -> float:
 		num += vals[i] * w; den += w
 	return num / maxf(den, 1e-6)
 
-func sample_enveloped(x: float, z: float, heading: Vector2) -> float:
+func sample_profile(x: float, z: float, heading: Vector2, swept: float) -> Vector2:
+	## Returns (enveloped height, slope along the heading) from ONE set of field samples.
+	##
+	## `swept` is how far the wheel travels during this physics tick, and it EXTENDS the footprint:
+	## the tyre does not touch a single 0.2 m patch during a tick, it sweeps a strip of
+	## `contact_patch_len + speed*dt`. Averaging over that strip is both the physically honest
+	## footprint AND the correct anti-aliasing filter, which matters because the field is sampled
+	## once per tick and that interval is a DISTANCE that grows with speed: a 0.6 m washboard gets
+	## 8.6 samples/wavelength at 30 km/h but only 2.59 at 100 and 1.73 at 150 — past Nyquist, where
+	## a fixed-width footprint would alias the ripple into low-frequency garbage instead of fading
+	## it. With the swept footprint the transmission rolls off as a sinc and simply gets quieter
+	## with speed, which is what a real tyre does and what the maths can actually represent.
+	##
+	## The SLOPE is a least-squares fit through the same samples, so it costs no extra field
+	## evaluations, and it is filtered identically to the height it belongs to. Multiplied by
+	## ground speed it gives the road's own vertical velocity — the term the damper needs.
 	var hd := heading
 	if hd.length_squared() < 1e-6:
 		hd = Vector2(1.0, 0.0)
 	else:
 		hd = hd.normalized()
 	var n := maxi(patch_samples, 1)
-	var half := contact_patch_len * 0.5
+	var half := maxf(contact_patch_len + maxf(swept, 0.0), 0.01) * 0.5
 	var vals := PackedFloat32Array(); vals.resize(n)
+	var sdv := 0.0
+	var sdd := 0.0
 	for i in range(n):
 		var t := 0.0 if n <= 1 else (float(i) / float(n - 1)) * 2.0 - 1.0
 		var d := t * half
 		vals[i] = _raw(x + hd.x * d, z + hd.y * d)
-	return _envelope_profile(vals)
+		# offsets are symmetric about 0, so the regression needs no mean subtraction
+		sdv += d * vals[i]
+		sdd += d * d
+	return Vector2(_envelope_profile(vals), 0.0 if sdd < 1e-9 else sdv / sdd)
+
+func sample_enveloped(x: float, z: float, heading: Vector2) -> float:
+	# static footprint (no sweep) - kept for callers that only want the height
+	return sample_profile(x, z, heading, 0.0).x

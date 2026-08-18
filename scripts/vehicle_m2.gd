@@ -93,6 +93,12 @@ class_name VehicleM2
 # stop/Fz/grip/tyre heat downstream of it, for free. This is the ONE gain that turns it off - the
 # A/B that proves what the phase bought.
 @export var roughness_gain := 1.0
+# C1 REVISION: let the damper see the road. A damper reacts to RELATIVE velocity across itself, and
+# with no unsprung mass the wheel follows the ground exactly - so the ground's own vertical velocity
+# (local slope x ground speed) belongs in the damper velocity alongside the body's. Without it the
+# roughness field can only push through the SPRING, which measured as a ~12% load wobble and was
+# reported as unfeelable. ON by default; the toggle is the A/B that isolates this term.
+@export var damper_reads_road := true
 # Individual term amplitudes, mirrored onto the car (not left on the Roughness node) purely so the
 # Tab panel - which only ever reads/writes `vehicle` properties - can reach them live. Synced into
 # roughness_field once per tick, before the raycast pass. Defaults are the C1.1 physically-derived
@@ -1180,6 +1186,9 @@ func _physics_process(delta: float) -> void:
 		roughness_field.patch_amp = patch_amp
 
 	# --- suspension + tire-frame pass ---
+	# HORIZONTAL ground speed, never linear_velocity.length(): the vertical component would inflate
+	# both the swept footprint and the road-velocity term on every crest and landing.
+	var hspeed := Vector2(linear_velocity.x, linear_velocity.z).length()
 	var info := {}
 	for w in _wheels:
 		var mount_world := global_transform * w.pos
@@ -1200,17 +1209,30 @@ func _physics_process(delta: float) -> void:
 		# instead of adding a force - everything downstream (spring, damper, B3's bump stop, Fz,
 		# load-sensitive grip, weight transfer, tyre heat/wear) inherits it for free and correctly.
 		# Offset contact_point the same way so dust/marks/terrain dig/audio stay consistent (C1.3).
+		var rough_rate := 0.0                # d(ground height)/dt under this wheel, m/s
 		if roughness_field != null and roughness_gain != 0.0:
 			var fwd0 := -global_transform.basis.z
 			if w.steer:
 				fwd0 = fwd0.rotated(up, steer_angle)
-			var rough: float = roughness_field.sample_enveloped(hit_pos.x, hit_pos.z, Vector2(fwd0.x, fwd0.z)) * roughness_gain
-			hit_pos += up * rough
+			# footprint spans the strip the tyre sweeps this tick, so the field is filtered at the
+			# rate it is actually sampled (see roughness.gd sample_profile)
+			var prof: Vector2 = roughness_field.sample_profile(
+				hit_pos.x, hit_pos.z, Vector2(fwd0.x, fwd0.z), hspeed * delta)
+			hit_pos += up * (prof.x * roughness_gain)
+			# The road's OWN vertical velocity: local slope times ground speed. A damper responds to
+			# RELATIVE velocity between body and wheel, and with no unsprung mass the wheel follows
+			# the ground exactly - so a wheel crossing corrugations sees large damper velocities even
+			# with the body dead still. Leaving this out (as C1 originally did) meant roughness could
+			# only ever produce a SPRING force change, which is why the field measured as a ~12% load
+			# wobble and could not be felt. Harmless before C1 because smooth ground has no d/dt.
+			if damper_reads_road:
+				rough_rate = prof.y * hspeed * roughness_gain
 		w.contact_point = hit_pos
 		var compression := clampf((rest_length + wheel_radius) - mount_world.distance_to(hit_pos), 0.0, max_travel)
 		var contact_off := hit_pos - global_position
 		var pv := linear_velocity + angular_velocity.cross(contact_off)
-		var comp_vel := clampf(-pv.dot(up), -3.0, 3.0)
+		# compression rate = body falling toward the ground PLUS the ground rising toward the body
+		var comp_vel := clampf(-pv.dot(up) + rough_rate, -3.0, 3.0)
 		var kw: float = _k_front if w.steer else _k_rear
 		var ccw: float = _ccrit_front if w.steer else _ccrit_rear
 		var Fz := maxf(kw * compression + _damper_force(comp_vel, ccw), 0.0)

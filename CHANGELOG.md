@@ -20,6 +20,52 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-15 (C1 REVISION — the damper can finally see the road; roughness goes from 3% to dominant)
+
+Fixes the *"couldn't differentiate when the roughness gain was on and when it was off, washboard
+was only noticeable when driving slow"* verdict below. Both halves are physical; neither is an
+amplitude tweak, because amplitude was never what was wrong.
+
+**1. The damper now feels the ROAD's vertical velocity, not just the body's.** `comp_vel` was
+`-pv.dot(up)` — purely body-side — so a wheel crossing corrugations registered no damper velocity
+at all while the body sat still. A damper responds to RELATIVE velocity across itself, and with no
+unsprung mass the wheel follows the ground exactly, so the ground's own vertical speed
+(local slope x ground speed) belongs in that term. Slope comes free from a least-squares fit
+through the samples the enveloping filter already takes — no extra field evaluations.
+**Measured on real washboard (2 cm deep, 0.6 m wavelength, front spring 24 000 N/m):**
+
+| speed | transmitted | spring force | road m/s | DAMPER force | damper:spring |
+|---|---|---|---|---|---|
+| 30 km/h | 66% | 319 N | 1.38 | **2 008 N** | 6.3x |
+| 60 km/h | 49% | 236 N | 2.36 | **3 351 N** | 14.2x |
+| 100 km/h | 26% | 123 N | 3.00 | **4 216 N** | 34.2x |
+| 150 km/h | 9% | 45 N | 2.73 | **3 844 N** | 85.3x |
+
+The spring column IS the old behaviour: **123 N against a ~4 kN static corner load at 100 km/h,
+i.e. 3%** — which is precisely why it could not be felt. The damper term is comparable to the
+entire static corner load, so the wheel genuinely unloads and reloads across corrugations.
+**And the effect now GROWS with speed instead of shrinking, which inverts the reported symptom** —
+correct, because corrugations get more violent the faster you cross them. Road velocity saturates
+at its 3.0 m/s clamp around 100 km/h and then eases as the tyre starts skimming the tops.
+
+**2. The enveloping footprint now spans the strip the tyre SWEEPS during a tick, not a fixed
+0.2 m patch.** This is both the honest footprint and the correct anti-aliasing filter. The field is
+sampled once per tick, so the sampling interval is a DISTANCE that grows with speed: a 0.6 m
+washboard gets 8.64 samples/wavelength at 30 km/h, **2.59 at 100, and 1.73 at 150 — past the
+Nyquist limit of 2**, where a fixed footprint aliases the ripple into low-frequency garbage.
+With the swept footprint, transmission instead rolls off smoothly as a sinc (82 / 66 / 49 / 26 / 9%
+across the table above) — the ripple simply gets quieter with speed, the way a real tyre averages
+over its contact length, and the way a 120 Hz tick can actually represent.
+
+**Stability checked, because a large new damper force at 120 Hz is exactly how a sim explodes:**
+900 frames under full power, all `Fz` finite, **max 23.4 kN** — in line with B3's recorded 23.1 kN
+baseline, no divergence. Road velocity is exactly 0 at a standstill by construction (slope x zero
+speed), so there is no parked buzz. New Tab row `damper_reads_road` (ON) is the A/B that isolates
+this term; 96 rows / 96 HELP.
+**Expect this to be STRONG.** If washboard now feels violent rather than informative, the fix is
+`washboard_amp` down from 2 cm (it is a slider now), NOT `damper_reads_road` off — that toggle
+exists to prove what the term bought, not as a tuning knob.
+
 ## 2026-08-15 (C1 drive verdict: "couldn't tell gain on from off"; two root causes found, then C2 built)
 
 **DRIVE VERDICT ON C1 — the phase's central A/B FAILED.** User: *"i couldnt differentiate when the
