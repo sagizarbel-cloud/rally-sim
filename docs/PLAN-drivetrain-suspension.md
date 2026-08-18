@@ -1374,6 +1374,45 @@ User drive-through, all in one session, keyboard:
   writeup — this is very possibly also the root cause of the "FPS drops on loose surfaces" the
   other parallel session was chasing (erratic, aliased Fz/compression from a term that should
   never have been active off the drivable corridor).
-- [ ] C2 — Self-aligning torque (no hardware needed; do after B4)
+  **DRIVE VERDICT 2026-08-15 — the phase's central A/B FAILED, C1 stays UNTICKED for feel.**
+  User: *"i couldnt differentiate when the roughness gain was on and when it was off, washboard was
+  only noticeable when driving slow otherwise the suspension smooths it completely"*. (The bottoming
+  item PASSES: *"bottoming when going uphill is fixed as far as i saw"*.) Three findings, full
+  numbers in `CHANGELOG.md` 2026-08-15 — **amplitude is NOT what is wrong, do not just turn the
+  knobs up**: (1) the washboard is at or below the spatial Nyquist limit at speed, because the field
+  is sampled once per tick and that interval is a DISTANCE that grows with speed — 8.6 samples per
+  wavelength at 30 km/h, 2.59 at 100, and **1.73 (below Nyquist) at 150**, which is exactly the
+  reported "only at slow speed"; (2) a 46 Hz input against a 1.4 Hz suspension has ~3%
+  transmissibility, so the BODY correctly should not move — a real car sends washboard to the driver
+  through the steering, through tyre-load fluctuation, and through structure, and this car has no
+  unsprung mass so it has no wheel-hop mode either; (3) **a real model gap — the damper never sees
+  the road.** `comp_vel` is body-side only and omits the rate of change of ground height, so
+  roughness produces a spring force change (484 N, a 12% wobble) and NO damping response, where a
+  road-aware damper would return ~4.98 kN at the same input. Harmless before C1 (smooth ground);
+  C1 is what makes it matter. **Open item, deliberately not fixed in C1** — it is a real physics
+  change with real harshness risk, and wants its own energy-per-impact probe and drive test, the
+  same way B3's hydraulic bump stop does. Fixing (3) is the highest-value next move for C1's feel.
+- [x] C2 — Self-aligning torque — implemented 2026-08-15 (`./check.sh` clean; headless probe PASS
+  on every item, then removed). **AWAITING USER DRIVE VERDICT.**
+  `Mz = Fy * (t_pneumatic + t_mechanical)` per front wheel, summed and divided by `steer_ratio`,
+  exposed as `get_steer_torque()` (N·m at the rack) and shown on the HUD as `steer Nm`. Taken from
+  the FINAL `Fy` — after the friction ellipse and after A5's gross-sliding correction — so a tyre
+  already trimmed by combined slip reports the weaker signal it physically would. `alpha_peak` per
+  wheel is recovered by INVERTING `_lat_shape`'s own derivation (`_peak_alpha_rad`), so the collapse
+  follows the surface blend automatically and cannot drift from where the grip peak really is.
+  **The trail shape was wrong on the first pass and the probe caught it.** §5's suggested linear
+  collapse `t_p0 * (1 - |alpha|/alpha_peak)` put the torque peak at **1.1 deg against a 9 deg grip
+  peak** — 12% of the way to the limit — because `Fy` saturates 98% by 2.2 deg, so the wheel
+  lightened across the whole range and the lightening carried no information about the limit.
+  Switched to the **cosine (Pacejka Mz) form** that §5 explicitly permitted as the alternative, and
+  which is what the physics says: trail holds near static while the patch ADHERES, then collapses as
+  the rear starts sliding. After: peak at 1.6 deg (tarmac) / 2.8 deg (gravel), weight held longer
+  early and shed harder late — 4.5→9 deg now sheds **51%** of the torque vs 43% before.
+  Probe: Mz peaks before Fy on both surfaces PASS; down to **42%** of its own peak at 2x peak slip
+  PASS; sign reverses and is exactly 0.000 N·m on centre PASS.
+  **Honest limitation:** the peak is still early in absolute terms, and that is B4's drive-verified
+  lateral curve saturating at ~2 deg, not the trail model. B4 was deliberately not touched.
+  New Tab rows `trail_pneumatic` / `trail_mechanical` / `steer_ratio` / `sat_gain` (95/95 HELP).
+  No rumble wired — `Input.start_joy_vibration()` is rumble, NOT force feedback, per §5.4.
 - [ ] C3 — Wheel input path (needs a wheel; pull forward the day one arrives)
 - [ ] C4 — FFB output (spike first — may honestly conclude "not feasible", see §7)

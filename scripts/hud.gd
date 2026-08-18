@@ -64,6 +64,10 @@ func _process(delta: float) -> void:
 		float(eng.get("brake", Input.get_action_strength("brake"))),
 		float(eng.get("clutch", 0.0)),
 		steer])
+	# C2: self-aligning torque at the rack. Watch it LIGHTEN as the front starts to wash out - that
+	# drop arrives a beat before the grip actually goes, which is the cue the whole phase exists for.
+	if car.has_method("get_steer_torque"):
+		lines.append("steer Nm  %+7.1f" % car.get_steer_torque())
 	if car.has_method("get_engine"):
 		var e: Dictionary = eng
 		var g := int(e["gear"])

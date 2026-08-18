@@ -20,6 +20,70 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-15 (C1 drive verdict: "couldn't tell gain on from off"; two root causes found, then C2 built)
+
+**DRIVE VERDICT ON C1 — the phase's central A/B FAILED.** User: *"i couldnt differentiate when the
+roughness gain was on and when it was off, washboard was only noticeable when driving slow
+otherwise the suspension smooths it completely"*. Also, separately: *"bottoming when going uphill
+is fixed as far as i saw"* (that part PASSES — the grass leak fix earlier the same day). C1 stays
+UNTICKED for feel. Three findings explain the silence, and **two of them are arithmetic, one is a
+genuine model gap** — worth grepping before anyone "turns the amplitudes up" again, because
+amplitude is not what is wrong.
+
+**1. The washboard is below the spatial Nyquist limit at speed — this exactly matches "only
+noticeable when driving slow."** The field is sampled once per wheel per physics tick, so the
+sampling interval is a DISTANCE that grows with speed. At 120 Hz: 30 km/h = 0.069 m/tick =
+**8.6 samples per 0.6 m wavelength** (clean). 100 km/h = 0.232 m/tick = **2.59 samples/wavelength**
+(barely above the Nyquist limit of 2, so heavily distorted). 150 km/h = 0.347 m/tick =
+**1.73 samples/wavelength — BELOW Nyquist**, so the ripple aliases into a low-frequency wobble or
+vanishes. Raising `washboard_amp` cannot fix this; it amplifies an alias.
+
+**2. Even sampled perfectly, the BODY should barely move — that part is correct physics, not a
+bug.** A 0.6 m ripple at 100 km/h is a 46 Hz input against a 1.4 Hz suspension. Transmissibility
+at that frequency ratio (r = 33) is roughly 2*zeta/r = **~3%**, so 2 cm of road becomes ~0.7 mm of
+body motion. A real car transmits washboard to the driver through the STEERING, through tyre-load
+(and therefore grip) fluctuation, and through structure-borne vibration — not through body heave.
+This car has no unsprung mass, so it has no wheel-hop mode either. The conclusion: injecting at
+the suspension was necessary but was never going to be sufficient on its own.
+
+**C2 — self-aligning torque, built the same day, and it is the channel finding 2 says is missing.**
+What a driver feels through the wheel is not body motion, it is the torque the front tyres exert
+about their steering axis: `Mz = Fy * (t_pneumatic + t_mechanical)`, summed over the front wheels
+and divided by `steer_ratio`. Taken from the FINAL `Fy` — after the friction ellipse and after A5's
+gross-sliding correction — so a tyre trimmed by combined slip reports the weaker signal it
+physically would. Read it on the HUD as `steer Nm`.
+**The point is the COLLAPSE, and the first implementation got its shape wrong.** Pneumatic trail
+shrinks as the contact patch starts sliding, so the wheel goes LIGHT just before the front washes
+out — that lightening arrives BEFORE the grip does, which makes it more informative than raw force.
+A straight-line collapse (`t_p0 * (1 - |alpha|/alpha_peak)`, what the plan suggested first) measured
+with the torque **peaking at 1.1 deg against a 9 deg grip peak — only 12% of the way to the
+limit**, because `Fy` saturates extremely early (98% of peak by 2.2 deg). The wheel would lighten
+across the entire range and the lightening would carry no information about where the limit is.
+Switched to the **cosine (Pacejka Mz) form**, which the plan explicitly permitted and which is what
+the physics says: trail holds near its static value while the patch still ADHERES, then falls away
+as the rear begins to slide. Measured after: peak moves to 1.6 deg (tarmac) / 2.8 deg (gravel), and
+crucially the weight is HELD longer early then dropped harder late — 4.5 deg to 9 deg now sheds
+**51%** of the torque versus 43% before, so the cue concentrates where it matters.
+Probe (removed): Mz peaks before Fy on both surfaces PASS; falls to **42%** of its own peak by
+2x peak slip PASS; reverses sign with steering direction and is exactly 0.000 N·m on centre PASS.
+**Honest note:** the torque peak is still early in absolute terms, and that is a property of B4's
+drive-verified lateral curve saturating at ~2 deg, NOT of the trail model — B4 is drive-verified and
+was deliberately not touched here. New Tab rows: `trail_pneumatic`, `trail_mechanical`,
+`steer_ratio`, `sat_gain` (95 rows / 95 HELP, no gaps). No rumble wired: `start_joy_vibration()`
+is rumble, not force feedback, and must never be described as FFB.
+
+**3. REAL MODEL GAP — the damper is blind to the road.** `comp_vel` is computed purely from the
+BODY's velocity at the contact point (`linear_velocity + angular_velocity.cross(contact_off)`) and
+never includes the rate of change of ground height under the wheel. A real damper reacts to
+RELATIVE velocity, so a wheel crossing corrugations should see large damper velocities even with
+the body dead still. Ours sees none. **Pre-C1 this was harmless — the ground was smooth, so
+d(ground)/dt was ~0 — and C1 is what makes it matter.** Consequence: roughness currently produces
+only a SPRING force change: 2 cm x 24 181 N/m = **484 N on a ~4 kN static corner, a 12% wobble**.
+Had the damper seen the road, the same input at 46 Hz reaches its 3.0 m/s clamp and the digressive
+curve returns **~4.98 kN** — an order of magnitude more, and the thing that would actually make the
+car skip and dance. NOT fixed here: it is a real physics change with real harshness risk and wants
+its own probe (energy per impact) plus its own drive test, exactly like B3's hydraulic bump stop.
+
 ## 2026-08-15 (real bug: washboard was firing on open grass, "out of control" - root cause of a loose-surface FPS drop)
 
 **User verdict from a parallel session: the frame-rate drops on loose surfaces traced to C1

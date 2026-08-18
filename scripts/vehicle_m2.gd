@@ -170,6 +170,21 @@ class_name VehicleM2
 # beat between turning in and the car taking a set, and a flick cannot be timed. Longitudinal
 # already has natural lag through the wheel-spin ODE; this is the missing lateral half.
 @export var sigma_lat := 0.55               # m, relaxation length (~1.6x wheel radius)
+# C2 SELF-ALIGNING TORQUE - the steering signal, and the half of "force feedback" that is real
+# physics rather than hardware. What a driver feels through the wheel is not "the car": it is the
+# torque the front tyres exert about their own steering axis. Lateral force does not act at the
+# contact centre, it acts BEHIND it by the pneumatic trail (the contact patch loads up
+# asymmetrically, rearward-biased), and caster geometry adds a fixed mechanical trail on top:
+#   Mz = Fy * (t_pneumatic + t_mechanical),  rack torque = sum(Mz) / steer_ratio
+# THE POINT IS THE COLLAPSE, not the magnitude. As slip angle approaches the tyre's peak the
+# contact patch slides at the rear and the pneumatic trail shrinks toward zero, so the wheel goes
+# LIGHT just before the front washes out. That lightening arrives BEFORE the grip actually goes
+# away, which makes it the single most informative cue a driver gets - more useful than raw force.
+# A signal that only rises with cornering load carries no warning at all.
+@export var trail_pneumatic := 0.03         # m, trail at zero slip (collapses toward 0 at the peak)
+@export var trail_mechanical := 0.02        # m, fixed trail from caster geometry
+@export var steer_ratio := 15.0             # steering ratio (wheel:road-wheel), divides wheel torque into rack torque
+@export var sat_gain := 1.0                 # output scaling for the reported signal (0 = off)
 # The Pacejka SHAPE factor: how sharply the lateral curve falls AFTER its peak. The curve settles
 # at sin(C*pi/2) of peak at large slip - C 1.40 -> 0.81, C 1.20 -> 0.95 - so a lower C is a flatter,
 # more forgiving tyre that keeps working when you overshoot the peak. Loose surfaces behave that
@@ -349,6 +364,7 @@ var _livery_mat: StandardMaterial3D
 var _flare_mat: StandardMaterial3D
 var surface_source               # set by world.gd; supplies grip_at(x,z) so asphalt grips > dirt > grass
 var roughness_field               # set by world.gd; supplies sample_enveloped(x,z,heading) (C1)
+var _sat_moment := 0.0            # C2: summed front-wheel Mz about the steering axis (N*m at the wheels)
 const MODE_NAMES := ["AWD", "RWD", "FWD"]
 const MODE_COLORS := [Color(0.16, 0.36, 0.82), Color(0.78, 0.13, 0.12), Color(0.16, 0.55, 0.26)]
 # A1 clutch numerics (smoothing/actuation widths, not feel tunables - feel lives in the exports)
@@ -991,6 +1007,13 @@ func _lat_shape(w: Wheel) -> Vector2:
 	var a := lerpf(peak_alpha_gravel, peak_alpha_tarmac, t)
 	return Vector2(_mf_peak_u(c, Ey) / maxf(deg_to_rad(a), 0.01), c)
 
+func _peak_alpha_rad(lat: Vector2) -> float:
+	# C2: the slip angle where THIS wheel's lateral curve actually peaks, recovered from the same
+	# (By, Cy) the force itself uses. Inverting _lat_shape's own derivation rather than re-reading
+	# peak_alpha_* means the trail collapse follows the surface blend for free and can never drift
+	# out of step with where the grip peak really is - including when a slider moves mid-drive.
+	return _mf_peak_u(lat.y, Ey) / maxf(lat.x, 0.01)
+
 func _understeer_gradient() -> float:
 	# K_us [s^2/m] for the bicycle-model reference yaw rate psi_dot = v*delta / (L + K_us*v^2):
 	# axle load over axle cornering stiffness, front minus rear. The stiffness is the tyre
@@ -1613,6 +1636,7 @@ func _physics_process(delta: float) -> void:
 				_stalled = false
 
 	# --- apply the averaged longitudinal + the lateral (slip-angle) force per contact wheel ---
+	_sat_moment = 0.0                        # C2: re-summed from the front wheels below
 	for w in _wheels:
 		if not w.contact:
 			continue
@@ -1674,6 +1698,21 @@ func _physics_process(delta: float) -> void:
 					Fy = lerpf(Fy, cap * dy, slide)
 		w.util = minf(e, 1.0)
 		w.slip = clampf(absf((w.omega * wheel_radius - v_long) / maxf(absf(v_long), slip_ref_speed)), 0.0, 3.0)
+		# C2: self-aligning torque, taken from the FINAL Fy - after the friction ellipse and after
+		# A5's gross-sliding correction - so a tyre that has been trimmed by combined slip reports
+		# the weaker steering signal it physically would. Steered wheels only; the rears generate
+		# their own Mz but nothing carries it to the driver's hands.
+		if w.steer:
+			var a_pk := _peak_alpha_rad(lat)
+			# Trail collapse uses the COSINE (Pacejka Mz) form, not a straight line to zero. Trail
+			# comes from the contact patch loading up rearward-biased while it still ADHERES; it
+			# holds near its static value at small slip and only falls away as the rear of the patch
+			# begins to slide. A linear collapse instead starts bleeding weight from the very first
+			# degree, which measured out with the torque peaking at 1.1 deg against a 9 deg grip
+			# peak - the wheel would go light across the whole range and the lightening would carry
+			# no information about where the limit actually is.
+			var t_p := trail_pneumatic * cos(PI * 0.5 * clampf(absf(w.alpha_rel) / maxf(a_pk, 0.01), 0.0, 1.0))
+			_sat_moment += Fy * (t_p + trail_mechanical)
 		apply_force(fwd_v * Fx + right_v * Fy, off_v)
 		_update_tyre(w, Fx, Fy, v_long, v_lat, delta)     # M7: heat / wear / puncture -> next frame's tyre_grip
 		if w.punctured:                                    # flat tyre -> thump synced to wheel rotation (the flat spot hits once per rev)
@@ -1722,6 +1761,7 @@ func respawn() -> void:
 	_launch = false                                                            # A4: launch assist
 	for i in range(_esc.size()):
 		_esc[i] = 0.0                                                          # A4: stability assist
+	_sat_moment = 0.0                                                          # C2: steering signal
 	_throttle_pedal = 0.0; _brake_pedal = 0.0   # Phase 0: virtual pedals
 	_damage = 0.0; _pull_dir = 0.0; _prev_vel = Vector3.ZERO   # M8: repaired on respawn
 	for w in _wheels:
@@ -1733,6 +1773,12 @@ func respawn() -> void:
 		w.tyre_wear = 0.0
 		w.punctured = false
 		w.tyre_grip = 1.0
+
+func get_steer_torque() -> float:
+	# C2: torque at the steering rack (N*m). Sign follows the lateral force, so it reverses with
+	# steering direction and sits at ~0 straight-ahead and at a standstill (no slip angle, no Fy).
+	# Divided at read time so steer_ratio / sat_gain slider edits are felt immediately.
+	return _sat_moment / maxf(steer_ratio, 1.0) * sat_gain
 
 func get_wheels() -> Array[Wheel]:
 	return _wheels
