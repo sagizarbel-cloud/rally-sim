@@ -1,6 +1,6 @@
 # Rally Sim — Roadmap & Working Notes
 
-_Last updated: 2026-07-28. Living document — future sessions should read this first, then verify against current code._
+_Last updated: 2026-08-18. Living document — future sessions should read this first, then verify against current code._
 
 Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt**, built procedurally in code, grounded in real vehicle-dynamics literature. Design philosophy: **improve realism and fun through physical functions, not by tuning magic-number constants.**
 
@@ -21,6 +21,34 @@ Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt**, built pro
 - **Rear-view mirror** (2D SubViewport overlay — ViewportTexture is black on 3D/Metal). Real directional-light cast shadow.
 
 **Flagship deformable terrain** (`scripts/terrain.gd`): GPU height-displacement + per-tile HeightMapShape3D collider, speed-independent Bekker dig + wheelspin excavation + berms. **Working, but currently only on the centre patch — not wired to the main stage.**
+
+## Platform reach — iOS/Xogot verified (2026-08-12)
+
+The project **runs on an iPhone 14 Pro Max under [Xogot](https://xogot.com)** (native Godot editor
+for iOS, Godot 4.4+, so the `Jolt Physics` backend and `Forward Plus` renderer both resolve).
+User-verified by driving: **a DualShock 4 paired over Bluetooth works, and the sim runs smoothly
+~95% of the time.** No code change was needed — the gamepad map added for the Mac (`world.gd`
+`_setup_input()`, AC rally convention) carries over as-is.
+
+What this buys: portability off the Mac for **code editing, smoke tests and rough feel checks**.
+What it does NOT buy: an authoritative feel verdict. Frame time, input latency and a 6.7" screen all
+differ, so phase sign-off in `PLAN-drivetrain-suspension.md` §9 stays a Mac drive. iOS is a second
+opinion, not the gate.
+
+Known gaps on iOS:
+- **No touch input exists anywhere in the project** — every action is a key or a pad binding, so a
+  controller is mandatory with no fallback. On-screen controls would be their own phase.
+- **Diff presets `[1]/[2]/[3]` are keyboard-only.** On a DS4 the touchpad-click cycle
+  (`JOY_BUTTON_TOUCHPAD`) is the only route, and iOS does not expose every DS4 function — confirm
+  it before relying on it for diff A/B tests.
+- **A fresh clone fails to parse on first run.** `class_name Centreline` is only registered once the
+  import pass has written `.godot/global_script_class_cache.cfg`, and a clone has no `.godot/`.
+  Godot must import once before `world.gd` will load. Worth knowing before blaming a real bug.
+- **Ghost-playback stall.** `time_trial.gd` `_update_ghost()` rescans the whole best-lap sample
+  array every physics tick (`for i in range(n)`), and the loop is dead code until a best lap
+  exists — which is why the hiccup starts exactly when the cyan ghost appears. At `sample_hz = 30`
+  a 90 s lap is ~2700 samples × 120 Hz ≈ **324k distance tests/second**, free on M1 and not on an
+  A16. See M17.
 
 ## Already solid — do NOT redo
 - Core cornering physics is **mature**: combined-slip Pacejka + friction ellipse + load sensitivity already implemented (`vehicle_m2.gd:605-616`). Do not propose "add a friction ellipse" — refine, don't rebuild.
@@ -81,6 +109,14 @@ Two controls identify it. **It is not aerodynamic:** with `drag_k` set to 0.0 th
 **M15 — Physics tick 120 + calculated suspension from weight distribution. DONE** (Phase 0 + B1). Community norm for stable raycast vehicles is ≥120 Hz (currently default 60). Cheap stability win **but it changes vehicle feel → requires a re-tune**; keep functions-over-constants (derive spring/damper from mass + distribution). Effort **S + re-tune.**
 
 **M16 — Replay camera / photo mode.** Reuses the ghost's transform-recording infrastructure. Effort **S–M.**
+
+**M17 — Ghost time-delta cost.** `time_trial.gd` `_update_ghost()` rescans the whole best-lap sample
+array every physics tick to find the nearest point, and the loop is dead code until a best lap
+exists — so the stall starts exactly when the cyan ghost appears. ~2700 samples × 120 Hz ≈ 324k
+distance tests/second for one HUD number. Unnoticeable on M1, a visible hiccup on A16 (see the iOS
+section). Fix: search a window around the existing `_pb` playback cursor instead of the whole array,
+and refresh the delta label at ~10 Hz rather than every tick. Pure performance — no physics or feel
+change, so it can land any time without a re-tune. Effort **XS.**
 
 ---
 
