@@ -20,6 +20,79 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-19 (fixed: the ruts you just dug vanish the moment you drive away from them)
+
+Drive report: *"the dirt tiles/squares still have the rendering issue where unloaded tiles are
+much lighter than loaded ones"* — a hard brightness seam across the dirt circle, noticed more than
+once before. **Rendering only. `t.heights`, the HeightMapShape collider and the whole Bekker dig
+model were correct throughout and were not touched.**
+
+**The centre patch draws its ground two ways and swaps between them by distance.** Within
+`unload_radius` (36 m) a tile is live: its own tessellated mesh, its own material, its own
+`_tn x _tn` height texture that the wheels rewrite as they dig. Beyond it, the tile is freed and a
+flat square takes over. Every one of those 169 squares shared **ONE material pointing at ONE 2x2
+texture filled at `bed_height`** — so `vh == bed`, `depth == 0`, and every unloaded square rendered
+as **pure `dirt_color`, the lightest value the shader can produce**. Measured on a 10.5 cm rut:
+loaded albedo luma **0.245**, unloaded luma **0.502** — a **2.05x brightness step** at the boundary.
+Driving away from a rut visually erased it; driving back re-materialised it at 36 m.
+
+**Ruled out the other candidate first, without driving.** Both paths encode pristine ground as the
+identical quantised constant (0.1482 m — `bed_height/height_scale` through RGBA8), and both compute
+the same UP normal from it, so **undriven ground has no seam**. The seam is entirely dug ruts
+disappearing on unload, not the two paths shading flat ground differently.
+
+**The half that is easy to miss: the flat square has 4 vertices.** The shader read the height in
+`vertex()` and passed it to `fragment()` as a varying, so colour resolution was the MESH's
+resolution. Handing each square its own height texture — the obvious fix — would still have shown
+nothing, because 4 corners cannot carry a rut. So the height is now read **per pixel in
+`fragment()`**: rut colour is set by the texture, not by how finely the mesh is divided, and the
+two paths land on byte-identical colour (rut 0.245/0.245, berm 0.777/0.777 luma).
+
+**What was built.** A released tile no longer throws its visual state away: it hands its heights
+*and its height texture* to a `Rut` record, and its square switches to its own material bound to
+that texture plus a 32-cell mesh (`flat_vis_cells`, snapped to an exact divisor of `tile_cells` so
+the visual's nodes land on tile nodes and the meshes still meet at borders). **Ground that was
+never dug keeps the one shared pristine material and its 2-triangle quad**, so undriven field costs
+nothing. Reloading a tile now reuses the persisted `Image`/`ImageTexture` instead of re-running a
+4,225-pixel `set_pixel` loop. Two smaller bugs fell out on the way: `_mirror()` never marked the
+neighbour `dug`, so a tile whose only deformation was a mirrored border row lost it on unload; and
+the height sampler was `repeat`-wrapping, so a tile's left edge blended with its own right edge
+12 m away — a phantom half-strength rut line at borders. Sampler is now `repeat_disable`.
+
+**Cost, measured on `[J]`** — parked on the dirt circle, whole corridor rutted (34 dug tiles),
+whole field on screen, car frozen so the live-tile set is identical (5 tiles) run to run:
+
+| | before | after |
+|---|---|---|
+| draw calls | 1436 | **1540** (+104) |
+| primitives | 3,045,200 | **3,262,084** (+7.1%) |
+| process ms | 34.28 (32.9-35.2 over 5 runs) | 34.95 (34.6-35.2) |
+| FPS | 37.1 | **35.5** (mean of 3 back-to-back runs each) |
+| triangles on the unloaded field | 338 | 69,902 |
+
+**The geometry is not what costs — grep this before "optimising" it by lowering
+`flat_vis_cells`.** Forcing the dug squares back to 2 triangles (542 total instead of 69,902)
+measured the *same* frame rate. The whole +104 is **draw calls**: ~3 per dug square, i.e. the main
+pass plus two shadow splits. The lever that actually works is `cast_shadow` — switching it off on
+the flat squares put draw calls at **1432, below the baseline**. It was left ON deliberately: a
+rut that self-shadows while loaded and stops when it unloads is the same class of boundary
+divergence this entry exists to remove, and 4% of draw calls is not worth reintroducing it. If the
+frame-rate hunt needs it back, that is where it is.
+
+**Also worth grepping: an alarming "60 -> 52 FPS" reading here was a measurement artifact.** The
+baseline had been captured with a different probe configuration (car not frozen, so it settled onto
+a different set of live tiles and pointed the camera somewhere cheaper). Re-baselined with the car
+frozen, before and after sit inside each other's run-to-run spread. Pin the car before trusting any
+A/B on this patch.
+
+**NOT verified: appearance.** Godot's `--headless` runs a dummy renderer — `ImageTexture.update()`
+does not even round-trip through `get_image()` there — so every number above is texture content and
+counters, not pixels. Needs a drive on the dirt circle.
+
+**Housekeeping:** this `terrain.gd` change was swept into commit `09d0a7b` ("Measure the grip
+channel") by a parallel session's `commit -a` while it was still in progress, and pushed there. The
+code in that commit is the finished, verified fix; only its attribution is wrong.
+
 ## 2026-08-15 (measured: washboard DOES cost grip — the tyre is airborne 30-43% of the time)
 
 Drive report: *"the C1 roughness is felt at the wheels, but the suspension eats it completely
