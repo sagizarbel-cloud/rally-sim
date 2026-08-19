@@ -20,6 +20,45 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-15 (measured: washboard DOES cost grip — the tyre is airborne 30-43% of the time)
+
+Drive report: *"the C1 roughness is felt at the wheels, but the suspension eats it completely
+above 20 km/h."* **The body not responding is correct and is not a bug.** Above resonance a
+base-excited spring-mass transmits about `2*zeta/r`; with the body at 1.4 Hz, zeta 0.55 and 0.6 m
+corrugation that is **17% at 20 km/h, 8% at 40, 5.5% at 60, 3.3% at 100** — the reported ~20 km/h
+threshold is almost exactly where the maths puts it. A real rally car's chassis does not heave at
+46 Hz either. Chasing this with more travel, stiffer springs or deeper ridges is the wrong tree.
+
+**So the question became whether the OTHER channel — load fluctuation costing grip — is actually
+working.** Measured with a quasi-static quarter car (body held fixed, ground oscillating beneath
+it; accurate above ~40 km/h precisely because transmissibility there is only 3-8%) through the real
+spring / damper / bump-stop / load-sensitivity code, one front corner, static Fz 3.07 kN:
+
+| speed | Fz mean | Fz min | Fz max | frames unloaded | grip vs smooth |
+|---|---|---|---|---|---|
+| 20 km/h | 2.83 kN | 0.73 | 4.75 | 0.0% | **90.3%** |
+| 40 km/h | 2.82 kN | 0.00 | 6.15 | **30.8%** | **84.3%** |
+| 60 km/h | 3.14 kN | 0.00 | 7.47 | **37.5%** | **88.3%** |
+| 100 km/h | 3.38 kN | 0.00 | 7.65 | **42.8%** | **91.2%** |
+
+**The tyre is completely off the ground 30-43% of the time at speed, and available lateral force
+drops 9-16%.** That is a large handling effect and it is already in the car — washboard should
+make it skate, wash wide on entry and refuse to hold a line, even though the body stays calm.
+Note the loss is WORST at 40 km/h, not at the top end: past that, mean Fz climbs above static
+(3.07 -> 3.38 kN) and partly compensates.
+
+**Second finding, worth watching: that rising mean is rectification.** `Fz = max(spring + damper, 0)`
+lets the suspension push but never pull, so an oscillating damper force clips on the down-stroke and
+spikes on the up-stroke, netting upward impulse. At 100 km/h it is +0.31 kN per corner — about
+**10% of the car's weight pushing it up** over sustained corrugation. Real (washboard does make cars
+float and go light), but it is the same mechanism behind the "body jumps and shakes" report at
+exaggerated slider settings, so it should be re-checked if bottoming or float behaviour drifts.
+
+**Conclusion: nothing to build yet.** The perceptual channels we lack (unsprung mass / wheel hop,
+seat and steering-column shake, camera shake) are all real gaps, but the grip channel is live and
+strong, and the enveloping-footprint fix that restored ridge amplitude at speed landed *after* the
+drive that produced this report. Re-drive at defaults before adding anything.
+
 ## 2026-08-15 (C1 REVISION — the damper can finally see the road; roughness goes from 3% to dominant)
 
 Fixes the *"couldn't differentiate when the roughness gain was on and when it was off, washboard

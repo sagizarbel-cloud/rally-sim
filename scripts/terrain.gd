@@ -6,6 +6,9 @@ class_name DeformableTerrain
 ## vertex shader by a per-tile height texture. Digging just rewrites texture pixels -> no
 ## CPU remeshing, so tiles load without a stutter. A parallel height array feeds a per-tile
 ## HeightMapShape collider (re-cooked on a throttle) so the wheels physically drop into ruts.
+## Only tiles near the car are live; the rest of the field is flat squares. A square that has
+## been dug keeps drawing its OWN height texture (see Rut/_persist) instead of a pristine one,
+## so driving away from a rut does not erase it.
 ##
 ## Dig model (Bekker-Wong terramechanics):
 ##   * Pressure-sinkage: z = (p/k)^(1/n), p = Fz/(contact_len*tire_width). LOAD sets the
@@ -45,6 +48,10 @@ class_name DeformableTerrain
 @export var berm_fill_floor := 0.03              # loose soil settles back into ruts, but they keep >= this depth
 @export var rise_vis := 0.005                    # berm height at which the brighter shoulder colour is full
 
+@export var flat_vis_cells := 32                 # mesh cells per side of a DUG tile's unloaded visual
+												 # (snapped down to a divisor of tile_cells; colour is
+												 # per-pixel, so this only sets displacement/lighting detail)
+
 @export var dirt_color := Color(0.66, 0.48, 0.26)   # brighter, more saturated dirt
 @export var rut_color := Color(0.22, 0.15, 0.08)    # deeper/darker ruts (bigger contrast)
 @export var berm_color := Color(1.0, 0.90, 0.66)    # brighter piled soil (bigger contrast)
@@ -65,16 +72,19 @@ var _tiles := {}                 # Vector2i -> Tile
 var _plane: ArrayMesh            # shared tessellated plane (built once)
 var _shader: Shader
 var _recook_accum := 0.0
-var _saved := {}                 # Vector2i -> heights, so ruts survive tile unload/reload
-var _flat_quad: PlaneMesh        # cheap flat square (whole field is always shown as these)
+var _saved := {}                 # Vector2i -> Rut, so ruts survive tile unload/reload
+var _flat_quad: PlaneMesh        # cheap flat square (undug ground is always shown as these)
+var _flat_quad_dug: PlaneMesh    # tessellated square for ground that HAS been dug (4 verts show no rut)
 var _flat_mat: ShaderMaterial    # SAME deformable shader + a flat height texture (so no load seam)
 var _flat_tex: ImageTexture
 var _flat_vis := {}              # Vector2i -> MeshInstance3D (flat visual; hidden while a tile is active)
+var _fstep := 1                  # tile cells per unloaded-visual cell (exact divisor of tile_cells)
+var _fvn := 0                    # unloaded-visual nodes per side
 
 const SHADER_CODE := """
 shader_type spatial;
 render_mode cull_disabled;
-uniform sampler2D height_tex : filter_linear;
+uniform sampler2D height_tex : filter_linear, repeat_disable;   // clamp: a tile edge must not blend with the opposite edge
 uniform float texel;
 uniform float cellw;
 uniform float hscale;
@@ -84,11 +94,9 @@ uniform vec3 dirt : source_color;
 uniform vec3 rut : source_color;
 uniform vec3 bright : source_color;
 uniform float risescale;
-varying float vh;
 void vertex() {
 float h = texture(height_tex, UV).r * hscale;
 VERTEX.y = h;
-vh = h;
 float hl = texture(height_tex, UV - vec2(texel, 0.0)).r * hscale;
 float hr = texture(height_tex, UV + vec2(texel, 0.0)).r * hscale;
 float hd = texture(height_tex, UV - vec2(0.0, texel)).r * hscale;
@@ -96,6 +104,9 @@ float hu = texture(height_tex, UV + vec2(0.0, texel)).r * hscale;
 NORMAL = normalize(vec3(hl - hr, 2.0 * cellw, hd - hu));
 }
 void fragment() {
+// height is read PER PIXEL, not interpolated from the vertices: rut colour is then set by
+// the height TEXTURE's resolution, so a coarse mesh still shows a rut at full darkness.
+float vh = texture(height_tex, UV).r * hscale;
 float depth = clamp((bed - vh - 0.015) / maxsink, 0.0, 1.0);      // deadzone: only real ruts darken, not faint churn
 float rise = clamp((vh - bed - 0.0015) / risescale, 0.0, 1.0);   // deadzone: ignore texture-rounding noise
 vec3 c = mix(dirt, rut, depth);
@@ -121,6 +132,15 @@ class Tile:
 	var col_dirty := false
 	var dug := false
 
+class Rut:
+	## Deformation that OUTLIVES its tile. Freeing a tile must not erase the ruts you just dug, so
+	## the released tile hands its heights (for the collider when it reloads) AND its height texture
+	## (for the flat quad that takes over rendering) to this record.
+	var heights: PackedFloat32Array
+	var img: Image
+	var tex: ImageTexture
+	var mat: ShaderMaterial
+
 func _ready() -> void:
 	_cs = tile_size / float(tile_cells)
 	_tn = tile_cells + 1
@@ -128,31 +148,55 @@ func _ready() -> void:
 	_half = zone_size * 0.5
 	_min = Vector2(zone_center.x - _half, zone_center.z - _half)
 	_ntiles = int(round(zone_size / tile_size))
+	# the unloaded visual of a dug tile reuses that tile's own height texture, so its nodes must land
+	# exactly ON tile nodes (borders included) or the two meshes crack apart. Take the finest step
+	# that divides tile_cells and still fits the budget.
+	_fstep = 1
+	for step in range(1, tile_cells + 1):
+		if tile_cells % step == 0 and tile_cells / step <= flat_vis_cells:
+			_fstep = step
+			break
+	_fvn = tile_cells / _fstep + 1
 	_shader = Shader.new(); _shader.code = SHADER_CODE
 	_build_plane()
 	_build_flat_visuals()
 	_build_track()
+
+func _ground_material(tex: Texture2D, texel: float, cellw: float) -> ShaderMaterial:
+	# THE one place a ground material is configured. All three paths - the live tile, the pristine
+	# flat square and a dug tile's unloaded square - must shade identically or the load boundary
+	# shows a seam, so they differ only in the height texture they read and how far apart its
+	# texels sit (texel/cellw, which set the finite-difference normal's slope).
+	var m := ShaderMaterial.new()
+	m.shader = _shader
+	m.set_shader_parameter("height_tex", tex)
+	m.set_shader_parameter("texel", texel)
+	m.set_shader_parameter("cellw", cellw)
+	m.set_shader_parameter("hscale", height_scale)
+	m.set_shader_parameter("bed", bed_height)
+	m.set_shader_parameter("maxsink", max_sinkage)
+	m.set_shader_parameter("dirt", dirt_color)
+	m.set_shader_parameter("rut", rut_color)
+	m.set_shader_parameter("bright", berm_color)
+	m.set_shader_parameter("risescale", maxf(rise_vis, 0.001))
+	return m
 
 func _build_flat_visuals() -> void:
 	# the WHOLE field is always shown as flat brown squares (cheap: shared quad + material);
 	# a square's flat visual is hidden only while its deformable tile is active near the car.
 	_flat_quad = PlaneMesh.new()
 	_flat_quad.size = Vector2(tile_size, tile_size)
+	# ... except once a square has been dug: 4 corner vertices cannot carry a rut's displacement,
+	# so dug ground swaps to this coarser copy of the live tile's mesh (shared by every dug square).
+	_flat_quad_dug = PlaneMesh.new()
+	_flat_quad_dug.size = Vector2(tile_size, tile_size)
+	_flat_quad_dug.subdivide_width = _fvn - 2
+	_flat_quad_dug.subdivide_depth = _fvn - 2
+	_flat_quad_dug.custom_aabb = AABB(Vector3(-_half_t, -1.0, -_half_t), Vector3(tile_size, 2.0, tile_size))
 	var fimg := Image.create(2, 2, false, Image.FORMAT_RGBA8)
 	fimg.fill(Color(bed_height / height_scale, 0, 0, 1))
 	_flat_tex = ImageTexture.create_from_image(fimg)
-	_flat_mat = ShaderMaterial.new()
-	_flat_mat.shader = _shader                              # same shader as live tiles -> identical shading
-	_flat_mat.set_shader_parameter("height_tex", _flat_tex)
-	_flat_mat.set_shader_parameter("texel", 0.5)
-	_flat_mat.set_shader_parameter("cellw", _cs)
-	_flat_mat.set_shader_parameter("hscale", height_scale)
-	_flat_mat.set_shader_parameter("bed", bed_height)
-	_flat_mat.set_shader_parameter("maxsink", max_sinkage)
-	_flat_mat.set_shader_parameter("dirt", dirt_color)
-	_flat_mat.set_shader_parameter("rut", rut_color)
-	_flat_mat.set_shader_parameter("bright", berm_color)
-	_flat_mat.set_shader_parameter("risescale", maxf(rise_vis, 0.001))
+	_flat_mat = _ground_material(_flat_tex, 0.5, _cs)        # same shader as live tiles -> identical shading
 	for tz in range(_ntiles):
 		for tx in range(_ntiles):
 			var mi := MeshInstance3D.new()
@@ -212,22 +256,18 @@ func _ensure_tile(tx: int, tz: int) -> void:
 	var t := Tile.new()
 	t.tx = tx; t.tz = tz
 	t.center = Vector3(_min.x + (tx + 0.5) * tile_size, 0.0, _min.y + (tz + 0.5) * tile_size)
-	t.heights = PackedFloat32Array(); t.heights.resize(_tn * _tn); t.heights.fill(bed_height)
-	t.img = Image.create(_tn, _tn, false, Image.FORMAT_RGBA8)
-	t.img.fill(Color(bed_height / height_scale, 0, 0, 1))
-	t.tex = ImageTexture.create_from_image(t.img)
-	t.mat = ShaderMaterial.new()
-	t.mat.shader = _shader
-	t.mat.set_shader_parameter("height_tex", t.tex)
-	t.mat.set_shader_parameter("texel", 1.0 / float(_tn))
-	t.mat.set_shader_parameter("hscale", height_scale)
-	t.mat.set_shader_parameter("cellw", _cs)
-	t.mat.set_shader_parameter("bed", bed_height)
-	t.mat.set_shader_parameter("maxsink", max_sinkage)
-	t.mat.set_shader_parameter("dirt", dirt_color)
-	t.mat.set_shader_parameter("rut", rut_color)
-	t.mat.set_shader_parameter("bright", berm_color)
-	t.mat.set_shader_parameter("risescale", maxf(rise_vis, 0.001))
+	var r: Rut = _saved.get(key)
+	if r != null:                                    # returning to ground we already dug
+		t.heights = r.heights.duplicate()            # the tile mutates its own copy; _persist writes back
+		t.img = r.img                                # SHARE the texture with the unloaded square, so
+		t.tex = r.tex                                # neither a re-upload nor a chance of them drifting
+		t.dug = true
+	else:
+		t.heights = PackedFloat32Array(); t.heights.resize(_tn * _tn); t.heights.fill(bed_height)
+		t.img = Image.create(_tn, _tn, false, Image.FORMAT_RGBA8)
+		t.img.fill(Color(bed_height / height_scale, 0, 0, 1))
+		t.tex = ImageTexture.create_from_image(t.img)
+	t.mat = _ground_material(t.tex, 1.0 / float(_tn), _cs)
 	t.body = StaticBody3D.new()
 	t.body.position = t.center
 	t.body.collision_layer = 1
@@ -245,14 +285,6 @@ func _ensure_tile(tx: int, tz: int) -> void:
 	col.scale = Vector3(_cs, 1.0, _cs)
 	t.body.add_child(col)
 	add_child(t.body)
-	if _saved.has(key):                              # restore ruts from a previous visit
-		var sv: PackedFloat32Array = _saved[key]
-		for n in range(_tn * _tn):
-			t.heights[n] = sv[n]
-			t.img.set_pixel(n % _tn, n / _tn, Color(sv[n] / height_scale, 0, 0, 1))
-		t.tex.update(t.img)
-		t.shape.map_data = t.heights
-		t.dug = true
 	if _flat_vis.has(key):
 		_flat_vis[key].visible = false          # deformable tile takes over rendering here
 	_tiles[key] = t
@@ -391,6 +423,7 @@ func _mirror(tx: int, tz: int, ii: int, jj: int, h: float) -> void:
 	nt.img.set_pixel(ii, jj, Color(h / height_scale, 0, 0, 1))
 	nt.tex_dirty = true
 	nt.col_dirty = true
+	nt.dug = true                                    # its border row IS dug: it must persist like any other
 
 func _unload_far(car: Vector3) -> void:
 	var rem: Array = []
@@ -398,13 +431,34 @@ func _unload_far(car: Vector3) -> void:
 		var t: Tile = _tiles[key]
 		if Vector2(t.center.x - car.x, t.center.z - car.z).length() > unload_radius:
 			if t.dug:
-				_saved[key] = t.heights.duplicate()   # keep the ruts for when we return
+				_persist(key, t)                      # keep the ruts - the geometry AND the colour
 			t.body.queue_free()
 			if _flat_vis.has(key):
-				_flat_vis[key].visible = true         # back to a plain flat square
+				_flat_vis[key].visible = true         # the flat square takes rendering back over
 			rem.append(key)
 	for key in rem:
 		_tiles.erase(key)
+
+func _persist(key: Vector2i, t: Tile) -> void:
+	# A released tile hands its height texture to the flat square that takes over rendering here, so
+	# the ruts stay exactly as dark as they were under the car instead of snapping back to pristine
+	# dirt. Ground that was never dug never reaches this and keeps the one shared flat material, so
+	# undriven field costs nothing extra.
+	if t.tex_dirty:
+		t.tex.update(t.img)                          # the square inherits this texture: flush before handover
+		t.tex_dirty = false
+	var r: Rut = _saved.get(key)
+	if r == null:
+		r = Rut.new()
+		r.img = t.img
+		r.tex = t.tex
+		r.mat = _ground_material(t.tex, float(_fstep) / float(_tn), _cs * float(_fstep))
+		_saved[key] = r
+	r.heights = t.heights.duplicate()
+	var mi: MeshInstance3D = _flat_vis.get(key)
+	if mi != null:
+		mi.mesh = _flat_quad_dug
+		mi.material_override = r.mat
 
 func _reset_dirt() -> void:
 	for t in _tiles.values():
@@ -412,6 +466,8 @@ func _reset_dirt() -> void:
 	_tiles.clear()
 	_saved.clear()
 	for mi in _flat_vis.values():
+		mi.mesh = _flat_quad                          # back to the cheap 2-triangle pristine square
+		mi.material_override = _flat_mat
 		mi.visible = true
 
 func _build_track() -> void:
