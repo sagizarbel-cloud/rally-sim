@@ -20,12 +20,58 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
-## 2026-08-19 (fixed: the ruts you just dug vanish the moment you drive away from them)
+## 2026-08-19 (fixed: whole dirt tiles go DARK BROWN when they load — a backwards mesh winding)
 
-Drive report: *"the dirt tiles/squares still have the rendering issue where unloaded tiles are
-much lighter than loaded ones"* — a hard brightness seam across the dirt circle, noticed more than
-once before. **Rendering only. `t.heights`, the HeightMapShape collider and the whole Bekker dig
-model were correct throughout and were not touched.**
+Drive report: *"the dirt tiles/squares still have the rendering issue where unloaded tiles are much
+lighter than loaded ones... whole tiles change color when rendered, from dark brown to light
+brown... not talking about the color of berm or ruts, just the color of the dirt in general."*
+The user's own hunch — *"maybe this issue is similar to godot's texture flipping we had in the
+beginning"* — was exactly right, and is the fastest route to this class of bug.
+
+**`_build_plane()` wound the shared tile mesh back-to-front, so the top of every live tile was its
+BACK face.** The shader runs `render_mode cull_disabled`, so nothing went invisible — instead Godot
+negates `NORMAL` on back faces, which turned the vertex shader's carefully-built up-normal into a
+*down*-normal. `N·L` against a sun at −72° then contributes **nothing**, so every loaded tile was
+lit by **ambient sky only**: dark brown, hard-edged, sitting inside a field of correctly-wound
+(PlaneMesh) flat squares in full sun. **`cull_disabled` is what hid this for so long** — with
+normal culling it would have shown up as the obvious "half invisible / upside-down" symptom the M5
+stage mesh had, and been fixed the same day.
+
+Measured from a top-down capture over **undug** ground (`dug: 0`), 2×2 live tiles surrounded by
+flat squares:
+
+| | live tile | flat square |
+|---|---|---|
+| before | (0.184, 0.153, 0.122) | (0.753, 0.565, 0.365) |
+| after | **(0.753, 0.565, 0.365)** | (0.753, 0.565, 0.365) |
+
+Byte-identical after the flip. Note the before-ratio is **4.1 / 3.7 / 3.0 per channel, not a flat
+scale** — the dark side is relatively *bluer*, which is the signature of ambient-sky-only lighting
+and is what pointed at `N·L` rather than at albedo.
+
+**How it was attributed, in three controls** (worth copying for the next "why is this surface the
+wrong colour"): forcing `ALBEDO = dirt` unconditionally **did not change either side** → not the
+colour mix; disabling the sun's shadows *and* the tiles' `cast_shadow` changed **nothing** → not
+shadowing; `ALBEDO = FRONT_FACING ? green : red` rendered **live tiles RED and flat squares GREEN**
+→ winding, conclusively.
+
+**Watch for the recurrence:** any new mesh built by hand for this shader must put its top face
+front. `cull_disabled` means a regression will not look like a hole — it will look like *this*, a
+whole surface dropping to roughly a third of its brightness and going blue-ish.
+
+## 2026-08-19 (also fixed, but NOT the reported symptom: the ruts you dug vanish when you drive away)
+
+**Read the entry above first — that was the bug the user was actually reporting.** This one is real
+and was fixed on the way to it (user confirmed: *"now they do stay in view"*), but it is a separate
+defect and diagnosing the report as this one cost a pass. The lesson for next time: *"tiles are
+lighter"* meant whole tiles, uniformly — a **lighting** claim. Ruts and berms were explicitly not
+what was being described. **Photograph the thing before theorising about the shader maths**; one
+top-down capture over undug ground would have separated these two in the first five minutes.
+
+Symptom in driving words: **the ruts and berms you just dug vanish the moment you drive away from
+them**, and re-appear when you come back within 36 m. **Rendering only. `t.heights`, the
+HeightMapShape collider and the whole Bekker dig model were correct throughout and were not
+touched.**
 
 **The centre patch draws its ground two ways and swaps between them by distance.** Within
 `unload_radius` (36 m) a tile is live: its own tessellated mesh, its own material, its own
@@ -36,10 +82,12 @@ as **pure `dirt_color`, the lightest value the shader can produce**. Measured on
 loaded albedo luma **0.245**, unloaded luma **0.502** — a **2.05x brightness step** at the boundary.
 Driving away from a rut visually erased it; driving back re-materialised it at 36 m.
 
-**Ruled out the other candidate first, without driving.** Both paths encode pristine ground as the
-identical quantised constant (0.1482 m — `bed_height/height_scale` through RGBA8), and both compute
-the same UP normal from it, so **undriven ground has no seam**. The seam is entirely dug ruts
-disappearing on unload, not the two paths shading flat ground differently.
+**A wrong conclusion recorded on purpose, because the reasoning looked airtight.** This entry
+originally claimed undriven ground had no seam, on the grounds that both paths encode pristine
+ground as the identical quantised constant (0.1482 m through RGBA8) and both *compute* the same up
+normal. Both halves are true and the conclusion was still wrong: the live tile's computed normal
+was being **negated by the back-face rule** after the shader had produced it (see the entry above).
+**Reading the shader tells you what it computes, not what the rasteriser does with it.**
 
 **The half that is easy to miss: the flat square has 4 vertices.** The shader read the height in
 `vertex()` and passed it to `fragment()` as a varying, so colour resolution was the MESH's

@@ -224,8 +224,14 @@ func _build_plane() -> void:
 			var b := j * _tn + i + 1
 			var d := (j + 1) * _tn + i
 			var e := (j + 1) * _tn + i + 1
-			indices.append(a); indices.append(d); indices.append(b)
-			indices.append(b); indices.append(d); indices.append(e)
+			# WINDING: the top of the tile must be the FRONT face. Wound the other way round,
+			# `cull_disabled` still draws it, but Godot negates NORMAL on back faces - the
+			# shader's carefully-built up-normal then points into the ground, the sun
+			# contributes nothing, and the whole tile renders ambient-only DARK BROWN beside
+			# the light flat squares. That was the bug, and cull_disabled is what hid it
+			# (nothing goes invisible, it just goes dark). Same class as the M5 stage flip.
+			indices.append(a); indices.append(b); indices.append(d)
+			indices.append(b); indices.append(e); indices.append(d)
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
