@@ -166,7 +166,17 @@ func sample_profile(x: float, z: float, heading: Vector2, swept: float) -> Vecto
 	else:
 		hd = hd.normalized()
 	var n := maxi(patch_samples, 1)
-	var half := maxf(contact_patch_len + maxf(swept, 0.0), 0.01) * 0.5
+	# The footprint is the CONTACT PATCH - a physical, speed-independent property. The swept
+	# distance is NOT part of it: a real tyre on a 0.6 m ripple follows that ripple at any speed,
+	# because 0.6 m is three times its contact length. Folding the sweep in unconditionally (as the
+	# first cut did) low-passed the road by SPEED and cost 74% of the ridge at 100 km/h - it applied
+	# a numerical fix as if it were physics, and the feature disappeared exactly where it matters.
+	# Sampling once per tick IS a real limit, but only past Nyquist: one wavelength needs two
+	# samples, so filtering starts only when a tick travels more than half a wavelength (~130 km/h
+	# at 120 Hz on 0.6 m corrugation) - above that the samples cannot describe the ripple and are
+	# filtered rather than allowed to alias into low-frequency garbage. Below it, nothing is touched.
+	var over := maxf(swept - washboard_lambda * 0.5, 0.0)
+	var half := maxf(contact_patch_len + over, 0.01) * 0.5
 	var vals := PackedFloat32Array(); vals.resize(n)
 	var sdv := 0.0
 	var sdd := 0.0
