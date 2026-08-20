@@ -63,6 +63,9 @@ class_name RallyStage
 @export var grass_grip := 0.8            # loose off-track
 # --- flat disc in the CENTRE for the reactive/deformable dirt patch ---
 @export var patch_radius := 75.0         # matches the DeformableTerrain zone half-size (150/2)
+@export var patch_color := Color(0.66, 0.48, 0.26)  # the centre patch's own dirt. terrain.gd OWNS this
+                                                 # colour and world.gd keeps this copy in step - do not
+                                                 # re-tune it here or the two will drift apart
 @export var patch_bed := 0.15            # matches DeformableTerrain.bed_height (tiles hide the step under it)
 @export var patch_floor := -0.06         # stage ground UNDER the patch sits below the ruts so they work
 @export var center_blend := 18.0         # gentle grass ramp from the patch edge up to the hills
@@ -183,6 +186,11 @@ func _on_drag_strip(x: float, z: float) -> bool:
 
 func _surface_color(x: float, z: float) -> Color:
 	var c := grass_color.lerp(road_color, _road_t(x, z))       # grass or dirt road
+	# The centre deformable patch is real dirt that terrain.gd draws on top of this mesh, and
+	# grip_at() has always known that. This did NOT, so anything asking what the ground looks like
+	# there (dust colour) was told "grass" across the whole skid-pad. Same query C1 uses, so the
+	# patch's extent is defined once.
+	c = c.lerp(patch_color, 1.0 - deformable_patch_factor(x, z))
 	var ad := _asphalt_dist(x, z)
 	var ta := 1.0 - smoothstep(asphalt_width * 0.5, asphalt_width * 0.5 + 1.5, ad)   # crisp asphalt edge
 	c = c.lerp(asphalt_color, ta)                              # circuit asphalt

@@ -31,6 +31,17 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 @export var slip_ref := 6.0          # m/s of contact-patch slip for a full-intensity effect
 @export var slip_floor := 1.2        # m/s below which the tyre is gripping and throws nothing
 @export var asphalt_grip := 1.2      # base grip above this = tarmac: smoke, no dust
+# --- SURFACE TINT: a particle keeps the colour it was BORN with ----------------------------
+# `ParticleProcessMaterial.color` is a uniform the process shader re-reads EVERY FRAME, so writing
+# it re-tints every particle already in the air. Measured, because it is not obvious: color_ramp,
+# alpha_curve, no ramp at all, and even a per-particle `emission_color_texture` ALL behave this way
+# - there is no way to bake a colour into one particle of a shared emitter. A plume lifted off
+# grass therefore turned white the instant the car reached tarmac. So a tinted layer gets several
+# emitters per wheel, each holding ONE frozen colour; a new ground colour hands over to a different
+# one, and the retired emitter simply stops emitting while its particles live out their lifetime in
+# the colour they were born with.
+@export var tint_bin := 0.10         # RGB distance at which a ground colour needs its own emitter
+@export var tint_hold := 1.6         # s: shortest gap between surface changes a layer must survive
 # --- DIRT/DUST PLUMES ---------------------------------------------------------------------
 # Plumes are SPEED-driven: they kick up from 20 km/h and are fully established by 40, with sliding
 # adding on top. Size is quoted in TYRE DIAMETERS and grows to a ceiling at 160 km/h.
@@ -93,16 +104,20 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 const LAYERS := {
 	"plume":  {"amount": 240, "life": 4.6, "gravity": -0.45, "rise": 2.4,
 			   "grow": [0.25, 0.45, 1.0, 0.50], "alpha": 0.52, "spread": 36.0, "damp": [1.1, 2.6],
-			   "box": Vector3(0.32, 0.14, 0.32), "prio": 1, "spin": 20.0, "turb": 0.55},
+			   "box": Vector3(0.32, 0.14, 0.32), "prio": 1, "spin": 20.0, "turb": 0.55, "tint": true},
 	"smoke":  {"amount": 170, "life": 3.0, "gravity": -0.30, "rise": 3.0,
 			   "grow": [0.25, 0.50, 1.0, 0.60], "alpha": 0.36, "spread": 30.0, "damp": [1.4, 3.0],
-			   "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 16.0, "turb": 0.30},
+			   "box": Vector3(0.16, 0.10, 0.16), "prio": 2, "spin": 16.0, "turb": 0.30, "tint": false},
 	"gravel": {"amount": 70, "life": 0.55, "gravity": -19.0, "rise": 9.0,
 			   "grow": [1.0, 0.5, 1.0, 1.0], "alpha": 0.95, "spread": 24.0, "damp": [0.0, 0.4],
-			   "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0, "turb": 0.0},
+			   "box": Vector3(0.05, 0.03, 0.05), "prio": 0, "spin": 90.0, "turb": 0.0, "tint": true},
 }
 
-var _em := {}                        # layer name -> Array[CPUParticles3D], one per wheel
+var _em := {}                        # layer name -> Array[GPUParticles3D], EVERY emitter of that layer
+var _slots := {}                     # layer -> [wheel][gen] -> GPUParticles3D  (one per live colour)
+var _slot_col := {}                  # layer -> [wheel][gen] -> Color, FROZEN while that emitter runs
+var _slot_idle := {}                 # layer -> [wheel][gen] -> s since it last emitted
+var _slot_cur := {}                  # layer -> [wheel] -> gen currently emitting, -1 for none
 var _sm := {}                        # layer name -> Array[float], smoothed intensity per wheel
 var _atlas: ImageTexture
 var _sun: DirectionalLight3D
@@ -125,7 +140,7 @@ func _ready() -> void:
 	_atlas = _make_puff_atlas(atlas_cells, atlas_px)
 	for lname in LAYERS.keys():
 		_build_curves(lname, LAYERS[lname])
-		_em[lname] = _build_layer(LAYERS[lname])
+		_build_layer(lname, LAYERS[lname])
 		_sm[lname] = [0.0, 0.0, 0.0, 0.0]
 	_build_marks()
 	_sun = _find_sun()
@@ -298,11 +313,68 @@ func _ramp_tex() -> GradientTexture1D:
 	t.gradient = grad
 	return t
 
-func _build_layer(spec: Dictionary) -> Array:
-	var out: Array = []
+func _gens_for(spec: Dictionary) -> int:
+	# How many colours a layer can hold at once is set by its LIFETIME, not by a magic number: a
+	# retired emitter must not be wanted again until its last particle has died, so it needs enough
+	# emitters to cover `life` at one surface change every `tint_hold` seconds. Untinted layers
+	# (ASPHALT SMOKE) never change colour and need exactly one.
+	if not bool(spec.get("tint", false)):
+		return 1
+	return clampi(int(ceil(float(spec["life"]) / maxf(tint_hold, 0.1))), 2, 4)
+
+func _build_layer(lname: String, spec: Dictionary) -> void:
+	var gens := _gens_for(spec)
+	var all: Array = []
+	var per_wheel: Array = []
+	var cols: Array = []
+	var idle: Array = []
 	for i in range(4):
-		out.append(_make_emitter(spec))
-	return out
+		var row: Array = []
+		var crow: Array = []
+		var irow: Array = []
+		for g in range(gens):
+			var p := _make_emitter(spec)
+			row.append(p)
+			all.append(p)
+			crow.append(Color(-1, -1, -1))     # nothing can match this, so the first emit allocates
+			irow.append(0.0)
+		per_wheel.append(row)
+		cols.append(crow)
+		idle.append(irow)
+	_em[lname] = all                           # flat: every "for p in _em[lname]" still means ALL
+	_slots[lname] = per_wheel
+	_slot_col[lname] = cols
+	_slot_idle[lname] = idle
+	_slot_cur[lname] = [-1, -1, -1, -1]
+
+func _cdist(a: Color, b: Color) -> float:
+	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
+
+func _pick_slot(lname: String, i: int, col: Color) -> int:
+	# Same ground as last frame -> keep laying into the emitter already running, so a colour that
+	# drifts slowly (the wear line darkening under the car) never splinters into new emitters.
+	var cols: Array = _slot_col[lname][i]
+	var cur: int = _slot_cur[lname][i]
+	if cur >= 0 and _cdist(cols[cur], col) < tint_bin:
+		return cur
+	# Otherwise prefer an emitter ALREADY holding this colour before opening a new one: grass ->
+	# dirt -> grass then costs nothing and never cuts a cloud short.
+	var best := -1
+	var bd := tint_bin
+	for g in range(cols.size()):
+		var d: float = _cdist(cols[g], col)
+		if d < bd:
+			bd = d
+			best = g
+	if best < 0:
+		best = 0                               # a genuinely new colour: take the stalest emitter,
+		var idle: Array = _slot_idle[lname][i]  # whose particles are the oldest and faintest
+		for g in range(idle.size()):
+			if float(idle[g]) > float(idle[best]):
+				best = g
+		cols[best] = col                       # frozen for as long as this emitter keeps running
+	_slot_cur[lname][i] = best
+	return best
 
 func _make_emitter(spec: Dictionary) -> GPUParticles3D:
 	# GPU particles, not CPU, for one reason that matters: `amount_ratio`. It scales emission
@@ -544,16 +616,22 @@ func _physics_process(delta: float) -> void:
 	for i in range(mini(wheels.size(), 4)):
 		var w = wheels[i]
 		if not w.contact:
-			for nm in _em.keys():
-				_em[nm][i].emitting = false
+			for nm in _slots.keys():
+				for q in _slots[nm][i]:
+					(q as GPUParticles3D).emitting = false
+				_slot_cur[nm][i] = -1
 			continue
 		var cp: Vector3 = w.contact_point
 		var grip: float = stage.grip_at(cp.x, cp.z)
 		var vs: float = slip_speed(w, v)
 		var sa: float = slip_frac(w, v, fz_ref)
+		# Sampled on BOTH branches: winding a plume down over tarmac used to pass Color.WHITE, which
+		# (being a live uniform) flashed the whole fading cloud white - the reported bug in its
+		# purest form. Dust is the colour of the ground it was lifted off, wherever that is.
+		var col := ground_color(cp.x, cp.z)
 		if grip > asphalt_grip:
-			_emit(i, "plume", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0, 1.0)
-			_emit(i, "gravel", 0.0, delta, cp, kick, Color.WHITE, lit, gravel_d, 1.0, 1.0, release_gravel)
+			_emit(i, "plume", 0.0, delta, cp, kick, col, lit, 1.0, 1.0, 1.0)
+			_emit(i, "gravel", 0.0, delta, cp, kick, col.darkened(0.14), lit, gravel_d, 1.0, 1.0, release_gravel)
 			# ASPHALT SMOKE
 			var press: float = smoke_frac(float(w.temp), float(w.Fz), vs, grip)
 			_build[i] = smoke_build(_build[i], press, delta)
@@ -565,7 +643,6 @@ func _physics_process(delta: float) -> void:
 		else:
 			_emit(i, "smoke", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0, 1.0)
 			_build[i] = maxf(_build[i] - delta / maxf(smoke_decay_time, 0.05), 0.0)
-			var col := ground_color(cp.x, cp.z)
 			# DIRT/DUST PLUMES
 			_emit(i, "plume", plume_frac(v, sa), delta, cp, kick, col, lit,
 					float(_sz["pd"]), float(_sz["pn"]), float(_sz["pr"]))
@@ -577,10 +654,21 @@ func _emit(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: V
 	var arr: Array = _sm[layer]
 	arr[i] = _smooth(arr[i], target, dt, rel)
 	var amt: float = arr[i]
-	var p: GPUParticles3D = _em[layer][i]
+	var slots: Array = _slots[layer][i]
+	var idle: Array = _slot_idle[layer][i]
+	for g in range(idle.size()):
+		idle[g] = float(idle[g]) + dt
 	if amt <= 0.01:
-		p.emitting = false
+		for q in slots:
+			(q as GPUParticles3D).emitting = false
+		_slot_cur[layer][i] = -1
 		return
+	var gi := _pick_slot(layer, i, col)
+	for g in range(slots.size()):
+		if g != gi:
+			(slots[g] as GPUParticles3D).emitting = false   # retired: its particles finish as born
+	idle[gi] = 0.0
+	var p: GPUParticles3D = slots[gi]
 	var spec: Dictionary = LAYERS[layer]
 	var pm: ParticleProcessMaterial = p.process_material
 	p.global_position = cp + Vector3.UP * 0.05
@@ -592,7 +680,10 @@ func _emit(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: V
 	pm.scale_max = diameter * 1.22
 	p.amount_ratio = clampf(density * (0.4 + 0.6 * amt), 0.03, 1.0)
 	var a_max: float = float(spec["alpha"])
-	var c := Color(col.r * lit.r, col.g * lit.g, col.b * lit.b)
+	# The emitter's OWN colour, not this frame's ground - that is the whole point. Alpha still moves
+	# with intensity (it always has, and it reads as the cloud thinning rather than re-colouring).
+	var tint: Color = _slot_col[layer][i][gi] if bool(spec.get("tint", false)) else col
+	var c := Color(tint.r * lit.r, tint.g * lit.g, tint.b * lit.b)
 	c.a = clampf(a_max * (0.35 + 0.65 * amt), 0.0, a_max)
 	pm.color = c
 	p.emitting = true

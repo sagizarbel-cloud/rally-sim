@@ -64,7 +64,7 @@ func _ready() -> void:
 	hud.time_trial = tt                          # HUD shows the active circuit's lap/last/best
 	_build_tuning(car)
 	_build_rearview(car)
-	_build_reactive_patch(car)
+	_build_reactive_patch(car, stage)
 	_build_sound(car, stage)
 
 func _physics_process(delta: float) -> void:
@@ -157,7 +157,7 @@ func _build_timetrial(car: Node3D, stage) -> Node3D:
 	add_child(tt)
 	return tt
 
-func _build_reactive_patch(car: Node3D) -> void:
+func _build_reactive_patch(car: Node3D, stage) -> void:
 	# small deformable dirt patch in the CENTRE (M3 reactive terrain). It sits on the stage's flat
 	# centre disc (bed 0.15 above the graded ground), so the wheels dig ruts / kick berms there.
 	var patch: Node = load("res://scripts/terrain.gd").new()
@@ -167,6 +167,10 @@ func _build_reactive_patch(car: Node3D) -> void:
 	patch.zone_size = 150.0                        # bigger centre dirt area (+20 m each side)
 	add_child(patch)
 	patch.vehicle = car                            # feeds get_wheels()/velocity for the dig model
+	if stage != null:
+		stage.patch_color = patch.dirt_color       # terrain.gd owns the patch's dirt colour; the
+		                                           # stage only needs to answer "what is underfoot
+		                                           # here" with the same answer (dust tint)
 
 func _build_stage() -> Node:
 	# M5 procedural rally stage (elevated terrain + winding road). Replaces the old flat

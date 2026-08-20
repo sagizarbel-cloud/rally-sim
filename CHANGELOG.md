@@ -20,6 +20,72 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-20 (fixed: dust born on grass turned white the moment you reached tarmac)
+
+Drive report: *"it should also be given color on birth and not change every surface change after
+birth - so if it starts green from grass it shouldn't turn white when I hit the asphalt - only the
+new ones should be white"*, plus *"on grass it changes, on the rally loop it changes also and also
+on asphalt, but on the dirt circle it doesn't change."* **Two separate defects, and the second
+sentence is the tell for both.** This is the DIRT/DUST PLUMES and the DIRT/GRAVEL PARTICLES - the
+two surface-tinted layers. ASPHALT SMOKE has a fixed white-grey and was never involved.
+
+**1. A particle could not keep the colour it was born with, because it never owned one.**
+`ParticleProcessMaterial.color` is a uniform that the particle process shader re-reads **every
+frame**, so writing it re-tints every particle already in the air. Measured, because it is not at
+all obvious and three plausible escapes all fail: with `color_ramp` (delta 0.54), with `alpha_curve`
+instead (0.58), with **no** over-life ramp at all (0.60), and even with a per-particle
+`emission_color_texture` whose colours were swapped while emission was OFF (live particles went
+green -> red anyway). **There is no way to bake a colour into one particle of a shared emitter** -
+the colour belongs to the emitter, not the particle.
+
+So a tinted layer now gets **several emitters per wheel, each holding ONE frozen colour**. A new
+ground colour hands over to a different emitter; the retired one just stops emitting and its
+particles live out their lifetime in the colour they were born with. `_pick_slot()` prefers an
+emitter *already* holding that colour, so grass -> dirt -> grass reuses the green one and never cuts
+a cloud short. The count is derived, not picked: a retired emitter must not be wanted again until
+its last particle has died, so `gens = ceil(life / tint_hold)`, clamped 2..4 - plume (life 4.6 s)
+gets 3, gravel (0.55 s) gets 2, smoke (untinted) stays at 1.
+
+Proof, both clouds on screen at once: a cloud laid down as green, then the ground colour switched to
+white and emission moved a few metres sideways - **old cloud (0.34, 0.76, 0.26) still green, new
+cloud (0.80, 0.68, 0.55) white**, with `gen0 emitting=false colour=(0.12,0.80,0.16)` and
+`gen1 emitting=true colour=(0.95,0.95,0.97)`.
+
+Also removed the sharpest edge of the same bug: winding a plume down over tarmac passed
+`Color.WHITE` as its colour, which - being a live uniform - flashed the **whole fading cloud** white
+in one frame. Both branches now sample the real ground colour; dust is the colour of the ground it
+was lifted off, wherever the car happens to be.
+
+**2. `_surface_color()` did not know the dirt circle existed.** It blends grass -> road -> asphalt
+-> drag strip and had **no term for the centre deformable patch**, even though `grip_at()` has
+always had one. So across the whole skid-pad it returned plain `grass_color`, and dust kicked up on
+the dirt circle was tinted **green** - and, because the value was constant over the entire patch, it
+was also the one place the colour never changed in flight, which is exactly what the report says.
+Now blended through `deformable_patch_factor()` (the same query C1 uses, so the patch's extent stays
+defined in one place). Measured `ground_color()`, before -> after:
+
+| | before | after |
+|---|---|---|
+| dirt circle centre | (0.496, 0.496, 0.334) — *identical to grass* | **(0.694, 0.532, 0.334)** |
+| rally loop | (0.640, 0.577, 0.460) | unchanged |
+| grass | (0.496, 0.496, 0.334) | unchanged |
+| asphalt ring | (0.298, 0.298, 0.325) | unchanged |
+
+`terrain.gd` still owns that colour; `world.gd` pushes `patch.dirt_color` into `stage.patch_color`
+at wiring time so the two cannot drift apart. **Do not re-tune it in `stage.gd`.**
+
+**Cost — the extra emitters are close to free, which is the surprise worth recording.** Worst case
+(all four wheels emitting plume AND gravel, ground colour flipped every 1.5 s to force a handover
+every time): emitters **12 -> 24**, particle slots **1920 -> 4120**, but draw calls **1452 -> 1463
+(+11)** and primitives **3,050,156 -> 3,054,481 (+4.3k)**, with process ms **18.20 -> 18.09**
+(inside the run-to-run spread) and FPS pinned at 60 both. A retired emitter that is not emitting and
+has no live particles costs essentially nothing, so the cost tracks *colours actually in flight*,
+not the number of emitters allocated. Do not "optimise" this back to one emitter per wheel; that is
+the bug.
+
+**NOT verified: how it looks while driving.** Tunables are `tint_bin` (0.10 - the RGB distance at
+which a colour earns its own emitter) and `tint_hold` (1.6 s).
+
 ## 2026-08-19 (fixed: whole dirt tiles go DARK BROWN when they load — a backwards mesh winding)
 
 Drive report: *"the dirt tiles/squares still have the rendering issue where unloaded tiles are much
