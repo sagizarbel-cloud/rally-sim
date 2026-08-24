@@ -20,6 +20,74 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-24 (fixed: the engine dies and NOTHING starts it again - no ignition, no bump start)
+
+Drive report: *"when having manual clutch off, sometimes the car still stalls - even with anti stall
+on - and the bug is that it doesn't turn on when doing bump starts or when pressing ignition (and
+because there is no manual clutch there is no holding it with that option) so it makes it so that on
+default start settings there is no way to reignite the engine after stalling."* Both halves are real
+and they are different bugs. **Nothing in this file mentioned stalling before today** - grep
+`_stalled`, `_dead_t`, `w_stall`.
+
+**The soft-lock: `_stalled` described the SETTINGS, not the engine.** Entry required
+`manual_clutch and not anti_stall`, so on the default car (auto clutch, anti-stall ON) the flag
+could never be set - while the crank could still reach zero, because nothing else stopped it. And
+every restart route sits behind that flag: `[I]`, the 0.5 s clutch-hold starter, and the bump-start
+catch. Measured on the default car with the engine at **0.0 rpm**: `[I]` did nothing, a **40 km/h
+bump start in gear** did nothing, neutral + `[I]` did nothing, coasting did nothing. The HUD's
+`** STALLED - [I] ignition **` line is also behind the same flag, so the driver was not even told
+what had happened. `_stalled` is now a statement about the engine - below the firing floor
+`_engine_torque()` returns zero and motoring friction only drags the crank further down, so it is
+dead however it got there - and `[I]` fires whenever the engine is not turning over rather than only
+when the flag happens to be set.
+
+**Why it was only "sometimes", which is the useful part to remember.** Combustion torque decays
+through the intake lag (`intake_tau` 0.07 s) rather than vanishing, so a crank flicked briefly under
+the floor can still pick itself up on the residual charge, and usually does. Only a *sustained* dip
+is fatal. So the stall test has a **dwell of `intake_tau * 3` (0.21 s)** - long enough to keep every
+self-recovery that already worked, short enough that a genuinely dead engine is admitted quickly.
+Proof it matters: a hard brake to a stop in 3rd dips to **430.8 rpm, below the 500 rpm floor**, and
+recovers on its own with no stall declared.
+
+**Two routes dragged the crank under the floor even with anti-stall ON, and both were in the
+locked-clutch follow.**
+
+1. **Selecting reverse while still rolling forwards** - `omega_gb` goes negative, and the follow
+   `_omega_e = clampf(omega_gb, 0.0, ...)` clamped the crank to **zero in a single tick**. The
+   "follow hit a physical limit -> plates must slip" test was written *after* the assignment, so it
+   noticed only once the engine was already dead. Measured **2658.4 -> 0.0 rpm**. The follow is now
+   tested before it is taken.
+2. **Hitting something solid while the plates are locked** - the lock slaves the crank straight to a
+   stopped wheel, and the clutch travels at pedal rate (`CLUTCH_OUT_RATE` 25/s, ~40 ms), which at
+   120 Hz is far too slow to save it. Measured **2517.2 -> 31.0 rpm**. Anti-stall (and any auto
+   clutch, which is always clamped) now **opens the plates rather than letting them drag the crank
+   below its firing speed** - which is what a real anti-stall is for.
+
+| trial (default car) | min rpm before | min rpm after |
+|---|---|---|
+| wall impact while plates locked | 31.0 | **971.2** |
+| reverse engaged while rolling forward | 0.0 | **929.5** |
+| handbrake at walking pace in gear | 886.3 | 886.3 (was already safe) |
+
+**Every recovery route now works, each tested from a fresh dead engine.** Default car (auto clutch,
+anti-stall ON): no input at all -> re-fires; `[I]` -> re-fires; rolling in gear -> re-fires. Hardcore
+(manual clutch, anti-stall OFF): clutch held -> starter fires; in gear rolling with the clutch out ->
+bump start catches at **2277 rpm**; `[I]` -> re-fires. **With an auto clutch, anti-stall now re-fires
+the engine about half a second after it dies instead of stranding the driver** - there is no clutch
+pedal to hold, so that recovery has to be the car's job.
+
+**No spurious stalls.** Six driving phases (idle in gear, full throttle up through the box, hard
+brake to a stop in gear, standing start, handbrake turn, coasting in neutral): **0 stalled frames**,
+lowest rpm seen 430.8.
+
+**NOT verified: feel.** Whether a stall now reads as dramatic-but-recoverable, or whether the 0.5 s
+auto re-fire is too eager, needs driving. The hardcore config is unchanged in intent: you can still
+genuinely kill it and have to bump start.
+
+**Housekeeping:** a parallel session's `commit -a` swept the temporary probe for this bug into commit
+`9073979` ("Broadband roughness was 4.5x too quiet") and pushed it; this commit removes it. Second
+time this week - see the note under 2026-08-19.
+
 ## 2026-08-20 (fixed: dust born on grass turned white the moment you reached tarmac)
 
 Drive report: *"it should also be given color on birth and not change every surface change after

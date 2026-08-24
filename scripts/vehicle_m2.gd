@@ -331,8 +331,9 @@ var _omega_e := 1000.0 * TAU / 60.0 # A1: engine angular velocity (rad/s) - THE 
 var _t_comb := 0.0                  # A1: combustion torque after the intake lag (N*m)
 var _clutch := 0.0                  # A1: clutch engagement 0 = open .. 1 = fully engaged
 var _clutch_locked := false         # A1: true = engine follows the wheels kinematically (no slip)
-var _stalled := false               # A1: engine dead; restart via clutch-hold or bump-start
+var _stalled := false               # A1: engine dead; restart via [I], clutch-hold or bump-start
 var _restart_t := 0.0               # A1: seconds the clutch has been held while stalled (starter timer)
+var _dead_t := 0.0                  # A1: seconds the crank has been below the firing floor
 var _blip_t := 0.0                  # A2: seconds left of the current downshift rev-match blip
 var _ign_grace := 0.0               # A2: anti-stall grace after an [I] restart (the driver's reflex)
 var _shift_t := 0.0                 # A4: seconds left of the current shift manoeuvre
@@ -1332,6 +1333,8 @@ func _physics_process(delta: float) -> void:
 	# motoring-friction line T_fric(w) = c0 + c1*w fit through the two physical anchor points
 	var w_idle := idle_rpm * TAU / 60.0
 	var w_red := redline_rpm * TAU / 60.0
+	var w_stall := idle_rpm * 0.55 * TAU / 60.0     # where the anti-stall clamp is fully open, just
+	                                                # above the floor _engine_torque() stops firing at
 	var fric_c1 := (engine_brake_redline - engine_brake_idle) / maxf(w_red - w_idle, 1.0)
 	var fric_c0 := engine_brake_idle - fric_c1 * w_idle
 	var ratio := gr * final_drive                        # engine:wheel ratio (0 in neutral)
@@ -1481,10 +1484,21 @@ func _physics_process(delta: float) -> void:
 		if neutral:
 			_clutch_locked = false
 		elif _clutch_locked:
-			# locked: the engine IS the wheels through the gear (never backwards, valve-float ceiling)
-			_omega_e = clampf(omega_gb, 0.0, w_red * 1.35)
-			if absf(omega_gb - _omega_e) > CLUTCH_LOCK_BAND:
-				_clutch_locked = false           # the follow hit a physical limit -> plates must slip
+			# locked: the engine IS the wheels through the gear. Test the follow BEFORE taking it -
+			# written the other way round the crank was assigned first and only then found to be out
+			# of range, so selecting reverse while still rolling forwards (omega_gb goes negative, the
+			# crank clamps to zero) killed the engine in ONE tick: measured 2658 rpm -> 0.0 rpm.
+			var w_follow := clampf(omega_gb, 0.0, w_red * 1.35)
+			if absf(omega_gb - w_follow) > CLUTCH_LOCK_BAND:
+				_clutch_locked = false           # the follow would hit a physical limit -> plates slip
+			elif (anti_stall or not manual_clutch) and w_follow < w_stall:
+				# A real anti-stall opens the plates rather than letting them drag the crank under its
+				# firing speed, and that is the whole job. Without this the lock slaves the engine
+				# straight to a stopped wheel - a wall, a kerb - and it is dead long before the
+				# pedal-rate clutch can travel: measured 2517 rpm -> 31 rpm through a wall impact.
+				_clutch_locked = false
+			else:
+				_omega_e = w_follow
 		var rpm := _omega_e * 60.0 / TAU
 		var rev_cut := clampf((redline_rpm - rpm) / 350.0, 0.0, 1.0)   # rev limiter
 		# optional traction control: trim demand toward the slip target (uses last sub-step's slip)
@@ -1630,32 +1644,53 @@ func _physics_process(delta: float) -> void:
 			fx_sum[w] += Fx
 	_engine_rpm = _omega_e * 60.0 / TAU
 
-	# stall & restart (A1): only a LOADED engine can stall, and only with the safety nets off.
-	# Restart: hold the clutch (or find N) ~0.5 s and the starter re-fires it at idle; or
-	# bump-start by releasing the clutch in gear while rolling (the wheels spin it back to life).
-	if not _stalled and manual_clutch and not anti_stall and not neutral and _clutch > 0.1 and _engine_rpm < idle_rpm * 0.5 and _ign_grace <= 0.0:
-		_stalled = true
+	# stall & restart (A1). STALLED means the ENGINE IS NOT RUNNING - not that the settings gave it
+	# permission to stop. Below the firing floor `_engine_torque()` returns zero and motoring
+	# friction only drags the crank further down, so it is dead however it got there. The old test
+	# also demanded `manual_clutch and not anti_stall`, so the DEFAULT car (auto clutch, anti-stall
+	# ON) could sit at 0 rpm with this flag FALSE - and every restart route is behind the flag, so
+	# [I], the starter and a bump start all did nothing and the car was stranded. Measured: engine
+	# at 0.0 rpm, then [I], a 40 km/h bump start in gear and neutral+[I] each changed nothing.
+	# The dwell is why it only happened "sometimes": combustion torque decays through the intake lag
+	# rather than vanishing, so a crank flicked briefly under the floor can still pick itself up, and
+	# usually does. Only once that residual charge is spent is the engine really out.
+	if _engine_rpm >= idle_rpm * 0.5 or _ign_grace > 0.0:
+		_dead_t = 0.0
+	else:
+		_dead_t += delta
+		if _dead_t > intake_tau * 3.0:
+			_stalled = true
 	if _stalled:
 		_t_comb = 0.0
-		if Input.is_action_just_pressed("ignition"):
-			_stalled = false                     # [I] starter: fire straight back to idle...
-			_omega_e = idle_rpm * TAU / 60.0
-			_engine_rpm = idle_rpm
-			_restart_t = 0.0
-			_clutch = 0.0                        # ...with the driver's restart reflex: clutch stabbed
-			_clutch_locked = false               # in, plus a moment of anti-stall grace to get going
-			_ign_grace = 1.2
-		elif _clutch < 0.05 or neutral:
+	# [I] is the ignition key: it must work whenever the engine is not turning over, rather than
+	# only when the stall flag happens to be set. That gate is what left the default car with no way
+	# back at all, since without a clutch pedal there is nothing else the driver can reach.
+	if Input.is_action_just_pressed("ignition") and (_stalled or _engine_rpm < idle_rpm * 0.5):
+		_stalled = false                         # starter: fire straight back to idle...
+		_omega_e = idle_rpm * TAU / 60.0
+		_engine_rpm = idle_rpm
+		_restart_t = 0.0
+		_dead_t = 0.0
+		_clutch = 0.0                            # ...with the driver's restart reflex: clutch stabbed
+		_clutch_locked = false                   # in, plus a moment of anti-stall grace to get going
+		_ign_grace = 1.2
+	elif _stalled:
+		if _clutch < 0.05 or neutral:
+			# starter: clutch held (or neutral found) long enough. On an auto clutch the anti-stall
+			# clamp is already holding the plates open here, so this IS the anti-stall recovery -
+			# the car re-fires itself half a second after it dies instead of stranding the driver.
 			_restart_t += delta
 			if _restart_t > 0.5:
 				_stalled = false
 				_omega_e = idle_rpm * TAU / 60.0
 				_engine_rpm = idle_rpm
 				_restart_t = 0.0
+				_dead_t = 0.0
 		else:
 			_restart_t = 0.0
 			if _engine_rpm > idle_rpm * 0.6:     # spun fast enough by the wheels -> combustion catches
 				_stalled = false
+				_dead_t = 0.0
 
 	# --- apply the averaged longitudinal + the lateral (slip-angle) force per contact wheel ---
 	_sat_moment = 0.0                        # C2: re-summed from the front wheels below
@@ -1778,6 +1813,7 @@ func respawn() -> void:
 	_gear = 1; _engine_rpm = idle_rpm; _engine_temp = ambient_temp
 	_omega_e = idle_rpm * TAU / 60.0; _t_comb = 0.0; _tc_scale = 1.0            # A1: engine state
 	_clutch = 0.0; _clutch_locked = false; _stalled = false; _restart_t = 0.0   # A1: clutch state
+	_dead_t = 0.0                                                              # A1: stall dwell
 	_blip_t = 0.0; _ign_grace = 0.0                                            # A2: blip + starter grace
 	_shift_t = 0.0; _shift_to = 1; _shift_pending = false; _shift_down = false  # A4: shift manoeuvre
 	_launch = false                                                            # A4: launch assist
