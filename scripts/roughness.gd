@@ -34,7 +34,7 @@ var centreline_gravel: Centreline   # rally loop, C1.0 - the `s` axis for washbo
 
 const N0 := 0.1            # cycles/m, ISO 8608 reference spatial frequency
 const WAVINESS := 2.0       # ISO 8608 w exponent
-const N_OCTAVES := 5         # n0, 2n0, 4n0 ... covers ~0.1 to ~1.6 cycles/m (10 m down to ~0.6 m)
+const N_OCTAVES := 5         # bands [n0,2n0]..[16n0,32n0] = 0.1-3.2 cycles/m, 10 m down to 0.31 m
 # C1.2: the enveloping weight floor. A plain mean over the patch already does most of the real
 # work here - it is a low-pass filter, so a feature much narrower than the patch (fine gravel
 # grain) is heavily diluted by the many samples that miss it, while a feature spanning most of the
@@ -43,7 +43,8 @@ const N_OCTAVES := 5         # n0, 2n0, 4n0 ... covers ~0.1 to ~1.6 cycles/m (10
 # sample's weight toward 1.0 as its value approaches the patch's own peak, never below this floor.
 const ENVELOPE_FLOOR := 0.5
 
-var _oct_noise: Array = []   # one FastNoiseLite per octave, shared by every road class
+var _oct_noise: Array = []
+var _oct_norm: PackedFloat32Array   # measured RMS of each octave, so the ISO amplitudes land true
 var _patch_noise: FastNoiseLite
 
 func _ready() -> void:
@@ -57,6 +58,14 @@ func _build_noise() -> void:
 		n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 		n.frequency = N0 * pow(2.0, i)          # cycles/m for this octave
 		_oct_noise.append(n)
+	# FastNoiseLite does NOT emit unit-variance noise (simplex RMS is nearer 0.3 than 1.0), but the
+	# ISO amplitude maths below assumes it does - so the whole broadband spectrum came out several
+	# times quieter than the road class it claimed. Measure each layer's real RMS once and divide it
+	# out, so road_class_* delivers the variance ISO 8608 actually specifies instead of an arbitrary
+	# fraction of it. Measured, not hand-corrected: swap the noise type and this re-derives itself.
+	_oct_norm.resize(N_OCTAVES)
+	for i in range(N_OCTAVES):
+		_oct_norm[i] = _measure_rms(_oct_noise[i])
 	_patch_noise = FastNoiseLite.new()
 	_patch_noise.seed = 9001
 	_patch_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
@@ -64,16 +73,34 @@ func _build_noise() -> void:
 
 # ---------------------------------------------------------------- ISO 8608 broadband
 
-func _octave_amp(gd_n0_1e6: float, n: float) -> float:
-	var gd := gd_n0_1e6 * 1e-6 * pow(n / N0, -WAVINESS)   # displacement PSD, m^3
-	var dn := n                                            # octave bandwidth ~= n (n -> 2n)
-	return sqrt(2.0 * gd * dn)                              # m, amplitude of this octave's layer
+func _measure_rms(n: FastNoiseLite) -> float:
+	var period := 1.0 / maxf(n.frequency, 1e-6)
+	var acc := 0.0
+	var m := 512
+	for i in range(m):
+		# irrational strides so the samples never land on the noise lattice and under-read
+		var t := float(i) * period * 0.7548776662
+		var v := n.get_noise_2d(t, t * 0.6180339887)
+		acc += v * v
+	return maxf(sqrt(acc / float(m)), 1e-4)
+
+func _octave_rms(gd_n0_1e6: float, n: float) -> float:
+	# EXACT rms of the octave band [n, 2n] under Gd(x) = Gd(n0)*(x/n0)^-w:
+	#   variance = Gd(n0) * n0^w * n^(1-w) * (2^(1-w) - 1) / (1 - w)
+	# The obvious rectangle rule (Gd(n) * n) samples the PSD at the band's LOW edge, and on a
+	# spectrum falling as n^-2 that overstates every octave by exactly 2x in variance - sqrt(2) in
+	# amplitude. ISO 8608 fixes w = 2, so the 1-w denominator is safe.
+	var gd0 := gd_n0_1e6 * 1e-6
+	return sqrt(gd0 * pow(N0, WAVINESS) * pow(n, 1.0 - WAVINESS)
+		* (pow(2.0, 1.0 - WAVINESS) - 1.0) / (1.0 - WAVINESS))
 
 func _broadband(x: float, z: float, gd_n0_1e6: float) -> float:
 	var h := 0.0
 	for i in range(N_OCTAVES):
 		var n := N0 * pow(2.0, i)
-		h += _oct_noise[i].get_noise_2d(x, z) * _octave_amp(gd_n0_1e6, n)
+		# normalise the layer to unit RMS, then scale by the band's exact rms: independent octaves
+		# add in quadrature, so the total lands on the ISO variance for the whole spectrum
+		h += _oct_noise[i].get_noise_2d(x, z) * _octave_rms(gd_n0_1e6, n) / _oct_norm[i]
 	return h
 
 # ---------------------------------------------------------------- road class + per-surface detail
