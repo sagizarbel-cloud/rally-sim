@@ -129,6 +129,12 @@ func _process(_delta: float) -> void:
 	var gsrc = stage if stage != null else car.surface_source
 	if gsrc != null and gsrc.has_method("grip_at"):
 		var g: float = gsrc.grip_at(car.global_position.x, car.global_position.z)
+		# D1 LEFT THIS ALONE ON PURPOSE, and the reason is measured. Switching this to the ground
+		# map's surface class is NOT a no-op the way effects.gd's gate was: with dirt_grip at 1.1
+		# this expression returns 0.400 on the rally loop, so the tyre audio already hears the
+		# gravel loop as 40% asphalt. Reading the map would snap that to 0.0 - which is a FEEL
+		# change (quieter squeal, louder gravel rumble) and D1 must not hide one inside a refactor.
+		# Recorded as a pre-existing bug in CHANGELOG.md; the fix is a phase with a drive test.
 		asph = clampf((g - 1.0) / 0.25, 0.0, 1.0)            # 0 = dirt/grass, 1 = asphalt (base surface, ignores wear)
 
 	# rolling rumble: always there while moving (quiet), louder with slip; quieter on smooth asphalt

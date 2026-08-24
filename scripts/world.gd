@@ -145,6 +145,10 @@ func _build_roughness(car: Node3D, stage, wn: Node) -> Node:
 	rn.wear = wn
 	rn.centreline_gravel = cl
 	rn.set_asphalt(stage.asphalt_radius)
+	# D1: the ground map classifies the position, this node owns the ISO 8608 coefficients. Wiring
+	# it as the map's road_class_source keeps ONE home for each number while the classification
+	# comes from the single authority (§6.1).
+	stage.ground_map.road_class_source = rn
 	add_child(rn)
 	car.roughness_field = rn
 	return rn

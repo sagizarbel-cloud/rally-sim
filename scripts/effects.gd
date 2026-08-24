@@ -30,7 +30,6 @@ var stage                            # RallyStage: grip_at() + _surface_color()
 # --- slip, shared by every layer ----------------------------------------------------------
 @export var slip_ref := 6.0          # m/s of contact-patch slip for a full-intensity effect
 @export var slip_floor := 1.2        # m/s below which the tyre is gripping and throws nothing
-@export var asphalt_grip := 1.2      # base grip above this = tarmac: smoke, no dust
 # --- SURFACE TINT: a particle keeps the colour it was BORN with ----------------------------
 # `ParticleProcessMaterial.color` is a uniform the process shader re-reads EVERY FRAME, so writing
 # it re-tints every particle already in the air. Measured, because it is not obvious: color_ramp,
@@ -622,14 +621,19 @@ func _physics_process(delta: float) -> void:
 				_slot_cur[nm][i] = -1
 			continue
 		var cp: Vector3 = w.contact_point
-		var grip: float = stage.grip_at(cp.x, cp.z)
+		# D1: which of the four effects fire is now the ground map's call, not a grip threshold.
+		# The retired `asphalt_grip = 1.2` export agreed with it on all 6608 golden-lattice points,
+		# so this is a measured no-op - but a threshold would have started lying the moment D6
+		# drags gravel onto tarmac, which is the whole reason the map exists.
+		var tarmac: bool = stage.ground_map.is_tarmac_at(cp.x, cp.z)
+		var grip: float = stage.grip_at(cp.x, cp.z)      # still the SMOKE POWER scale, not a class
 		var vs: float = slip_speed(w, v)
 		var sa: float = slip_frac(w, v, fz_ref)
 		# Sampled on BOTH branches: winding a plume down over tarmac used to pass Color.WHITE, which
 		# (being a live uniform) flashed the whole fading cloud white - the reported bug in its
 		# purest form. Dust is the colour of the ground it was lifted off, wherever that is.
 		var col := ground_color(cp.x, cp.z)
-		if grip > asphalt_grip:
+		if tarmac:
 			_emit(i, "plume", 0.0, delta, cp, kick, col, lit, 1.0, 1.0, 1.0)
 			_emit(i, "gravel", 0.0, delta, cp, kick, col.darkened(0.14), lit, gravel_d, 1.0, 1.0, release_gravel)
 			# ASPHALT SMOKE

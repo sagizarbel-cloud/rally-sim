@@ -39,6 +39,7 @@ with one of these, confirm WHICH of the four before changing anything - the fixe
 
 ## GDScript / Godot gotchas (these cause real bugs)
 - **Tabs, not spaces** for indentation — never mix.
+- **A NEW `class_name` script is not resolvable until the global class cache is rebuilt.** `Foo.new()` fails with *"Nonexistent function 'new' in base 'GDScript'"* even though the file parses, because this project never opens the editor. Fix: `"/Users/sgyzrbl/Downloads/Godot.app/Contents/MacOS/Godot" --headless --path . --import`, then re-run `./check.sh`.
 - `:=` CANNOT infer a type from a Variant (`dict[key]`, untyped `stage.*` calls, `Array` elements) → use `var x: Type = ...`.
 - Unshaded `StandardMaterial3D` ignores emission → toggle `albedo_color` instead.
 - macOS has NO `timeout` command → use Godot's `--quit-after N` (N = FRAMES).

@@ -724,7 +724,29 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
 
 ## 9. Phase status (executor updates this)
 
-- [ ] D1 — The ground map: one authority for what the ground is
+- [ ] D1 — The ground map: one authority for what the ground is — **BUILT AND PROBE-VERIFIED
+  2026-08-24, AWAITING DRIVE VERDICT** (the checkbox stays unticked: this project ticks for feel,
+  and D1's feel claim is "nothing changed", which only the user can confirm).
+  `scripts/ground_map.gd` composes GRASS/DIRT/ASPHALT/PATCH from layers resolved in priority
+  order; `stage.grip_at` / `is_tarmac_at` / `deformable_patch_factor` / `_surface_color` are
+  one-line delegations, `roughness.road_class_at` and `effects.gd`'s tarmac gate read the map.
+  **Probe 1 (golden equality) PASS: byte-identical over 6608 points, SHA-256 `80bffdd150893337…`,
+  verified as a controlled A/B against HEAD.** Probe 3 (cost): 52.8 classifier calls/tick,
+  0.153 ms/tick = 8.3% of the 1.84 ms baseline.
+  **DEVIATION from §5, made on probe 3's evidence:** §5 specifies `grip_at` as a delegation to
+  `sample().grip`; it delegates to `ground_map.grip_at()` instead, because routing the hot path
+  through the Dictionary would cost 0.487 ms/tick (26.5% of the budget) for a value the caller
+  discards. Same classifier, byte-identical output. `sample()` stays the API for multi-field reads.
+  **Probe 2 (consumer agreement) found two PRE-EXISTING bugs, both left unfixed and recorded in
+  `CHANGELOG.md` 2026-08-24** — fixing either inside a refactor would have hidden a feel change:
+  (a) `sound.gd` hears the rally loop as 40% asphalt (1504/1504 gravel points), because its
+  `(grip-1.0)/0.25` split is only exact at `dirt_grip = 1.0` and the value is now 1.1;
+  (b) the centre patch has two shapes — grip uses a euclidean radius, `deformable_patch_factor` a
+  chebyshev one — disagreeing on 392/6608 points.
+  Probe 1's script is KEPT at `scripts/probe_ground_lattice.gd` (unwired; header says how to run
+  it) because D5 reuses it verbatim.
+  **Budget note for D4:** ground map 0.153 + C1.0 centreline 1.05 = ~1.2 ms against a 1.84 ms
+  baseline. Streaming arrives with less headroom than this plan assumed.
 - [ ] D2 — Timing, notes and wear re-parameterised onto arc length
 - [ ] D3 — The stage generator: parameters + control points (short, static)
 - [ ] D4 — Chunked terrain, streaming and LOD

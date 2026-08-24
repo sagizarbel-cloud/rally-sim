@@ -77,8 +77,13 @@ var _half := 0.0
 var _strip_elev := 0.0            # drag strip is flat at the LOCAL hill height of its branch (smooth join)
 var strip_x1 := 0.0               # derived in _ready(): strip_x0 + strip_len
 var _noise := FastNoiseLite.new()
+# D1: the one authority for what the ground IS. Built here rather than wired in from world.gd
+# because _build() colours every terrain vertex through it, so it has to exist before the terrain
+# does. world.gd wires the CONSUMERS to it (effects, sound, roughness).
+var ground_map: GroundMap = null
 
 func _ready() -> void:
+	ground_map = GroundMap.new(self)         # BEFORE _build(): the mesh's vertex colours come from it
 	_cs = size / float(cells)
 	_n = cells + 1
 	_half = size * 0.5
@@ -185,48 +190,27 @@ func _on_drag_strip(x: float, z: float) -> bool:
 	return (x - strip_x1) * (x - strip_x1) + z * z < runoff_r * runoff_r   # runoff pad
 
 func _surface_color(x: float, z: float) -> Color:
-	var c := grass_color.lerp(road_color, _road_t(x, z))       # grass or dirt road
-	# The centre deformable patch is real dirt that terrain.gd draws on top of this mesh, and
-	# grip_at() has always known that. This did NOT, so anything asking what the ground looks like
-	# there (dust colour) was told "grass" across the whole skid-pad. Same query C1 uses, so the
-	# patch's extent is defined once.
-	c = c.lerp(patch_color, 1.0 - deformable_patch_factor(x, z))
-	var ad := _asphalt_dist(x, z)
-	var ta := 1.0 - smoothstep(asphalt_width * 0.5, asphalt_width * 0.5 + 1.5, ad)   # crisp asphalt edge
-	c = c.lerp(asphalt_color, ta)                              # circuit asphalt
-	if x >= strip_x0 and x <= strip_x1:                        # drag strip corridor (within terrain)
-		var ts := 1.0 - smoothstep(strip_hw, strip_hw + 3.5, absf(z))
-		c = c.lerp(asphalt_color, ts)
-	return c
+	# D1: the blend now lives in GroundMap as colour_at(), so "what does the ground look like here"
+	# has the same single authority as "what is it". effects.gd calls this to tint dust.
+	return ground_map.colour_at(x, z)
 
 func grip_at(x: float, z: float) -> float:
-	# traction by surface at a world position (queried per wheel by the vehicle)
-	if _asphalt_dist(x, z) < asphalt_width * 0.5 + 1.0:
-		return asphalt_grip                                   # circuit
-	if _on_drag_strip(x, z):
-		return asphalt_grip                                   # drag strip / runoff
-	var dx := x - road_center.x
-	var dz := z - road_center.z
-	if sqrt(dx * dx + dz * dz) < patch_radius:
-		return dirt_grip                                      # centre reactive patch
-	if _road_t(x, z) > 0.4:
-		return dirt_grip                                      # rally loop
-	return grass_grip
+	# traction by surface at a world position (queried per wheel by the vehicle). D1: the surface
+	# tests moved into GroundMap so this is no longer one of four places that decide what the
+	# ground is. SIGNATURE IS LOAD-BEARING - wear.gd wraps this as the car's surface_source and
+	# that wrapper is what M6's wear line adds grip through, so every grip query in the project
+	# must keep flowing through surface_source, never through here directly.
+	return ground_map.grip_at(x, z)
 
 func is_tarmac_at(x: float, z: float) -> bool:
-	# C1: the simple surface test road_class_at() amendment §6.1 asks for - one call site so
-	# Arc D's D1 can later replace the body with a per-position ground-map lookup and nothing
-	# downstream (roughness.gd) has to change.
-	return _asphalt_dist(x, z) < asphalt_width * 0.5 + 1.0 or _on_drag_strip(x, z)
+	# C1 wrote this as "a simple surface test" precisely so D1 could replace the BODY with a
+	# ground-map lookup and leave every call site alone (§6.1). That is what happened here.
+	return ground_map.is_tarmac_at(x, z)
 
 func deformable_patch_factor(x: float, z: float) -> float:
-	# 0 inside the centre reactive-dirt patch (terrain.gd owns real geometry there - a procedural
-	# roughness field would double-count it), ramping to 1 over the same grass blend the patch
-	# already uses. A query, not a hardcoded radius test at each call site, per §6.3.
-	var dx := x - road_center.x
-	var dz := z - road_center.z
-	var cheb := maxf(absf(dx), absf(dz))
-	return smoothstep(patch_radius, patch_radius + center_blend, cheb)
+	# C1 wrote this as a query rather than a radius test at each call site, so that D1 could turn
+	# it into the ground map's deformable flag without touching roughness.gd (§6.3). Body replaced.
+	return ground_map.patch_factor(x, z)
 
 func _build() -> void:
 	var verts := PackedVector3Array(); verts.resize(_n * _n)

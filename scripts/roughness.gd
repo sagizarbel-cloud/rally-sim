@@ -106,9 +106,11 @@ func _broadband(x: float, z: float, gd_n0_1e6: float) -> float:
 # ---------------------------------------------------------------- road class + per-surface detail
 
 func road_class_at(x: float, z: float) -> float:
-	# C1: "a simple surface test" per docs/PLAN-stages-ground-map.md §6.1 - Arc D's D1 replaces
-	# this body with a per-position ground-map lookup and no call site changes.
-	return road_class_tarmac if stage.is_tarmac_at(x, z) else road_class_gravel
+	# D1: body replaced with the ground-map lookup C1 left this seam for (§6.1) - no call site
+	# changed. The two coefficients above are still OURS: the map classifies the position and reads
+	# them back off this node (world.gd wires it as road_class_source), so the Tab sliders stay live
+	# and there is still exactly one place each number lives.
+	return stage.ground_map.road_class_at(x, z)
 
 func _washboard(x: float, z: float) -> float:
 	if centreline_gravel == null or wear == null or not wear.is_tracked(x, z):

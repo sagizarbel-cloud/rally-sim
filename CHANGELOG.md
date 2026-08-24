@@ -20,6 +20,68 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-24 (D1 — one authority for what the ground is; two surface bugs surfaced, neither fixed)
+
+Arc D opens. `scripts/ground_map.gd` is now the single answer to "what is the ground at (x, z)?" —
+`sample()` returns surface / road_class / deformable / grip / colour / audio, composed of **layers
+resolved in priority order**, each a pure function of position. `stage.grip_at`, `is_tarmac_at`,
+`deformable_patch_factor` and `_surface_color` are now one-line delegations; `roughness.gd`'s
+`road_class_at` and `effects.gd`'s tarmac gate read the map. **Nothing about the car changed, and
+that was the hard part** — the phase's success condition is that nothing moves.
+
+**Probe 1, golden equality — THE phase.** 6608 lattice points spanning all four surfaces, both
+circuit shoulders (radial sweeps at 1 m steps across each edge), the drag strip to its far end and
+the centre patch past its blend. Captured from the unmodified build first, then re-run on the
+shipped build: **byte-identical, SHA-256 `80bffdd150893337…`**, across grip, tarmac classification,
+patch factor AND vertex colour. Surface census: 4182 grass / 1504 dirt / 922 asphalt.
+The probe is kept at `scripts/probe_ground_lattice.gd` (not wired; wiring instructions in its
+header) because **D5 reuses it verbatim** to prove the calibration bed rebuilds bit-identically
+after an area transition.
+
+**Probe 2, consumer agreement — two pre-existing bugs found. NEITHER IS FIXED**, because a feel
+change hidden inside a refactor is exactly what this phase must not do. Both are recorded here so
+the next session finds them by symptom:
+
+1. **"The rally loop plays a tarmac squeal when you slide, and the gravel rumble is too quiet."**
+   `sound.gd`'s tyre-audio split is `asph = (grip - 1.0) / 0.25`, which reads **0.400 on every
+   gravel point — 1504 of 1504 dirt samples**, i.e. the audio hears the rally loop as 40% asphalt.
+   That drives two things: the asphalt squeal layer plays at 40% strength while sliding on gravel
+   (`squeal_level = tv * asph`), and the gravel rumble is cut 28% (`* (1.0 - 0.7 * asph)`).
+   **Cause is drift, not the formula:** the `/0.25` divisor is exact when `dirt_grip = 1.0`, which
+   is what `docs/ROADMAP.md` still documents — but `dirt_grip` is **1.1** in code. The moment that
+   value moved, the split stopped landing on zero. Fixing it is a real audio change and wants a
+   drive test, so it is left alone and `sound.gd` carries a comment saying why.
+2. **The centre patch has two different shapes.** `grip_at` decides PATCH with a **euclidean**
+   radius test (`r < 75`); `deformable_patch_factor` — which C1 uses to suppress the roughness
+   field — uses a **chebyshev** one (square, blended 75→93). They disagree on **392 of 6608
+   points**, e.g. `(-84, -84)`: grip says grass, the patch factor says 0.5 (half-suppressed
+   roughness). So there is a ring of ground in the square's corners where the roughness field is
+   damped for no reason the grip model knows about. Both shapes preserved exactly.
+
+`effects.gd`'s gate was the third suspect and it is **clean**: its retired `asphalt_grip = 1.2`
+threshold agreed with the surface test on **0 disagreements / 6608 points**, so switching it to the
+map was a measured no-op. The export is gone; the gate is now a class, not a number.
+
+**Probe 3, cost — and it changed a decision.** Measured 52.8 classifier calls per physics tick
+(min 1, max 74) with the car settled and effects running. Per call: `ground_map.grip_at` **2.90 µs**,
+`stage.grip_at` (through the delegation) **3.81 µs**, `sample()` **9.22 µs**. So the shipped scalar
+path costs **0.153 ms/tick = 8.3% of the 1.84 ms baseline**, of which the refactor's own share is
+only the extra call hop (~0.9 µs × 52.8 ≈ **0.048 ms/tick, ~2.6%**) — the trig was always there.
+**§5 specifies `grip_at` as a delegation to `sample().grip`; it is a delegation to
+`ground_map.grip_at()` instead**, because `sample()` builds a Dictionary the caller throws away and
+routing everything through it would cost **0.487 ms/tick — 26.5% of the whole physics budget**.
+Same classifier, same values (byte-identical), one third the cost. `sample()` remains the API for
+consumers that genuinely want several fields.
+**Budget note for D4:** C1.0's centreline already costs 1.05 ms/tick. Ground map + centreline is
+now ~1.2 ms against a 1.84 ms baseline, so streaming arrives with less headroom than Arc D assumed.
+
+**Godot gotcha that cost a build:** a NEW `class_name` script is not resolvable until the global
+class cache is rebuilt — `GroundMap.new()` failed with *"Nonexistent function 'new' in base
+'GDScript'"* even though the file parsed. This project never opens the editor, so the cache only
+refreshes on `godot --headless --path . --import`. Added to `CLAUDE.md`.
+
+---
+
 ## 2026-08-24 (fixed: the engine dies and NOTHING starts it again - no ignition, no bump start)
 
 Drive report: *"when having manual clutch off, sometimes the car still stalls - even with anti stall
@@ -153,6 +215,31 @@ the bug.
 
 **NOT verified: how it looks while driving.** Tunables are `tint_bin` (0.10 - the RGB distance at
 which a colour earns its own emitter) and `tint_hold` (1.6 s).
+
+## 2026-08-19 (C1 revision: washboard enveloping back to the contact patch — "still can't feel it above 20 km/h"; C1 ACCEPTED)
+
+Recorded late — this shipped as `d43713b` and was never written up.
+
+**Symptom:** after the 2026-08-15 revision below, washboard *still* could not be seen or felt above
+~20 km/h on the rally loop. **Cause: the swept-footprint filter from that revision was the wrong
+call.** Physical tyre enveloping depends on the CONTACT PATCH and is speed-independent — a real
+tyre on a 0.6 m ripple follows it at any speed, because 0.6 m is three times its contact length.
+Folding the per-tick swept distance into the footprint low-passed the road *by speed* and cost
+**74% of the ridge amplitude at 100 km/h** (transmission 82/66/49/26/9% at 0/30/60/100/150 km/h):
+a numerical anti-aliasing fix applied as though it were physics, which deleted the feature exactly
+where it matters most.
+
+Sampling once per tick is a real limit, but **only past Nyquist**. One wavelength needs two
+samples, so filtering now begins only when a tick travels more than half a wavelength — about
+**130 km/h at 120 Hz on 0.6 m corrugation**, well above rally-loop corner speeds, where a 0.6 m
+ripple still gets **4.3 samples per wavelength at 60 km/h**. Below that threshold the profile is
+untouched: **transmission at 60 km/h goes 49% → 83%.**
+
+**USER DRIVE VERDICT 2026-08-24: C1 ACCEPTED.** Arc C's roughness work is drive-verified and Arc D
+is unblocked. Note for anyone re-opening this: the accepted build is the contact-patch footprint
+plus `damper_reads_road`, not the swept-strip version described in the 2026-08-15 entry below.
+
+---
 
 ## 2026-08-19 (fixed: whole dirt tiles go DARK BROWN when they load — a backwards mesh winding)
 

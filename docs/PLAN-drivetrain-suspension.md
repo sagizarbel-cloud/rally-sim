@@ -1303,9 +1303,13 @@ User drive-through, all in one session, keyboard:
   remain. Panel audit: 83 rows, 83 HELP entries, no gaps and no orphans. The two M1-only rows are
   kept deliberately (the panel skips rows the loaded car lacks). ROADMAP updated with M15 done and
   a "do not resurrect `_t_drive`" warning on the superseded Tier-3 entry.
-- [x] C1 — Surface roughness — implemented 2026-08-15 (`./check.sh` clean; all six headless
-  probes PASS, then removed). **AWAITING USER DRIVE VERDICT — checkbox ticked for "built and
-  probe-verified", not for feel; see the driving checklist below §9.**
+- [x] C1 — Surface roughness — **DONE 2026-08-24, DRIVE-VERIFIED: user accepted C1.** The
+  accepted build is the CONTACT-PATCH enveloping footprint (`d43713b`, 2026-08-19) plus
+  `damper_reads_road` — NOT the swept-strip footprint described in the 2026-08-15 revision note
+  below, which was reverted for low-passing the road by speed and deleting the feature exactly
+  where it mattered (transmission at 60 km/h 49% -> 83% after the revert). See `CHANGELOG.md`
+  2026-08-19. This unblocked Arc D, whose D1 phase began the same day.
+  Implemented 2026-08-15 (`./check.sh` clean; all six headless probes PASS, then removed).
   **C1.0 centreline** (`scripts/centreline.gd`, new): arc-length table + binary-search inversion
   + a spatial grid for `nearest_point`, exposing `point_at(s)` / `nearest_point(x,z)` / `length()`
   / `is_loop()`. Built from `_road(th)`/`_asphalt_r(th)` exactly as `wear.gd`/`pace_notes.gd`
