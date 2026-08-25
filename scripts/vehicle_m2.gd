@@ -390,6 +390,10 @@ const DIFF_LOCKED_CAP := 10000.0 # N*m: "infinite" preload that implements LOCKE
 # A5: how far past the friction ellipse a tyre must be before its force direction is fully handed
 # over to the slip velocity (blend width in units of ellipse utilisation, not a feel tunable).
 const SLIDE_BAND := 0.5
+const VM_BAND := 0.4           # m/s: the gross-sliding direction blend fades out over this width as
+                                # the tyre's contact-patch slip speed nears zero, rather than the old
+                                # hard cut at 0.2 that produced a force/torque snap right at the
+                                # terminal instant of a slide (see the gross-sliding block below)
 # A4 launch-assist numerics: the rpm the assist holds is COMPUTED (see _launch_setup); this is
 # only the proportional band its throttle controller closes over, as a fraction of that rpm.
 const LAUNCH_RPM_BAND := 0.08
@@ -1743,7 +1747,10 @@ func _physics_process(delta: float) -> void:
 				var vsx := w.omega * wheel_radius - v_long     # contact-patch slip velocity,
 				var vsy := -v_lat                              # signed like Fx / Fy above
 				var vm := sqrt(vsx * vsx + vsy * vsy)
-				if vm > 0.2:                                   # below this it is not sliding, it is parked
+				# vm > 0 always in principle, but AT exactly zero the direction is undefined - guard the
+				# division, not the blend. The blend weight below is what actually fades this term
+				# out, smoothly, well before vm gets that small.
+				if vm > 0.001:
 					var dx := vsx / vm
 					var dy := vsy / vm
 					# the ellipse's own radius along that direction, so the tyre stays anisotropic
@@ -1751,8 +1758,17 @@ func _physics_process(delta: float) -> void:
 					var ey := dy / maxf(muy, 0.01)
 					var cap := Fz / maxf(sqrt(ex * ex + ey * ey), 0.001)
 					var slide := clampf((e - 1.0) / SLIDE_BAND, 0.0, 1.0)
-					Fx = lerpf(Fx, cap * dx, slide)
-					Fy = lerpf(Fy, cap * dy, slide)
+					# was `if vm > 0.2:` - a binary switch between this physical-direction force and
+					# the raw ellipse-scaled one below. Measured jump AT that line, one physics tick
+					# apart, on a braking slide: front-R went from (-2434, 1554) N to (-2043, 1971) N -
+					# an 11 degree, ~400 N snap in the force actually applied to the chassis, and every
+					# wheel takes its own such snap at its own moment as the slide runs out, so the car
+					# gets several of these in quick succession right at the end. `vm_gate` fades the
+					# SAME blend continuously to 0 as the patch stops sliding, instead of cutting it.
+					var vm_gate := clampf(vm / VM_BAND, 0.0, 1.0)
+					var blend := slide * vm_gate
+					Fx = lerpf(Fx, cap * dx, blend)
+					Fy = lerpf(Fy, cap * dy, blend)
 		w.util = minf(e, 1.0)
 		w.slip = clampf(absf((w.omega * wheel_radius - v_long) / maxf(absf(v_long), slip_ref_speed)), 0.0, 3.0)
 		# C2: self-aligning torque, taken from the FINAL Fy - after the friction ellipse and after

@@ -20,6 +20,46 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-25 (fixed: hard jerk coming to a stop during a slide — a binary force switch, not a snap in the model)
+
+Drive report: *"the car jerks really hard when coming to a stop during a slide."* Real bug, in the
+gross-sliding block of the friction ellipse (A5): once a tyre is saturated past the ellipse
+(`e > 1`), its force is blended away from the raw two-curve Magic Formula result and toward a force
+that opposes the contact patch's actual slip VELOCITY - physically correct, and it is what makes a
+locked rear axle let go on its own. That blend was gated by `if vm > 0.2:` where `vm` is the slip
+speed magnitude: above 0.2 m/s, full physical-direction force; at or below, an instant, complete
+switch back to the raw ellipse-scaled force. **A slide ending is exactly a wheel's `vm` decaying
+toward zero**, so every wheel crossed this line once, right as the car settled - the symptom's own
+words, "coming to a stop during a slide," describe the crossing exactly.
+
+Measured the size of the switch directly, headless (a standalone car over a flat floor, braked
+hard through a 13 m/s mostly-sideways slide, same seed before and after): at the instant `vm`
+ticked below 0.2, front-R went from **(-2432, 1557) N to (-2041, 1973) N in one 120 Hz physics
+tick** - an 11 degree, ~570 N snap in the force actually applied to the chassis, and all four
+wheels take their own such snap at their own moment as the slide runs out (front-L 249 N, rear-R
+207 N, rear-L 16 N in this run), so the car takes several of these in quick succession right at the
+end - which is what a slide-to-stop looks like from the driver's seat as one hard jerk, not four.
+
+Fix: the binary gate is gone. `vm_gate := clampf(vm / VM_BAND, 0.0, 1.0)` (new `VM_BAND = 0.4`)
+fades the SAME blend continuously to zero as the patch actually stops sliding, instead of cutting
+it. Re-measured on the identical scenario: the same four crossings now move the applied force by
+**9 N, 37 N, 25 N and 80 N** - a 6-26x reduction, and nothing changes for a wheel that is still
+genuinely sliding (`vm` well above `VM_BAND`), where `vm_gate` is already 1 and the blend behaves
+exactly as before. The division `vsx/vm, vsy/vm` that gives the slip direction still guards against
+literal `vm == 0` (`if vm > 0.001`), but its result is now weighted toward zero by `vm_gate` well
+before it gets there, so the guard threshold itself is no longer where the car feels anything.
+
+Reproduced and verified with a temporary standalone probe (car + flat floor, no World/stage needed)
+that read `_brake_pedal`/`Input.action_press("brake")` directly and logged Fx/Fy at the exact
+before/after tick of each wheel's crossing; removed once the fix was confirmed. `stability_assist`
+(default OFF) was ruled out as a contributor - it is gated on speed above `slip_ref_speed` (2 m/s)
+and never touched in this scenario.
+
+**Housekeeping, not a fix:** while diagnosing this, also read the earlier stall/restart entry -
+`a7d849f`, *"A stalled engine can be restarted again, and stalls far less often"* - which had
+already landed (and the user separately confirmed: *"good the change works"*) for the anti-stall/
+ignition/bump-start bug reported alongside this one. Nothing further was needed there.
+
 ## 2026-08-24 (D1 — one authority for what the ground is; two surface bugs surfaced, neither fixed)
 
 Arc D opens. `scripts/ground_map.gd` is now the single answer to "what is the ground at (x, z)?" —
