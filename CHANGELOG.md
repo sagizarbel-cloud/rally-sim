@@ -20,6 +20,52 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-25 (SECOND attempt at the slide-stop jerk - the first fix was real but not it; found a stale relaxed slip angle)
+
+The binary-force-switch fix below did NOT resolve the report - user confirmed *"the jerking bug is
+not fixed as of now."* Went back with the user for a better description: happens on **both** the
+dirt circle and the rally loop/asphalt (rules out anything terrain-specific - kerbs, camber,
+washboard), and feels like *"a force pushes the car in the opposite direction of the slide, like a
+spring."* Default car (auto clutch, AWD).
+
+**Found a second, real mechanism, and it matches "like a spring" almost exactly.** B4's relaxation
+length (`alpha_rel`, `sigma_lat`) is deliberately RATE-limited **per distance rolled**, not per
+time - documented and correct for how a real tyre carcass twists in. But at the tail of a slide the
+car's speed collapses toward zero while it is *still rotating fast*, so distance-rolled nearly
+stops even though the true slip angle is changing quickly - `alpha_rel` gets stuck.
+
+Measured with a scripted slide-then-countersteer on FLAT ground (dirt circle, no terrain
+involved): at the moment the car is essentially stopped (v = 0.2 m/s), the TRUE front-wheel slip
+angle had already unwound to **6 deg**, but the RELAXED angle the tyre force actually uses was
+still sitting at **45 deg** - a stale value from ~1.5 s earlier, well past the tyre's peak grip
+angle. Because Magic Formula force depends only on angle, not on how fast the tyre is actually
+moving, that stale 45 deg commanded close to full lateral grip (`util` pinned at 1.00) on a wheel
+carrying almost no speed to justify it - a real spring-back force, aimed opposite the slide (that
+is the geometric meaning of "relaxing" back toward zero), applied at a moment the driver already
+felt the car had stopped sliding.
+
+**Fix:** lateral (slip-angle) force now fades to zero as the wheel's own ground speed drops below
+`LOW_SPEED_LAT_FLOOR` (1.2 m/s) - a physical floor, not a hack: slip angle is fundamentally a rate
+quantity, and a tyre that is not rolling has no rate left to generate a cornering force from,
+however stale or fresh the number sitting in `alpha_rel` is. Verified on the same scripted repro:
+utilisation at the near-stop moment drops from **1.00 to 0.21** - the phantom force is mostly gone
+exactly where it was diagnosed. The gate only engages in the last ~1 m/s before a stop, so it
+changes nothing about how a slide FEELS while it is still happening - B4's relaxation lag during an
+active slide is untouched.
+
+**Honesty about verification, per the project's own rule (`CLAUDE.md`): this is NOT confirmed to
+fix the reported feel.** The countersteer repro shows the mechanism and its mitigation cleanly, but
+(unlike the VM_BAND fix below, which had a crisp single-tick before/after on the exact same
+scenario) it did not produce an equally clean before/after on the whole-car velocity trace - the
+scripted repro may not be hitting the same conditions as an actual drive. **Please test again and
+say whether this one lands.** If it does not, the next lead worth chasing (found but NOT pursued
+this session, to avoid guessing a third time without evidence): `_apply_arb()` skips load transfer
+entirely the instant either wheel of a pair loses contact (`if not (a.contact and b.contact):
+return`), which snaps that axle's Fz split back to the un-transferred value in one tick when a
+wheel goes briefly airborne under hard weight transfer - plausible on any surface, not reproduced
+cleanly here because the synthetic test that found airborne wheels also had bad spawn-orientation
+artifacts on sloped terrain that make its numbers untrustworthy.
+
 ## 2026-08-25 (fixed: hard jerk coming to a stop during a slide — a binary force switch, not a snap in the model)
 
 Drive report: *"the car jerks really hard when coming to a stop during a slide."* Real bug, in the

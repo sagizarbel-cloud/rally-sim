@@ -390,6 +390,14 @@ const DIFF_LOCKED_CAP := 10000.0 # N*m: "infinite" preload that implements LOCKE
 # A5: how far past the friction ellipse a tyre must be before its force direction is fully handed
 # over to the slip velocity (blend width in units of ellipse utilisation, not a feel tunable).
 const SLIDE_BAND := 0.5
+# B4's relaxation is deliberately per-DISTANCE (see below), which means it can barely move while
+# the car is nearly stopped - so a slip angle built up during a slide (which can sit past the
+# tyre's peak, 60-85 deg is common at gross slide) is still whatever it was tens of frames ago,
+# even once the car's true geometry has gone back to nearly straight. The relaxed force is real
+# physics while the tyre is actually rolling; it stops meaning anything once the tyre barely is.
+const LOW_SPEED_LAT_FLOOR := 1.2   # m/s: wheel ground speed below which lateral (slip-angle) force
+                                    # fades to zero, so a stale relaxed angle cannot keep shoving the
+                                    # car sideways after it has essentially stopped
 const VM_BAND := 0.4           # m/s: the gross-sliding direction blend fades out over this width as
                                 # the tyre's contact-patch slip speed nears zero, rather than the old
                                 # hard cut at 0.2 that produced a force/torque snap right at the
@@ -1724,7 +1732,12 @@ func _physics_process(delta: float) -> void:
 		var v_roll := maxf(absf(v_long), slip_ref_speed)
 		w.alpha_rel += (w.slip_angle - w.alpha_rel) * clampf(v_roll / maxf(sigma_lat, 0.01) * delta, 0.0, 1.0)
 		var lat: Vector2 = _lat_shape(w)
-		var Fy := -_mf(w.alpha_rel, lat.x, lat.y, Ey, muy * Fz)
+		# a tyre nearly at rest cannot sustain a slip-angle force regardless of what alpha_rel says -
+		# it is a RATE quantity, and there is no rate left to give it meaning. Fades in over
+		# LOW_SPEED_LAT_FLOOR so it only ever bites right at the end of a stop, never during a slide.
+		var wheel_speed := sqrt(v_long * v_long + v_lat * v_lat)
+		var lat_speed_gate := clampf(wheel_speed / LOW_SPEED_LAT_FLOOR, 0.0, 1.0)
+		var Fy := -_mf(w.alpha_rel, lat.x, lat.y, Ey, muy * Fz) * lat_speed_gate
 		# elliptical combined-slip limit
 		var nx := Fx / (mux * Fz + 0.001)
 		var ny := Fy / (muy * Fz + 0.001)
