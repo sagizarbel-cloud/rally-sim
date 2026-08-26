@@ -1293,7 +1293,14 @@ User drive-through, all in one session, keyboard:
   peak curve shape per surface, default = `Cy` = no change) and a latent `_mf_peak_u` bracket bug
   fixed. Re-drive verdict: **"feels good"** on the shipped defaults, with the user noting they may
   tune again later — `peak_alpha_gravel` first, then `cy_gravel`.
-- [ ] B5 — Bake, prune, end-to-end — prune + audit DONE 2026-08-13, and **the bake is now settled
+- [x] B5 — Bake, prune, end-to-end — **DONE 2026-08-27: §8 driven end-to-end, ARC B CLOSES.**
+  Items 1/2/5/6/7 pass outright, 3 passes with notes, **4 FAILS** (diff presets no longer tellable
+  apart — a regression against A3's own drive verdict). Also surfaced: **top speed 236 km/h vs the
+  259 baseline**, unattributed (roughness recalibration / C1 Fz rectification / D1 classification
+  are the three suspects, separable with a `roughness_gain` 0-vs-1 run); AWD "too slippery both
+  ways" and RWD "constantly oversteers", **deferred by the user to a future tuning session**; and a
+  stage request for a wider full-traction band beyond the track edge. Full detail in `CHANGELOG.md`
+  2026-08-27. Prune + audit were DONE 2026-08-13, and **the bake is now settled**
   too**: every phase's defaults are the drive-verified values (B1 1.4/1.6 Hz + zeta split, B2
   0.55/0.85 with knee 0.08 and `hs_blowoff` 0.45, B3 320 mm travel + 3 g stop, B4 9/14 deg peaks,
   `sigma_lat` 0.55, `Cy` = `cy_gravel` = 1.4, `com_height` -0.45). **Only the §8 end-to-end
@@ -1409,8 +1416,17 @@ User drive-through, all in one session, keyboard:
   road velocity at standstill by construction. New Tab toggle `damper_reads_road` (ON) isolates it.
   Full table in `CHANGELOG.md`. Finding (2) stands unfixed by design: the body still should not
   heave at 46 Hz, and C2's steering signal is the channel that carries this to the driver.
-- [x] C2 — Self-aligning torque — implemented 2026-08-15 (`./check.sh` clean; headless probe PASS
-  on every item, then removed). **AWAITING USER DRIVE VERDICT.**
+- [ ] C2 — Self-aligning torque — implemented 2026-08-15, **DRIVEN 2026-08-27 and NOT yet done.**
+  Drive verdict: gravel vs tarmac clearly differ (PASS), but **the wash-out cue is UNCONFIRMED** —
+  the user could not identify the trail collapse arriving before the front pushes wide, and that is
+  the entire point of the phase, so C2 stays open. A reported spike ("jumps to ~15 then corrects to
+  an opposite lower value") was diagnosed and fixed: it was NOT a slip transient and NOT the
+  `_apply_arb` contact bail (both theories measured dead at 0.2% coincidence) but **kN-scale
+  one-tick Fz steps while the tyre stays grounded**, off the `max(spring + damper, 0)` floor. The
+  reported signal now passes through `steer_filter_tau` (0.04 s), the steering system's own
+  inertia — sign reversals 21.8% -> **0.0%**, jumps >3 N·m 22.9% -> 4.2% of ticks. Also still open:
+  "very hard to get out of an oversteer when the wheels are hot". Detail in `CHANGELOG.md`
+  2026-08-27. (Original implementation notes follow.)
   `Mz = Fy * (t_pneumatic + t_mechanical)` per front wheel, summed and divided by `steer_ratio`,
   exposed as `get_steer_torque()` (N·m at the rack) and shown on the HUD as `steer Nm`. Taken from
   the FINAL `Fy` — after the friction ellipse and after A5's gross-sliding correction — so a tyre

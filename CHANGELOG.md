@@ -20,6 +20,87 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-27 (B5 §8 driven — Arc B CLOSES; and the C2 steering spike diagnosed, fixed, and two theories killed)
+
+### B5 §8 end-to-end drive-through — Arc B is done
+
+User drove the whole checklist. **Items 1, 2, 5, 6, 7 pass outright** (cold-start ritual and
+restart, launch assist, money-shift guard, asphalt ring, `[P]` puncture, damage, ghost, sector
+splits, pace notes, wear line, every toggle). **Item 3 passes with notes; item 4 FAILS.** Arc B
+closes on that, but the drive-through earned its keep — it turned up four separate things:
+
+- **REGRESSION, unattributed: top speed 236 km/h in 6th against the recorded 259 km/h baseline**
+  (−9%). Suspects, in order: broadband roughness was recalibrated **4.5x louder** (`9073979`);
+  C1's road-aware damper measurably raises MEAN Fz ~10% over texture via the `max(...,0)`
+  rectifier, which raises rolling resistance; and D1 (`cc7b90d`) moved surface classification
+  behind `GroundMap`, so a mis-classified drag strip would cost grip in 6th. **A
+  `roughness_gain` 0-vs-1 top-speed run separates the first two in one probe** — not yet done.
+- **FAIL, item 4 — "i dont think it changed, hard to tell" on the diff presets.** This is a
+  REGRESSION: A3 was drive-verified on this exact test (2026-08-05, "feels good") and the presets
+  were kept deliberately as a permanent A/B tool. Something since then masks axle-locking
+  character. Grep `[1]/[2]/[3]` and `apply_diff_preset` when picking this up.
+- **Handling notes, explicitly DEFERRED by the user to a future session — a note, not a bug
+  report:** AWD **"seems too slippery - too easy to get into oversteer AND understeer"**; RWD
+  **"constantly oversteers"**; the car **"feels too light, too easy to lose control for a 4wd"**.
+  Lap times are close to the pre-plan ghost, so pace is intact — this is controllability, not speed.
+  Worth checking against the 1 kN-scale one-tick Fz steps documented below, which would make grip
+  genuinely unpredictable.
+- **Stage request (M6 / Arc D):** widen the band of full-traction surface beyond the track edge so
+  running a little wide does not instantly throw the car off; would also help the tight hairpins.
+
+### C2 — the steering spike was NOT what either theory said
+
+**Drive verdict: gravel vs tarmac clearly differ (PASS)** — the 16 deg / 9 deg peak slip angles
+read as intended. **The wash-out cue is UNCONFIRMED**, which is the phase's whole point, so **C2 is
+not done.** And a real artefact: *"steering jumps to ~15 in each direction for a split second when
+turning, or when going straight into a turn doing nothing, before correcting to an opposite lower
+value, 3-10 usually."*
+
+**Two plausible theories were both WRONG, and a probe killed them — do not re-chase these:**
+1. *"`_apply_arb()` bails when either wheel of a pair lifts, snapping the Fz split"* (the lead
+   recorded but not pursued in the 2026-08-25 entry below). Measured: **contact gain/loss coincides
+   with only 0.2% of large jumps.** Also note `_apply_arb`'s existing `clampf(t, -a.Fz, b.Fz)`
+   already drives the transfer smoothly to zero as a wheel unloads, so the early return is
+   redundant rather than harmful.
+2. *"an airborne front wheel silently drops out of the `_sat_moment` sum"* — same 0.2%, same
+   verdict.
+
+**What it actually is: vertical load stepping by kN in a single tick while the tyre never leaves
+the ground.** Measured over 4802 ticks of the rally loop: the raw rack torque jumps >3 N.m on
+**22.9% of ticks**, and **99.9% of those coincide with an Fz step over 1 kN**. The worst single
+event, with both front wheels marked `GND` throughout:
+
+```
+torque +0.00 -> -29.70 N.m in one tick
+w0 GND Fz 6991 (d +6991)  util 0.94  aRel +1.78 deg  slip +2.30 deg
+w1 GND Fz 7441 (d +7441)  util 0.95  aRel +1.69 deg  slip +2.23 deg
+```
+
+Slip angles are small and steady, so this is **not** a slip-angle or relaxation transient — it is
+purely `Fz = max(spring + damper, 0)` riding its zero floor and slamming off it, driven by C1's
+road-aware damper term.
+
+**Fix: the reported signal now goes through the steering system's own inertia.** A column, rack and
+pair of arms cannot follow an 8 ms load spike — that is a tiny angular impulse, not a jolt — and we
+were reporting the raw per-tick tyre moment with no filtering whatsoever. `steer_filter_tau`
+(0.04 s, Tab row "Steer response", 0 = RAW for A/B) is a first-order lag, so **steady cornering
+torque passes through untouched while impulses are killed**. Same probe after:
+
+| | jumps >3 N.m | sign FLIPPED | worst jump |
+|---|---|---|---|
+| raw | 22.9% of ticks | 21.8% | 29.70 N.m |
+| filtered | **4.2%** | **0.0%** | **11.02 N.m** |
+
+**The sign reversal — the exact thing the user described — goes to zero.** The survivors still
+correlate 100% with real Fz steps, which is correct: a genuinely large load change SHOULD reach
+your hands. **The load steps themselves are deliberately NOT suppressed** — they are real, they are
+shared with the "body jumps at max slider settings" report, and they are a candidate for the AWD
+controllability note above. Panel: 97 rows, 97 HELP.
+
+- **Still open on C2:** the wash-out cue, and *"very hard to get out of an oversteer when the
+  wheels are hot"* — start at M7's `overheat_grip` (0.85) compounding with B4's post-peak lateral
+  shape (`cy_gravel`).
+
 ## 2026-08-25 (SECOND attempt at the slide-stop jerk - the first fix was real but not it; found a stale relaxed slip angle)
 
 The binary-force-switch fix below did NOT resolve the report - user confirmed *"the jerking bug is

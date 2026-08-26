@@ -191,6 +191,15 @@ class_name VehicleM2
 @export var trail_mechanical := 0.02        # m, fixed trail from caster geometry
 @export var steer_ratio := 15.0             # steering ratio (wheel:road-wheel), divides wheel torque into rack torque
 @export var sat_gain := 1.0                 # output scaling for the reported signal (0 = off)
+# C2 REVISION: a steering system cannot transmit a one-tick impulse to the driver's hands. The
+# column, rack and the driver's arms all have rotational inertia, so an 8 ms load spike is a tiny
+# ANGULAR IMPULSE, not a jolt - measured 2026-08-27, the raw per-tick moment jumps >3 N.m on 23% of
+# ticks on the rally loop, and 99.9% of those coincide with an Fz step over 1 kN as the tyre rides
+# C2's zero-load floor and slams off it (never leaving the ground: contact loss explains only 0.2%).
+# The load steps themselves are real and are NOT suppressed here - only the reported signal is
+# filtered, by the mechanical low-pass a real steering system already is. A first-order lag passes
+# steady cornering torque untouched and kills impulses, which is exactly the wanted behaviour.
+@export var steer_filter_tau := 0.04        # s, steering-system response time (0 = raw, unfiltered)
 # The Pacejka SHAPE factor: how sharply the lateral curve falls AFTER its peak. The curve settles
 # at sin(C*pi/2) of peak at large slip - C 1.40 -> 0.81, C 1.20 -> 0.95 - so a lower C is a flatter,
 # more forgiving tyre that keeps working when you overshoot the peak. Loose surfaces behave that
@@ -372,6 +381,7 @@ var _flare_mat: StandardMaterial3D
 var surface_source               # set by world.gd; supplies grip_at(x,z) so asphalt grips > dirt > grass
 var roughness_field               # set by world.gd; supplies sample_enveloped(x,z,heading) (C1)
 var _sat_moment := 0.0            # C2: summed front-wheel Mz about the steering axis (N*m at the wheels)
+var _sat_filt := 0.0              # C2: _sat_moment through the steering system's own inertia lag
 const MODE_NAMES := ["AWD", "RWD", "FWD"]
 const MODE_COLORS := [Color(0.16, 0.36, 0.82), Color(0.78, 0.13, 0.12), Color(0.16, 0.55, 0.26)]
 # A1 clutch numerics (smoothing/actuation widths, not feel tunables - feel lives in the exports)
@@ -396,12 +406,12 @@ const SLIDE_BAND := 0.5
 # even once the car's true geometry has gone back to nearly straight. The relaxed force is real
 # physics while the tyre is actually rolling; it stops meaning anything once the tyre barely is.
 const LOW_SPEED_LAT_FLOOR := 1.2   # m/s: wheel ground speed below which lateral (slip-angle) force
-                                    # fades to zero, so a stale relaxed angle cannot keep shoving the
-                                    # car sideways after it has essentially stopped
+									# fades to zero, so a stale relaxed angle cannot keep shoving the
+									# car sideways after it has essentially stopped
 const VM_BAND := 0.4           # m/s: the gross-sliding direction blend fades out over this width as
-                                # the tyre's contact-patch slip speed nears zero, rather than the old
-                                # hard cut at 0.2 that produced a force/torque snap right at the
-                                # terminal instant of a slide (see the gross-sliding block below)
+								# the tyre's contact-patch slip speed nears zero, rather than the old
+								# hard cut at 0.2 that produced a force/torque snap right at the
+								# terminal instant of a slide (see the gross-sliding block below)
 # A4 launch-assist numerics: the rpm the assist holds is COMPUTED (see _launch_setup); this is
 # only the proportional band its throttle controller closes over, as a fraction of that rpm.
 const LAUNCH_RPM_BAND := 0.08
@@ -1346,7 +1356,7 @@ func _physics_process(delta: float) -> void:
 	var w_idle := idle_rpm * TAU / 60.0
 	var w_red := redline_rpm * TAU / 60.0
 	var w_stall := idle_rpm * 0.55 * TAU / 60.0     # where the anti-stall clamp is fully open, just
-	                                                # above the floor _engine_torque() stops firing at
+													# above the floor _engine_torque() stops firing at
 	var fric_c1 := (engine_brake_redline - engine_brake_idle) / maxf(w_red - w_idle, 1.0)
 	var fric_c0 := engine_brake_idle - fric_c1 * w_idle
 	var ratio := gr * final_drive                        # engine:wheel ratio (0 in neutral)
@@ -1818,6 +1828,13 @@ func _physics_process(delta: float) -> void:
 			center_h = wheel_radius * puncture_flat
 		w.vis.global_transform = Transform3D(wheel_b, hit_v + up * center_h)
 
+	# C2: advance the steering-system lag once per physics tick (exponential, so the time constant
+	# means the same thing at any tick rate). tau = 0 hands back the raw per-tick moment for A/B.
+	if steer_filter_tau > 0.0001:
+		_sat_filt += (_sat_moment - _sat_filt) * (1.0 - exp(-delta / steer_filter_tau))
+	else:
+		_sat_filt = _sat_moment
+
 	if speed > 0.1:
 		apply_central_force(-linear_velocity.normalized() * drag_k * linear_velocity.length_squared())
 
@@ -1848,7 +1865,7 @@ func respawn() -> void:
 	_launch = false                                                            # A4: launch assist
 	for i in range(_esc.size()):
 		_esc[i] = 0.0                                                          # A4: stability assist
-	_sat_moment = 0.0                                                          # C2: steering signal
+	_sat_moment = 0.0; _sat_filt = 0.0                                         # C2: steering signal
 	_throttle_pedal = 0.0; _brake_pedal = 0.0   # Phase 0: virtual pedals
 	_damage = 0.0; _pull_dir = 0.0; _prev_vel = Vector3.ZERO   # M8: repaired on respawn
 	for w in _wheels:
@@ -1865,7 +1882,7 @@ func get_steer_torque() -> float:
 	# C2: torque at the steering rack (N*m). Sign follows the lateral force, so it reverses with
 	# steering direction and sits at ~0 straight-ahead and at a standstill (no slip angle, no Fy).
 	# Divided at read time so steer_ratio / sat_gain slider edits are felt immediately.
-	return _sat_moment / maxf(steer_ratio, 1.0) * sat_gain
+	return _sat_filt / maxf(steer_ratio, 1.0) * sat_gain
 
 func get_wheels() -> Array[Wheel]:
 	return _wheels
