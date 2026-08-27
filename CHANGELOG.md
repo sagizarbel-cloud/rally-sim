@@ -20,6 +20,36 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-27 (D1 drive verdict: nothing moved — the ground map is in, and Arc D's foundation is verified)
+
+**USER DRIVE VERDICT: "goood all four hold" — D1 ACCEPTED.** All four checklist items pass on the
+shipped build: all three circuits feel identical, skid marks still appear only on asphalt, tyre
+audio still changes on the same lines, the wear line still darkens and still adds grip on the rally
+loop, and dust plumes / gravel particles / asphalt smoke all still trigger on the same surfaces.
+
+This is the verdict a refactor phase wants and it is worth stating plainly: **the driver could not
+tell the ground map was there, which is exactly the pass condition.** D1's golden-equality probe
+already proved byte-identical classification over 6608 points (SHA-256 `80bffdd150893337…`); the
+drive confirms the same thing through the only instrument that can judge feel. Grip, surface
+effects, audio switching and the M6 wear line are now all downstream of one authority
+(`scripts/ground_map.gd`) instead of four independent surface decisions, at a measured cost of
+0.153 ms/tick against the 1.84 ms baseline.
+
+**Still open, and deliberately so** — both surfaced by D1's probe 2 and left unfixed because a feel
+change must not hide inside a refactor (full detail in the 2026-08-24 entry below):
+- `sound.gd` hears the rally loop as **40% asphalt** (1504/1504 gravel points), because its
+  `(grip-1.0)/0.25` split is only exact at `dirt_grip = 1.0` and the value is now 1.1. Symptom to
+  listen for: **an asphalt squeal underneath a gravel slide, and gravel rumble 28% too quiet.**
+- The centre patch has **two shapes** — euclidean for grip, chebyshev for the roughness exclusion —
+  disagreeing on 392/6608 points, so roughness is damped in the square's corners for no reason the
+  grip model knows about.
+Each wants its own phase with a drive test. Neither blocks D2.
+
+**Arc D's foundation is now verified**, which is what D2 (timing, notes and wear re-parameterised
+onto arc length) builds on.
+
+---
+
 ## 2026-08-27 (B5 §8 driven — Arc B CLOSES; and the C2 steering spike diagnosed, fixed, and two theories killed)
 
 ### B5 §8 end-to-end drive-through — Arc B is done

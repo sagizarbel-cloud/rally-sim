@@ -724,9 +724,13 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
 
 ## 9. Phase status (executor updates this)
 
-- [ ] D1 — The ground map: one authority for what the ground is — **BUILT AND PROBE-VERIFIED
-  2026-08-24, AWAITING DRIVE VERDICT** (the checkbox stays unticked: this project ticks for feel,
-  and D1's feel claim is "nothing changed", which only the user can confirm).
+- [x] D1 — The ground map: one authority for what the ground is — **DONE 2026-08-27,
+  DRIVE-VERIFIED: all four checklist items hold — "goood all four hold".** The phase's feel claim
+  was "nothing changed", and driving all three circuits confirmed it: no difference anywhere, skid
+  marks still asphalt-only, tyre audio still switching on the same lines, the wear line still
+  darkening and still adding grip, and all four surface effects still triggering on the same
+  surfaces. Byte-identical classification is therefore confirmed by the probe AND by the driver.
+  Built and probe-verified 2026-08-24.
   `scripts/ground_map.gd` composes GRASS/DIRT/ASPHALT/PATCH from layers resolved in priority
   order; `stage.grip_at` / `is_tarmac_at` / `deformable_patch_factor` / `_surface_color` are
   one-line delegations, `roughness.road_class_at` and `effects.gd`'s tarmac gate read the map.
