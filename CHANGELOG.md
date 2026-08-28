@@ -20,6 +20,54 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-28 (drive verdict on both fixes: ACCEPTED — and a new one found: "tyre audio only plays when I pull the handbrake")
+
+**USER DRIVE VERDICT: "all read correctly".** The tyre-audio surface fix and the
+`Centreline.nearest_point()` fix are both ACCEPTED. Notably the washboard item passed — with its
+phase correct off the centreline for the first time, the corrugation reads properly through corners.
+
+**NEW SYMPTOM, reported in the same drive and NOT fixed:** *"the audio seems to almost exclusively
+play when pressing space (handbrake)"*. Diagnosed by reading the code; the mechanism is unambiguous
+and it is a real gap, not a tuning issue.
+
+**`sound.gd`'s tyre voice is gated on LONGITUDINAL slip only, and the gate is high.**
+`vehicle_m2.gd:1800` defines `w.slip` as the **absolute longitudinal slip ratio**,
+`|(omega*R - v_long) / max(|v_long|, slip_ref_speed)|` clamped to 0..3 — a pure drive/brake
+quantity. `sound.gd` then takes `tv = clamp((slip - 0.25) / 1.4, 0, 1)` and uses it for both
+audible layers:
+
+    roll_level   = (0.3 * roll + 0.7 * tv) * (1 - 0.7 * asph)
+    squeal_level = tv * asph
+
+So:
+
+| condition | longitudinal slip | tv | tyre voice |
+|---|---|---|---|
+| ordinary driving / cornering | ~0.02 - 0.10 | **0.00** | silent (only the 0.3 speed term) |
+| **handbrake, rear wheels locked** | **1.00** | **0.54** | loud |
+| full wheelspin | up to 3.00 | 1.00 (from 1.65) | loud |
+
+**A locked or spinning wheel is essentially the only way to cross the 0.25 threshold**, which is
+exactly the reported symptom. **The deeper problem: `w.slip_angle` — lateral slip — does not appear
+in the expression at all.** A rally car sliding sideways through a gravel corner is precisely when
+a tyre should be shouting, and it is silent, because sliding sideways barely changes the
+longitudinal slip RATIO.
+
+**`sound.gd` is now the odd one out among the three systems that read tyre slip**, which is what
+makes the fix direction obvious rather than a matter of taste:
+- `wear.gd:915` uses `|w.slip| + |w.slip_angle|` — both components.
+- `effects.gd` (M11) uses **contact-patch slip VELOCITY** and tyre temperature.
+- `sound.gd` uses longitudinal slip ratio alone, with a 0.25 deadband.
+
+**Fix direction when this gets its own phase:** drive the tyre voice from the same contact-patch
+slip velocity `effects.gd` already computes (`slip_speed(w, v)`), so what you HEAR, what you SEE
+(dust, smoke, marks) and what WEARS all agree on when a tyre is sliding — the same
+one-authority argument D1 made for surface, applied to slip. A velocity in m/s also scales
+naturally with speed, where a ratio does not. Wants a drive test and an A/B, so it is not being
+smuggled in beside D3.
+
+---
+
 ## 2026-08-28 (later — the gravel loop stops sounding like tarmac, and nearest_point was quietly wrong 10% of the time)
 
 Two fixes the D1/D2 probes had put on the record but deliberately left alone. **AWAITING DRIVE VERDICT.**

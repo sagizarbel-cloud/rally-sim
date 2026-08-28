@@ -639,6 +639,26 @@ than to retrofit afterwards — **read this section before executing C1.**
 
 ---
 
+## 6b. Known open items outside Arc D's scope (carried, not forgotten)
+
+These were surfaced by Arc D's probes or drives but belong to their own phases. Recorded here so a
+future session finds them; full detail and numbers in `CHANGELOG.md`.
+
+- **Tyre audio only fires on the handbrake** (2026-08-28). `sound.gd`'s tyre voice is gated on
+  LONGITUDINAL slip ratio > 0.25, which effectively only a locked or spinning wheel reaches;
+  `w.slip_angle` is absent, so a sideways gravel slide is silent. `wear.gd` uses both components
+  and `effects.gd` uses contact-patch slip velocity, so sound is the odd one out. Fix direction:
+  drive it from `effects.gd`'s `slip_speed(w, v)` so audio, particles and wear agree on when a
+  tyre is sliding.
+- **`sound.gd` vs the centre patch / grass split** — grass and gravel now sound identical
+  (both non-asphalt). Fine today; D6's mixed surfaces may want a third class.
+- **The centre patch has two shapes** (D1) — grip uses a euclidean radius, the roughness exclusion
+  a chebyshev one; they disagree on 392/6608 lattice points.
+- **`wear._cell()` still maps position to cell by polar radial offset** (D2) — the general path
+  belongs with the first non-polar road, i.e. D3/D7.
+
+---
+
 ## 7. Regression surface — what must not break
 
 Extends §6 of the drivetrain plan. At minimum, and verified in D9:
