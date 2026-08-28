@@ -20,6 +20,32 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-28 (D2 drive verdict: laps, splits, notes, ghost and the wear line all unchanged — Arc D can now build a road)
+
+**USER DRIVE VERDICT: "all four hold" — D2 ACCEPTED.** Lap timing, sector splits and the
+purple/red best-sector flash behave as before on all three circuits; pace notes call the same
+corners at the same moments on both routes; the ghost still records and replays; and the wear line
+still forms in the same places.
+
+Two refactor phases in a row have now landed with the driver noticing nothing, which is the
+intended result both times. **What Arc D actually has after this:** `time_trial.gd`,
+`pace_notes.gd` and `wear.gd` no longer know that a road is `r = f(theta)` about the origin, and
+`Centreline` handles open topology — so D3 can generate a point-to-point stage without any of them
+changing. The probe that mattered was #4 (a synthetic open road: start once, splits in order,
+finish TERMINATES the run), because nothing in the shipped game can exercise that path yet.
+
+**Carried forward, unchanged and still open:**
+- The centreline `s`-divergence warning for D3/D4 (>0.30 m at 2.57% of positions, worst 4.35 m =
+  7.2 washboard wavelengths). C1's roughness centreline is still deliberately NOT unified with
+  D2's. **Do not vary centreline density with streaming/LOD without re-driving C1's washboard**,
+  or the corrugation moves where the driver learned it.
+- `wear._cell()` still maps position to cell by polar radial offset. The general path belongs with
+  the first non-polar road, i.e. D3/D7.
+- D1's two pre-existing bugs (`sound.gd` hears the rally loop as 40% asphalt; the centre patch has
+  two shapes) remain open by design.
+
+---
+
 ## 2026-08-28 (D2 — laps, notes and wear come off theta and onto arc length; a latent centreline trap measured)
 
 `time_trial.gd`'s `atan2` crossings and `RMIN`/`RMAX` radius bands are gone, replaced by

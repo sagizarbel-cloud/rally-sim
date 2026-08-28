@@ -751,8 +751,11 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   it) because D5 reuses it verbatim.
   **Budget note for D4:** ground map 0.153 + C1.0 centreline 1.05 = ~1.2 ms against a 1.84 ms
   baseline. Streaming arrives with less headroom than this plan assumed.
-- [ ] D2 — Timing, notes and wear re-parameterised onto arc length — **BUILT AND PROBE-VERIFIED
-  2026-08-28, AWAITING DRIVE VERDICT.** `time_trial.gd`'s `atan2` crossings and `RMIN`/`RMAX`
+- [x] D2 — Timing, notes and wear re-parameterised onto arc length — **DONE 2026-08-28,
+  DRIVE-VERIFIED: all four checklist items hold.** Lap timing, sector splits and the best-sector
+  flash behave as before on all three circuits; pace notes call the same corners at the same
+  moments on both routes; the ghost still records and replays; the wear line still forms in the
+  same places. Built and probe-verified the same day. `time_trial.gd`'s `atan2` crossings and `RMIN`/`RMAX`
   bands are replaced by arc-length triggers on a per-circuit `Centreline`; `pace_notes.gd` and
   `wear.gd` take their geometry from the same shared centrelines. `Centreline` gained an OPEN
   topology (`from_points`; every wrap conditional on `is_loop()`). `world.gd` builds one centreline
