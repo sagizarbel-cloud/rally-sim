@@ -122,12 +122,9 @@ restart, launch assist, money-shift guard, asphalt ring, `[P]` puncture, damage,
 splits, pace notes, wear line, every toggle). **Item 3 passes with notes; item 4 FAILS.** Arc B
 closes on that, but the drive-through earned its keep — it turned up four separate things:
 
-- **REGRESSION, unattributed: top speed 236 km/h in 6th against the recorded 259 km/h baseline**
-  (−9%). Suspects, in order: broadband roughness was recalibrated **4.5x louder** (`9073979`);
-  C1's road-aware damper measurably raises MEAN Fz ~10% over texture via the `max(...,0)`
-  rectifier, which raises rolling resistance; and D1 (`cc7b90d`) moved surface classification
-  behind `GroundMap`, so a mis-classified drag strip would cost grip in 6th. **A
-  `roughness_gain` 0-vs-1 top-speed run separates the first two in one probe** — not yet done.
+- **NOT a regression — the 259 km/h baseline was stale. Measured and closed the same day** (see
+  the dedicated entry below): the car does **237 km/h** at stock torque with roughness ON or OFF,
+  and 267 at max torque. The user's 236 and 267 both reproduce exactly.
 - **FAIL, item 4 — "i dont think it changed, hard to tell" on the diff presets.** This is a
   REGRESSION: A3 was drive-verified on this exact test (2026-08-05, "feels good") and the presets
   were kept deliberately as a permanent A/B tool. Something since then masks axle-locking
@@ -140,6 +137,39 @@ closes on that, but the drive-through earned its keep — it turned up four sepa
   genuinely unpredictable.
 - **Stage request (M6 / Arc D):** widen the band of full-traction surface beyond the track edge so
   running a little wide does not instantly throw the car off; would also help the tight hairpins.
+
+### The 259 km/h top-speed "regression" was a stale baseline, not a regression
+
+The user spotted it: *"with max torque and other settings on default it hit 267 km/h when I tested
+it now — but 236 km/h with default torque."* Measured on the drag strip, terminal velocity in 6th,
+starting already rolling so it converges inside the strip:
+
+| peak_torque | roughness_gain | terminal speed in 6th |
+|---|---|---|
+| 500 (stock) | 0.0 | **237.4 km/h** |
+| 500 (stock) | 1.0 | **237.5 km/h** |
+| 1500 (max) | 0.0 | 267.5 km/h |
+| 1500 (max) | 1.0 | 267.5 km/h |
+
+**Both of the user's readings reproduce exactly, and roughness costs 0.1 km/h — i.e. nothing.**
+C1, the 4.5x broadband recalibration and D1's classification are all exonerated in one run; none of
+the three suspects listed earlier in this entry survives.
+
+**Where 259 came from: it is a Phase 0 number (2026-08-02) that was never re-baselined.** It first
+appears in the initial repository snapshot and got carried forward through every later checklist as
+"the baseline". Two days after it was taken, **A2 raised motoring friction to competition-spec
+25/90 N·m** (2026-08-04) to fix "engine braking too weak in 3rd" — a deliberate, drive-verified
+change ("engine braking good now, feels comfortable"). Motoring friction subtracts directly from
+drive force at high rpm, and at ~6200 rpm in 6th it now eats ~80 N·m of the ~455 available, so the
+drag-limited top speed necessarily fell. Everything after it (M7 tyre model, B1 suspension, the
+load-sensitive grip work) pushes the same way.
+
+**Note the gearing ceiling for orientation: 275.2 km/h** (0.86 x 3.9 through a 0.34 m wheel at
+7200 rpm). Stock torque is drag-limited well below it; max torque gets within 8 km/h of it, which
+is why tripling torque buys only 30 km/h. The car's own `top_speed_kmh()` solver — which graduates
+the speedometers — lands on the measured figure, so the dial has been right all along; only the
+documentation was stale. **Every doc reference re-baselined to 237 km/h** (drivetrain plan Phase 0
+and §8, `PROMPT-arc-d-stages.md`, ROADMAP).
 
 ### C2 — the steering spike was NOT what either theory said
 

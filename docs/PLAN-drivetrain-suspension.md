@@ -319,7 +319,8 @@ regression.
 
 **Compile gate:** `./check.sh` clean.
 **User drive checklist:**
-- [ ] Baseline intact: top speed on the drag strip still ≈ 259 km/h in 6th; rally-loop lap
+- [ ] Baseline intact: top speed on the drag strip still ≈ 237 km/h in 6th (re-baselined
+  2026-08-27; the old 259 predates A2 raising motoring friction to 25/90); rally-loop lap
   time within a couple of seconds of the ghost; no new vibration/jitter at speed or at rest.
 - [ ] Brake taps now modulate — trail braking into a dirt corner is possible without
   instant lockup.
@@ -1003,7 +1004,8 @@ User drive-through, all in one session, keyboard:
 1. **Cold start ritual:** spawn, N, free-rev (pitch follows), 1st, pull away — no stall
    with anti-stall ON; deliberately stall with manual clutch ON; restart.
 2. **Drag strip:** launch-assist OFF manual launch, then ON — compare; full upshift run
-   to ~259 km/h in 6th (baseline preserved); money-shift guard test at speed.
+   to ~237 km/h in 6th (baseline preserved — NOT 259, see 2026-08-27 in the changelog);
+   money-shift guard test at speed.
 3. **Rally loop, 3 laps AWD:** flick chain through the esses (rhythm), handbrake hairpin,
    lift-off rotation test, washboard section planted, one deliberate crest slam
    (bump-stop event, no spike), lap time within reach of the pre-plan ghost (feel must
@@ -1295,9 +1297,8 @@ User drive-through, all in one session, keyboard:
   tune again later — `peak_alpha_gravel` first, then `cy_gravel`.
 - [x] B5 — Bake, prune, end-to-end — **DONE 2026-08-27: §8 driven end-to-end, ARC B CLOSES.**
   Items 1/2/5/6/7 pass outright, 3 passes with notes, **4 FAILS** (diff presets no longer tellable
-  apart — a regression against A3's own drive verdict). Also surfaced: **top speed 236 km/h vs the
-  259 baseline**, unattributed (roughness recalibration / C1 Fz rectification / D1 classification
-  are the three suspects, separable with a `roughness_gain` 0-vs-1 run); AWD "too slippery both
+  apart — a regression against A3's own drive verdict). The reported "top speed 236 vs 259" turned
+  out to be a **stale baseline, not a regression** — measured 2026-08-27 and closed, see below; AWD "too slippery both
   ways" and RWD "constantly oversteers", **deferred by the user to a future tuning session**; and a
   stage request for a wider full-traction band beyond the track edge. Full detail in `CHANGELOG.md`
   2026-08-27. Prune + audit were DONE 2026-08-13, and **the bake is now settled**

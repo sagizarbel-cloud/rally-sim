@@ -73,7 +73,7 @@ should be built on top of that authority rather than beside it.
 **New maps go in a NEW area; the existing map is preserved untouched as the test and
 calibration bed** (user's call, 2026-08-13). The three concentric circuits, the centre
 deformable patch and the 4 km drag strip stay exactly as they are, because every calibration
-baseline this project has is expressed in their terms — 259 km/h in 6th down the strip,
+baseline this project has is expressed in their terms — 237 km/h in 6th down the strip,
 rally-loop lap feel, B3's bottoming statistics at 100 km/h on the rally loop, A2's coast-down
 figures. A new stage that modified them would silently invalidate the entire regression surface
 mid-arc.
