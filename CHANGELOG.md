@@ -20,6 +20,73 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-28 (later — the gravel loop stops sounding like tarmac, and nearest_point was quietly wrong 10% of the time)
+
+Two fixes the D1/D2 probes had put on the record but deliberately left alone. **AWAITING DRIVE VERDICT.**
+
+### 1. "Sliding on the rally loop plays a tarmac squeal, and the gravel rumble is too quiet"
+
+`sound.gd` decided surface with `asph = (grip - 1.0) / 0.25`. That expression is exact only while
+`dirt_grip` is 1.0 — and it has been **1.1** for a long time, so every gravel point read **0.400**.
+The rally loop was mixed as 40% tarmac. Now it asks D1's ground map for the surface class, which
+removes the LAST of the four independent surface decisions D1 catalogued.
+
+Measured per surface (old asph -> new asph, and what it does to the mix):
+
+| surface | grip | old | new | rolling rumble | asphalt squeal layer |
+|---|---|---|---|---|---|
+| grass | 0.80 | 0.000 | 0.000 | unchanged | none, unchanged |
+| **dirt (rally loop)** | 1.10 | **0.400** | **0.000** | **x1.389 (39% louder)** | **0.4 -> 0, gone** |
+| **patch (dirt circle)** | 1.10 | **0.400** | **0.000** | **x1.389** | **0.4 -> 0, gone** |
+| asphalt (ring) | 1.52 | 1.000 | 1.000 | unchanged | unchanged |
+| asphalt (drag strip) | 1.52 | 1.000 | 1.000 | unchanged | unchanged |
+
+So only the two dirt surfaces move; grass and tarmac are untouched. A/B toggle
+`tyre_audio_surface` (Tab, default ON) reverts to the old threshold. **If the corrected gravel
+rumble is now too loud, `tyre_gain` is the handle** — the level was always meant to be this, it was
+just being cut 28% by a surface test that thought it was on tarmac.
+
+### 2. `Centreline.nearest_point()` was returning the WRONG sample off the centreline
+
+Chasing D2's "two centrelines disagree on `s`" warning found something worse than an
+inconsistency: the query was **incorrect on a single centreline**. It scanned a fixed 3x3 block of
+grid cells, which only guarantees a hit within ONE cell (~2.58 m on the rally loop) — while the car
+drives 4 m off the centreline through corners and the roughness field queries out to the 7 m
+shoulder. Past that radius it silently returned a farther sample. Checked against brute-force
+truth on C1's rally-loop centreline:
+
+| query distance off centreline | wrong before | worst error before | after |
+|---|---|---|---|
+| on the line (0 m) | 0.00% | 0.000 m | 0.00%, 0.000 m |
+| mid-lane (2 m) | 0.00% | 0.003 m | 0.00%, 0.003 m |
+| **road edge (4 m)** | **9.85%** | **3.72 m = 6.21 washboard ridges** | **0.00%, 0.007 m** |
+| **shoulder (7 m)** | **7.30%** | **3.28 m = 5.47 ridges** | **0.00%, 0.009 m** |
+
+**Why this matters for feel:** washboard phase is `sin(2*PI*s/0.6 m)`, and washboard is MASKED to
+corners and braking zones — precisely where a car is off-centre. So the ripple train was being
+scrambled exactly where it lives, jumping several ridges as the car moved laterally. That is a
+plausible contributor to C1's long-running *"I can't feel the washboard"* reports, which survived
+three revisions of amplitude and filtering work: **the term was there, but its phase was
+incoherent across the road.**
+
+The search now expands ring by ring until the answer is **provable** — once the best candidate is
+nearer than the distance to the edge of the already-scanned square, nothing unscanned can beat it.
+The ring cap is DERIVED from the grid extent, not picked, per the `_mf_peak_u` lesson. Cost, 4
+wheels/tick against the 1.84 ms budget: **0.018 ms on the line, 0.046 at the road edge, 0.071 at
+the shoulder** — it costs more only where it previously cheated.
+
+**This closes D2's D3/D4 warning at the root.** The two rally-loop centrelines (4000 vs 4320
+samples) now agree: **max \|ds\| 4.35 m -> 0.025 m (7.24 ridges -> 0.04), and 2.57% of positions
+over half a ridge -> 0.000%.** Varying centreline density is no longer a trap, though C1's
+centreline is still not unified with D2's since there is no longer any reason to.
+
+**Verified not to move anything else:** D2's timing probe re-run against its saved baseline is
+byte-identical, so lap, sector and split times are untouched. The only other caller is C1's
+washboard, which is the intended correction. No A/B toggle for this one — the old path was
+measurably wrong, and `washboard_amp` / `roughness_gain` already isolate the affected term.
+
+---
+
 ## 2026-08-28 (D2 drive verdict: laps, splits, notes, ghost and the wear line all unchanged — Arc D can now build a road)
 
 **USER DRIVE VERDICT: "all four hold" — D2 ACCEPTED.** Lap timing, sector splits and the

@@ -775,8 +775,16 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   **0.14 mm**, but local `s` diverges by **> 0.30 m at 2.57% of positions, worst case 4.35 m
   (7.2 washboard wavelengths)** — bimodal, because `nearest_point` resolves those positions to a
   different segment at different densities. The two were deliberately NOT unified; C1 is untouched.
-  **D4 must not vary centreline density with streaming/LOD** without re-driving C1, or corrugation
-  moves under the driver where they learned it. Full numbers in `CHANGELOG.md` 2026-08-28.
+  **RESOLVED AT THE ROOT, 2026-08-28 (same day).** The divergence was not a sampling artefact but a
+  BUG in `Centreline.nearest_point()`: a fixed 3x3 grid scan that only guaranteed a hit within one
+  cell (~2.58 m) while the car drives 4 m off the centreline and roughness queries reach the 7 m
+  shoulder. Against brute-force truth it was **wrong at 9.85% of road-edge positions, worst 3.72 m
+  = 6.21 washboard wavelengths**. The search now expands until provably correct (ring cap DERIVED
+  from the grid extent). After: divergence max **4.35 m -> 0.025 m**, positions over half a ridge
+  **2.57% -> 0.000%**, and the single-centreline error is 0.00% at every band. Cost 0.018-0.071
+  ms/tick for 4 wheels against the 1.84 ms budget. Lap/sector/split times verified byte-identical
+  against D2's saved baseline. **So D4 is no longer constrained on this point** — density may vary
+  with streaming/LOD. Full numbers in `CHANGELOG.md` 2026-08-28.
 - [ ] D3 — The stage generator: parameters + control points (short, static)
 - [ ] D4 — Chunked terrain, streaming and LOD
 - [ ] D5 — The area manager and the connecting tunnel

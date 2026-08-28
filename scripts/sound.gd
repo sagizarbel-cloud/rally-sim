@@ -125,17 +125,24 @@ func _process(_delta: float) -> void:
 	for w in car.get_wheels():
 		slip = maxf(slip, w.slip)
 	var tv := clampf((slip - 0.25) / 1.4, 0.0, 1.0)
+	# HOW MUCH ASPHALT does the tyre hear? 1 = tarmac (rolling rumble drops away, the squeal layer
+	# comes in), 0 = gravel/grass. D1 found this was the last of four places deciding what the
+	# ground is, and the only one still doing it with a grip threshold - which had drifted WRONG:
+	# `(grip - 1.0) / 0.25` is exact only while dirt_grip is 1.0, and it is 1.1, so every gravel
+	# point read 0.400. The rally loop was being mixed as 40% tarmac: the asphalt squeal played
+	# under every gravel slide and the gravel rumble was cut 28%. Now it asks the authority.
 	var asph := 0.0
-	var gsrc = stage if stage != null else car.surface_source
-	if gsrc != null and gsrc.has_method("grip_at"):
-		var g: float = gsrc.grip_at(car.global_position.x, car.global_position.z)
-		# D1 LEFT THIS ALONE ON PURPOSE, and the reason is measured. Switching this to the ground
-		# map's surface class is NOT a no-op the way effects.gd's gate was: with dirt_grip at 1.1
-		# this expression returns 0.400 on the rally loop, so the tyre audio already hears the
-		# gravel loop as 40% asphalt. Reading the map would snap that to 0.0 - which is a FEEL
-		# change (quieter squeal, louder gravel rumble) and D1 must not hide one inside a refactor.
-		# Recorded as a pre-existing bug in CHANGELOG.md; the fix is a phase with a drive test.
-		asph = clampf((g - 1.0) / 0.25, 0.0, 1.0)            # 0 = dirt/grass, 1 = asphalt (base surface, ignores wear)
+	var use_map: bool = true
+	if car != null and car.get("tyre_audio_surface") != null:
+		use_map = bool(car.tyre_audio_surface)
+	var gm = stage.ground_map if stage != null and stage.get("ground_map") != null else null
+	if use_map and gm != null:
+		asph = 1.0 if gm.audio_at(car.global_position.x, car.global_position.z) == &"asphalt" else 0.0
+	else:
+		var gsrc = stage if stage != null else car.surface_source
+		if gsrc != null and gsrc.has_method("grip_at"):
+			var g: float = gsrc.grip_at(car.global_position.x, car.global_position.z)
+			asph = clampf((g - 1.0) / 0.25, 0.0, 1.0)        # the pre-fix behaviour, kept for the A/B
 
 	# rolling rumble: always there while moving (quiet), louder with slip; quieter on smooth asphalt
 	var roll_level := (0.3 * roll + 0.7 * tv) * (1.0 - 0.7 * asph)

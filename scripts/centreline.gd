@@ -34,6 +34,7 @@ var _grid: Dictionary = {}
 var _cell_size := 20.0
 var _min_x := 0.0
 var _min_z := 0.0
+var _max_ring := 8
 
 static func from_polar(center: Vector3, radius_fn: Callable, halfwidth_fn: Callable,
 		height_fn: Callable, samples: int) -> Centreline:
@@ -174,6 +175,10 @@ func _build_grid() -> void:
 	var avg_step := _length / maxf(float(_n), 1.0)
 	_cell_size = maxf(avg_step * 8.0, 1.0)   # a handful of samples per cell, not thousands
 	_min_x = minx; _min_z = minz
+	# DERIVED search cap, not a picked one: the largest ring that could still contain a sample.
+	# A hard-coded bound is exactly how the _mf_peak_u bisection silently mis-placed a curve peak
+	# (see docs/PLAN-drivetrain-suspension.md §9 B4), so this follows the grid's real extent.
+	_max_ring = int(ceil(maxf(maxx - minx, maxz - minz) / _cell_size)) + 2
 	for i in range(_n):
 		var key := _key(_pts[i].x, _pts[i].z)
 		if not _grid.has(key):
@@ -182,6 +187,57 @@ func _build_grid() -> void:
 
 func _key(x: float, z: float) -> Vector2i:
 	return Vector2i(int(floor((x - _min_x) / _cell_size)), int(floor((z - _min_z) / _cell_size)))
+
+func _nearest_sample(x: float, z: float) -> int:
+	## The nearest sample INDEX, and it is provably the nearest.
+	##
+	## This used to scan a fixed 3x3 block of grid cells, which only guarantees a hit within ONE
+	## cell (~2.5 m on the rally loop) - while the car drives 4 m off the centreline through
+	## corners and the roughness field queries out to the 7 m shoulder. Past that radius it
+	## silently returned a farther sample, and WHICH one depended on the cell size, i.e. on the
+	## sample count. Measured on C1's rally-loop centreline before the fix: correct on the centre
+	## line and at 2 m, but WRONG at 9.85% of road-edge (4 m) positions, worst case 3.72 m of arc
+	## length - 6.2 washboard wavelengths. Washboard is masked to corners and braking zones, which
+	## is precisely where a car is off-centre, so the ripple train was being scrambled exactly
+	## where it lives. See CHANGELOG.md 2026-08-28.
+	##
+	## Now the ring expands until the answer is PROVABLE: once the best candidate is nearer than
+	## R cells, no unscanned cell can hold anything closer, so we can stop. On-road queries still
+	## finish on the first ring, so the common path costs what it did before.
+	var ck := _key(x, z)
+	var best_i := -1
+	var best_d2 := INF
+	var r := 0
+	while r <= _max_ring:
+		for dxi in range(-r, r + 1):
+			for dzi in range(-r, r + 1):
+				if r > 0 and maxi(absi(dxi), absi(dzi)) != r:
+					continue                      # interior already scanned by a smaller ring
+				var key := Vector2i(ck.x + dxi, ck.y + dzi)
+				if not _grid.has(key):
+					continue
+				for idx in _grid[key]:
+					var d2 := Vector2(_pts[idx].x - x, _pts[idx].z - z).length_squared()
+					if d2 < best_d2:
+						best_d2 = d2; best_i = idx
+		# Exact stop bound: everything still unscanned lies OUTSIDE the square of cells already
+		# swept, so nothing out there can be nearer than this point's distance to that square's
+		# edge. Using the true edge distance rather than a conservative r*cell_size lets an
+		# ordinary on-road query finish on the first ring, which is what keeps the cost flat.
+		var lo_x := _min_x + float(ck.x - r) * _cell_size
+		var hi_x := _min_x + float(ck.x + r + 1) * _cell_size
+		var lo_z := _min_z + float(ck.y - r) * _cell_size
+		var hi_z := _min_z + float(ck.y + r + 1) * _cell_size
+		var safe := minf(minf(x - lo_x, hi_x - x), minf(z - lo_z, hi_z - z))
+		if best_i >= 0 and safe > 0.0 and best_d2 <= safe * safe:
+			return best_i
+		r += 1
+	if best_i < 0:                                    # query is off the grid entirely
+		for i in range(_n):
+			var d2b := Vector2(_pts[i].x - x, _pts[i].z - z).length_squared()
+			if d2b < best_d2:
+				best_d2 = d2b; best_i = i
+	return best_i
 
 func sample_index_at(x: float, z: float) -> int:
 	## Which SAMPLE does this world position belong to? Distinct from nearest_point(), which also
@@ -194,43 +250,11 @@ func sample_index_at(x: float, z: float) -> int:
 		# breaks Arc C" - and C1's feel was only just accepted.
 		var i := int(round(atan2(z - _polar_center.z, x - _polar_center.x) / TAU * float(_n)))
 		return ((i % _n) + _n) % _n
-	var ck := _key(x, z)
-	var best_i := -1
-	var best_d2 := INF
-	for dxi in range(-1, 2):
-		for dzi in range(-1, 2):
-			var key := Vector2i(ck.x + dxi, ck.y + dzi)
-			if not _grid.has(key):
-				continue
-			for idx in _grid[key]:
-				var d2 := Vector2(_pts[idx].x - x, _pts[idx].z - z).length_squared()
-				if d2 < best_d2:
-					best_d2 = d2; best_i = idx
-	if best_i < 0:
-		for i2 in range(_n):
-			var d2b := Vector2(_pts[i2].x - x, _pts[i2].z - z).length_squared()
-			if d2b < best_d2:
-				best_d2 = d2b; best_i = i2
-	return best_i
+	return _nearest_sample(x, z)
 
 func nearest_point(x: float, z: float) -> Dictionary:
-	var ck := _key(x, z)
-	var best_i := -1
-	var best_d2 := INF
-	for dxi in range(-1, 2):
-		for dzi in range(-1, 2):
-			var key := Vector2i(ck.x + dxi, ck.y + dzi)
-			if not _grid.has(key):
-				continue
-			for idx in _grid[key]:
-				var d2 := Vector2(_pts[idx].x - x, _pts[idx].z - z).length_squared()
-				if d2 < best_d2:
-					best_d2 = d2; best_i = idx
-	if best_i < 0:
-		for i in range(_n):                     # off-grid fallback (should not happen on-map)
-			var d2 := Vector2(_pts[i].x - x, _pts[i].z - z).length_squared()
-			if d2 < best_d2:
-				best_d2 = d2; best_i = i
+	var best_i := _nearest_sample(x, z)
+	var best_d2: float = Vector2(_pts[best_i].x - x, _pts[best_i].z - z).length_squared()
 	# refine against the two segments touching the nearest sample: project onto each, keep the
 	# closer one, and read s/lateral/heading off that projection rather than the raw sample
 	var best_s := _s[best_i]
