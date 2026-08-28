@@ -751,7 +751,29 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   it) because D5 reuses it verbatim.
   **Budget note for D4:** ground map 0.153 + C1.0 centreline 1.05 = ~1.2 ms against a 1.84 ms
   baseline. Streaming arrives with less headroom than this plan assumed.
-- [ ] D2 — Timing, notes and wear re-parameterised onto arc length
+- [ ] D2 — Timing, notes and wear re-parameterised onto arc length — **BUILT AND PROBE-VERIFIED
+  2026-08-28, AWAITING DRIVE VERDICT.** `time_trial.gd`'s `atan2` crossings and `RMIN`/`RMAX`
+  bands are replaced by arc-length triggers on a per-circuit `Centreline`; `pace_notes.gd` and
+  `wear.gd` take their geometry from the same shared centrelines. `Centreline` gained an OPEN
+  topology (`from_points`; every wrap conditional on `is_loop()`). `world.gd` builds one centreline
+  per circuit at **4320 samples** — the common multiple that lets pace_notes (1440, stride 3) and
+  wear (1080, stride 4) keep their exact sample positions, which is what makes the probes exact.
+  **Probe 1 PASS (byte-identical timing trace on all three circuits, not merely within a tick).
+  Probes 2+3 PASS (bit-identical corner lists and wear field). Probe 4 PASS (open road: start once,
+  splits in order, finish TERMINATES the run, no wrap).**
+  **Two decisions worth not re-litigating:** (a) sector splits are the arc lengths at the legacy
+  theta-thirds, NOT equal thirds — arc length is not uniform in theta, so equal splits would have
+  moved every sector boundary; a generated stage gets equal arc-length splits instead. (b)
+  `wear._cell()` keeps its polar radial-offset mapping, because changing it moves both the wear line
+  and C1's washboard for no gain until a non-polar road exists (§1.1: the old map is the preserved
+  calibration bed).
+  **MEASURED WARNING, and §6.2's risk made concrete:** two centrelines over the SAME road do not
+  agree on `s`. C1's roughness centreline (4000 samples) vs D2's (4320): total length agrees to
+  **0.14 mm**, but local `s` diverges by **> 0.30 m at 2.57% of positions, worst case 4.35 m
+  (7.2 washboard wavelengths)** — bimodal, because `nearest_point` resolves those positions to a
+  different segment at different densities. The two were deliberately NOT unified; C1 is untouched.
+  **D4 must not vary centreline density with streaming/LOD** without re-driving C1, or corrugation
+  moves under the driver where they learned it. Full numbers in `CHANGELOG.md` 2026-08-28.
 - [ ] D3 — The stage generator: parameters + control points (short, static)
 - [ ] D4 — Chunked terrain, streaming and LOD
 - [ ] D5 — The area manager and the connecting tunnel

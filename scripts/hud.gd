@@ -90,7 +90,9 @@ func _process(delta: float) -> void:
 		lines.append("drive %s%s   G  lon %+4.2f  lat %+4.2f" % [str(e["mode"]), diff_txt, _g_lon, _g_lat])
 	if time_trial != null:
 		var ti: Dictionary = time_trial.active_info()
-		lines.append("%-12s lap %s  last %s  best %s" % [ti["name"], _fmt_time(ti["lap"]), _fmt_time(ti["last"]), _fmt_time(ti["best"])])
+		# D2: "lap" only means something on a closed circuit. A point-to-point stage has a RUN.
+		var unit: String = "lap" if bool(ti.get("loop", true)) else "run"
+		lines.append("%-12s %s %s  last %s  best %s" % [ti["name"], unit, _fmt_time(ti["lap"]), _fmt_time(ti["last"]), _fmt_time(ti["best"])])
 	lines.append("")
 
 	var wheels: Array = car.get_wheels()

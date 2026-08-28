@@ -10,6 +10,7 @@ var car          # RigidBody3D
 var stage        # RallyStage (uses _road / _asphalt_r / _height / road_center)
 
 @export var samples := 1440           # samples per circuit centreline
+var centrelines: Array = []           # D2: 3x Centreline, set by world.gd (stage index order)
 @export var curv_min_dirt := 0.011    # rally loop corner threshold (1/m ~ 90 m radius)
 @export var curv_min_asph := 0.003    # asphalt ring threshold (big-radius street circuit -> gentler)
 @export var asph_sev_scale := 0.30    # asphalt corners are big-radius but FAST -> scale radius down for severity
@@ -37,27 +38,28 @@ func _ready() -> void:
 	layer = 6
 	_build_ui()
 	_init_tts()
-	if stage != null and stage.has_method("_road"):
-		_routes.append(_build_route(0, "RALLY LOOP", curv_min_dirt, 1.0))
-		if stage.has_method("_asphalt_r"):
-			_routes.append(_build_route(1, "ASPHALT RING", curv_min_asph, asph_sev_scale))
+	# D2: routes come from the shared Centreline per circuit, not from sampling theta here.
+	# NOTE the index convention differs from stage/time_trial on purpose-was-not: this file used
+	# 0=RALLY LOOP / 1=ASPHALT RING while stage._circuit_r uses 0=DIRT CIRCLE / 1=RALLY LOOP /
+	# 2=ASPHALT RING. Taking centrelines by stage index removes that second convention.
+	if centrelines.size() >= 3:
+		_routes.append(_build_route(centrelines[1], "RALLY LOOP", curv_min_dirt, 1.0))
+		_routes.append(_build_route(centrelines[2], "ASPHALT RING", curv_min_asph, asph_sev_scale))
 	if debug_print:
 		_dump()
 
 # ---------------------------------------------------------------- build a circuit's route + notes
 
-func _cl_radius(which: int, th: float) -> float:
-	return stage._asphalt_r(th) if which == 1 else stage._road(th)
-
-func _build_route(which: int, rname: String, cmin: float, sev_scale: float) -> Dictionary:
-	var center: Vector3 = stage.road_center
+func _build_route(cl: Centreline, rname: String, cmin: float, sev_scale: float) -> Dictionary:
+	# Take every stride-th centreline sample, which lands on exactly the positions this file used
+	# to compute itself - so the corner list is unchanged - while the road's SHAPE is now somebody
+	# else's problem. That is the whole re-parameterisation: _detect/_severity/_crest below are
+	# untouched, and a point-to-point stage reaches them through the same door.
+	var stride: int = maxi(1, cl.sample_count() / samples)
 	var pts := PackedVector3Array(); pts.resize(samples)
 	var elev := PackedFloat32Array(); elev.resize(samples)
 	for i in range(samples):
-		var th := TAU * float(i) / float(samples)
-		var r: float = _cl_radius(which, th)
-		var p := center + Vector3(cos(th), 0.0, sin(th)) * r
-		p.y = stage._height(p.x, p.z)
+		var p: Vector3 = cl.point_index(i * stride)
 		pts[i] = p
 		elev[i] = p.y
 	var arc := PackedFloat32Array(); arc.resize(samples)

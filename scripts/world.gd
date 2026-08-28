@@ -40,6 +40,8 @@ const TOD := [
 	{"name": "NIGHT",   "rot": Vector3(-46, -30, 0),  "col": Color(0.55, 0.65, 0.95), "energy": 0.30, "top": Color(0.02, 0.03, 0.09), "horizon": Color(0.08, 0.11, 0.20), "ambient": 0.4},
 ]
 
+var _circuit_cls: Array = []                  # D2: 3x Centreline, one per timed circuit
+
 func _ready() -> void:
 	Engine.max_fps = 144
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)    # smooth 60 on the built-in 60Hz panel (no tearing)
@@ -52,6 +54,12 @@ func _ready() -> void:
 	car.surface_source = stage                   # per-surface traction (asphalt grips > dirt > grass)
 	car.spawn_transform = stage.get_spawn()      # start on the road
 	car.respawn()
+	# D2: ONE centreline per circuit, built once and shared. 4320 samples is the common multiple
+	# that lets each consumer keep its OWN density by striding - pace_notes 1440 (x3), wear 1080
+	# (x4) - so they read exactly the points they used to compute from stage._road(theta) and their
+	# output is unchanged, while none of them knows the road is polar any more. That last part is
+	# the phase: D3 replaces the polar road and these consumers do not change.
+	_circuit_cls = _build_circuit_centrelines(stage)
 	var wn := _build_wear(car, stage)             # M6: surface degradation wraps grip_at (corners + braking zones)
 	_build_roughness(car, stage, wn)              # C1: procedural surface texture fed into the suspension raycast
 	_build_cameras(car)
@@ -66,7 +74,6 @@ func _ready() -> void:
 	_build_rearview(car)
 	_build_reactive_patch(car, stage)
 	_build_sound(car, stage)
-
 func _physics_process(delta: float) -> void:
 	if _car == null:
 		return
@@ -99,7 +106,8 @@ func _build_pacenotes(car: Node3D, stage) -> void:
 	var pn: CanvasLayer = load("res://scripts/pace_notes.gd").new()
 	pn.name = "PaceNotes"
 	pn.car = car
-	pn.stage = stage        # reads the road geometry to detect + call corners
+	pn.stage = stage        # still used for _height and the note trigger geometry
+	pn.centrelines = _circuit_cls   # D2: routes are built from the shared centrelines
 	add_child(pn)
 
 func _build_status_hud(car: Node3D) -> void:
@@ -123,11 +131,23 @@ func _build_component_hud(car: Node3D) -> void:
 	cl.add_child(ch)
 	add_child(cl)
 
+const CIRCUIT_SAMPLES := 4320                 # LCM(1440 pace notes, 1080 wear), and divisible by 3 sectors
+
+func _build_circuit_centrelines(stage) -> Array:
+	var out: Array = []
+	for which in range(3):
+		var rfn := func(th): return stage._circuit_r(which, th)
+		var hwfn := func(th): return stage._road_halfwidth(th)
+		out.append(Centreline.from_polar(stage.road_center, rfn, hwfn,
+			Callable(stage, "_height"), CIRCUIT_SAMPLES))
+	return out
+
 func _build_wear(car: Node3D, stage) -> Node:
 	var wn: Node = load("res://scripts/wear.gd").new()
 	wn.name = "Wear"
 	wn.car = car
 	wn.stage = stage
+	wn.centreline = _circuit_cls[1] if _circuit_cls.size() > 1 else null   # D2: the RALLY LOOP
 	add_child(wn)
 	car.surface_source = wn   # grip queries now flow through wear (which wraps stage.grip_at)
 	return wn
@@ -158,6 +178,8 @@ func _build_timetrial(car: Node3D, stage) -> Node3D:
 	tt.name = "TimeTrial"
 	tt.car = car            # records the best lap + replays a ghost to chase
 	tt.stage = stage        # for get_spawn_for() when toggling circuits
+	tt.centrelines = _circuit_cls          # D2: laps/sectors are arc-length triggers now
+	tt.build_triggers()
 	add_child(tt)
 	return tt
 

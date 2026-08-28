@@ -11,6 +11,7 @@ extends Node
 ## the actual driven path), not grid-aligned cells.
 
 var car
+var centreline: Centreline = null        # D2: the rally loop's shared Centreline, set by world.gd
 var stage
 
 @export var arc_samples := 1080          # centreline samples around the loop (finer along the path)
@@ -48,21 +49,41 @@ func _build_field() -> void:
 	_tracked = PackedByteArray(); _tracked.resize(arc_samples)
 	_wear = PackedFloat32Array(); _wear.resize(arc_samples * lat_bins)
 
+	# D2: the field's geometry now comes from the shared Centreline instead of calling
+	# stage._road(theta) here - so when D3 replaces the polar road with a generated one, this build
+	# does not change. The values are handed back VERBATIM (the radius each sample was built from,
+	# and its halfwidth), not recomputed, so the field is bit-identical to the pre-D2 one and
+	# C1's washboard mask - which IS this tracked field - does not move.
+	var stride: int = maxi(1, centreline.sample_count() / arc_samples) if centreline != null else 1
+	var loop: bool = centreline.is_loop() if centreline != null else true
 	var pts := PackedVector2Array(); pts.resize(arc_samples)
 	for i in range(arc_samples):
-		var th := TAU * float(i) / float(arc_samples)
-		var r: float = stage._road(th)           # rally loop centreline
+		var r: float
+		if centreline != null:
+			r = centreline.polar_radius_index(i * stride)
+			_hw[i] = centreline.halfwidth_index(i * stride)
+		else:
+			var th0 := TAU * float(i) / float(arc_samples)
+			r = stage._road(th0)
+			_hw[i] = stage._road_halfwidth(th0)
 		_road_r[i] = r
-		_hw[i] = stage._road_halfwidth(th)
+		var th := TAU * float(i) / float(arc_samples)
 		pts[i] = Vector2(cos(th) * r, sin(th) * r)
 
 	var seglen := PackedFloat32Array(); seglen.resize(arc_samples)
 	for i in range(arc_samples):
-		seglen[i] = pts[i].distance_to(pts[(i + 1) % arc_samples])
+		# An OPEN road has no segment leaving its last sample (§5 D2: the wrap-arounds become
+		# conditional on is_loop()).
+		if i == arc_samples - 1 and not loop:
+			seglen[i] = 0.0
+		else:
+			seglen[i] = pts[i].distance_to(pts[(i + 1) % arc_samples])
 
 	# mark corners by centreline curvature (|heading change| / segment length)
 	var corner := PackedByteArray(); corner.resize(arc_samples)
 	for i in range(arc_samples):
+		if not loop and (i == 0 or i == arc_samples - 1):
+			continue                          # open ends have no pair to difference
 		var a := pts[(i - 1 + arc_samples) % arc_samples]
 		var b := pts[i]
 		var c := pts[(i + 1) % arc_samples]
@@ -82,6 +103,8 @@ func _build_field() -> void:
 			var d := 0.0
 			var j := i
 			while d < brake_dist:
+				if not loop and j == 0:
+					break                     # the braking zone stops at the start of an open road
 				j = (j - 1 + arc_samples) % arc_samples
 				d += seglen[j]
 				_tracked[j] = 1

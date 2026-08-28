@@ -20,6 +20,69 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-28 (D2 — laps, notes and wear come off theta and onto arc length; a latent centreline trap measured)
+
+`time_trial.gd`'s `atan2` crossings and `RMIN`/`RMAX` radius bands are gone, replaced by
+**arc-length triggers on a per-circuit `Centreline`**: "did `nearest_point().s` cross this
+trigger, travelling forward, since the last tick?" `pace_notes.gd` and `wear.gd` now take their
+geometry from the same shared centrelines instead of sampling `theta` themselves. None of the three
+knows the road is polar any more, which is the entire point — D3 swaps the road out and they do not
+change. **AWAITING DRIVE VERDICT.**
+
+**Probe 1, timing equality — PASS, and stronger than asked.** §5 wanted lap/sector/split times to
+match "within one physics tick"; a synthetic kinematic path around all three circuits produced a
+**byte-identical event trace** (start, both splits, lap, on every circuit, every lap). The trick
+that makes it exact: **split positions are the arc lengths at the OLD theta-thirds, not equal
+thirds of the total.** Arc length is not uniform in theta on a winding road, so equal-s splits
+would have silently moved every sector boundary — the kind of change nobody notices until a
+personal best stops comparing.
+
+**Probes 2 + 3, pace-note and wear-field equality — PASS, bit-identical.** All 15 corners on both
+routes (index span, arc position, direction, severity, modifiers) and the whole wear field
+(245/1080 tracked samples, plus `_cell(x, z)` over a 1381-hit lattice) are unchanged. The wear
+field IS C1's washboard mask, so this also proves the ribbed line did not move.
+
+**Probe 4, open-road behaviour — PASS. This is the one that shows D2 bought something**, since
+every road in the game today is a loop and nothing else can exercise it. On a synthetic 1000 m open
+centreline: start fires once on entry, splits fire in order at 333/667 m, the finish fires at
+1000 m and **the run TERMINATES instead of wrapping** — verified by driving 200 m past the end with
+no second run beginning. `Centreline` gained an open topology (`from_points`, and every wrap-around
+in build / `point_at` / `nearest_point` is now conditional on `is_loop()`).
+
+**Real bug found by probe 1, worth remembering:** the split triggers fired *never*, because the
+port advanced `_prev_s` BEFORE the split check, so `_crossed()` always saw zero travel. The old
+detector could sit after its `_prev_theta` update because it read the current angle directly rather
+than a crossing. **Porting a level-test to an edge-test moves where in the tick it has to live.**
+
+**MEASURED WARNING for D3/D4 — two centrelines over the same road do NOT agree on `s`.** §6.2 calls
+a divergence here "the single most likely way Arc D silently breaks Arc C", so it was measured
+rather than assumed. C1's roughness centreline (4000 samples) vs D2's (4320) on the rally loop:
+
+| | value |
+|---|---|
+| total length | 1290.067717 vs 1290.067853 m — **agree to 0.14 mm** |
+| mean \|ds\| over 9000 positions | 0.0295 m (5% of a washboard wavelength) |
+| positions off by > 0.30 m (half a ridge) | **2.57%** |
+| worst case | **4.35 m = 7.2 ridges**, at (-100.3, -47.7) |
+
+The divergence is **bimodal, not a drift** — nearly all positions agree to millimetres, and a small
+minority jump by metres, because `nearest_point` resolves those to a *different segment* depending
+on sample density. So the reassuring total length is a trap: it says nothing about local phase.
+**C1 is untouched — the roughness centreline was deliberately NOT unified with D2's** — and it must
+not be unified without re-driving C1's washboard checklist. **The sharper warning is for D4:** if
+streaming or LOD ever varies centreline density, washboard ridges move under the driver at ~2.6% of
+the road, and the symptom would be *"the corrugation isn't where I learned it"* with nothing in the
+logs.
+
+**Also:** `active_info()` now reports topology and the HUD says **"lap" on a circuit, "run" on a
+point-to-point stage** (§5's wording item). Sector splits still derive from the legacy theta-thirds
+on the old map; a generated stage gets equal arc-length splits. `wear._cell()` deliberately keeps
+its polar radial-offset mapping — the general path belongs with the first non-polar road, and
+changing it now would move both the wear line and the washboard for no gain (plan §1.1: the
+existing map is the preserved calibration bed).
+
+---
+
 ## 2026-08-27 (D1 drive verdict: nothing moved — the ground map is in, and Arc D's foundation is verified)
 
 **USER DRIVE VERDICT: "goood all four hold" — D1 ACCEPTED.** All four checklist items pass on the

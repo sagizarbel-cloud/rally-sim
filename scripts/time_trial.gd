@@ -12,11 +12,19 @@ var stage   # RallyStage (for get_spawn_for on toggle)
 @export var sample_hz := 30.0                          # transform samples/sec recorded along a lap
 @export var ghost_color := Color(0.35, 0.8, 1.0, 0.34) # translucent cyan
 
-# circuits: index 0/1/2. RMIN/RMAX are the finish-ray radius bands (disjoint, so a crossing is unambiguous)
 const NAMES := ["DIRT CIRCLE", "RALLY LOOP", "ASPHALT RING"]
-const RMIN := [8.0, 100.0, 255.0]
-const RMAX := [92.0, 250.0, 365.0]
-const SECTORS := 3                                     # M10: split each lap into 3 sectors (by angle)
+const SECTORS := 3                                     # M10: split each run into 3 sectors
+
+# D2: how far off a circuit's centreline you can be and still be considered ON it. This replaces
+# the retired RMIN/RMAX finish-ray radius bands, which existed only because all three circuits
+# crossed the SAME theta=0 ray and radius was the only thing telling them apart. Each circuit now
+# has its own centreline and its own triggers, so there is no ambiguity left to resolve and this is
+# just a sanity bound. The values are the legacy bands restated as a corridor half-width
+# ((RMAX-RMIN)/2 per circuit), so a lap that timed before still times now.
+# D3 replaces this with the stage's own corridor width.
+const LAT_MAX := [42.0, 75.0, 55.0]
+
+var centrelines: Array = []                            # 3x Centreline, set by world.gd
 
 var _active := 1                                       # matches the startup spawn (the RALLY LOOP)
 
@@ -26,8 +34,10 @@ var _last := [0.0, 0.0, 0.0]
 
 # active-lap state (only the active circuit is timed/recorded)
 var _lap_t := 0.0
-var _prev_theta := 0.0
+var _prev_s := 0.0
+var _have_prev_s := false
 var _started := false
+var _trig: Array = []                                  # 3x [s_start, s_split1, s_split2] along the centreline
 var _accum := 0.0
 var _cur_t: PackedFloat32Array = PackedFloat32Array()
 var _cur_p: PackedVector3Array = PackedVector3Array()
@@ -55,11 +65,15 @@ func _ready() -> void:
 
 func active_info() -> Dictionary:
 	# for the HUD to display the active circuit's timing
+	var loop := true
+	if _active < centrelines.size() and centrelines[_active] != null:
+		loop = bool((centrelines[_active] as Centreline).is_loop())
 	return {
 		"name": NAMES[_active],
 		"lap": _lap_t if _started else 0.0,
 		"last": _last[_active],
 		"best": _best[_active]["time"],
+		"loop": loop,          # D2: a closed circuit runs LAPS, a point-to-point stage is a RUN
 	}
 
 # ---------------------------------------------------------------- ghost mesh
@@ -102,8 +116,15 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_just_pressed("reset"):
 		_reset_lap(cp)                                  # keep every circuit's best; ghost survives
 
-	var rho := sqrt(cp.x * cp.x + cp.z * cp.z)
-	var theta := atan2(cp.z, cp.x)
+	# D2: where am I ALONG this circuit? One query replaces the polar pair (rho, theta), and it is
+	# the only thing the detector below knows about the road - which is what lets a point-to-point
+	# stage use the same code (docs/PLAN-stages-ground-map.md §5 Phase D2).
+	var cl: Centreline = centrelines[_active] if _active < centrelines.size() else null
+	if cl == null:
+		return
+	var np := cl.nearest_point(cp.x, cp.z)
+	var s: float = np["s"]
+	var on_circuit: bool = absf(float(np["lateral"])) <= LAT_MAX[_active]
 	_lap_t += delta
 
 	if _started:
@@ -114,38 +135,91 @@ func _physics_process(delta: float) -> void:
 			_cur_p.append(cp)
 			_cur_q.append(car.global_transform.basis.get_rotation_quaternion())
 
-	# finish-line crossing for the ACTIVE circuit's band. First crossing after spawn/reset starts timing
-	# (no debounce); later crossings need >4 s to complete a lap.
-	if rho > RMIN[_active] and rho < RMAX[_active] and _prev_theta < 0.0 and theta >= 0.0 and theta < 0.6:
-		if not _started:
-			_started = true
+	# START / FINISH trigger. On a LOOP these are the same s and the run repeats (today's
+	# behaviour). On an OPEN road the finish is the far end and the run TERMINATES there - see
+	# _finish_trigger(). First crossing after spawn/reset starts timing (no debounce); later
+	# crossings need >4 s to complete a lap.
+	var loop := cl.is_loop()
+	if on_circuit and not _started and _crossed(cl, s, _trig[_active][0]):
+		_started = true
+		_begin_run()
+	if on_circuit and _started and _lap_t > 4.0 and _crossed(cl, s, _finish_trigger(cl)):
+		_record_sector(_cur_sector, _lap_t - _sector_start_t)       # final sector of the run
+		_finish_lap()
+		if loop:
+			_begin_run()                                            # a lap rolls straight into the next
+		else:
+			_started = false                                        # an open road ENDS - no wrap
 			_lap_t = 0.0
-			_accum = 0.0
-			_pb = 0
-			_cur_sector = 0
-			_sector_start_t = 0.0
-			_clear_cur()
-		elif _lap_t > 4.0:
-			_record_sector(_cur_sector, _lap_t - _sector_start_t)   # final sector of the lap
-			_finish_lap()
-			_lap_t = 0.0
-			_accum = 0.0
-			_pb = 0
-			_cur_sector = 0
-			_sector_start_t = 0.0
-			_clear_cur()
-	_prev_theta = theta
+	# mid-run split triggers (sectors 1 and 2; sector 0's boundary IS the start/finish above).
+	# NOTE the ordering: this must run BEFORE _prev_s is advanced, because _crossed() compares this
+	# tick's s against the PREVIOUS one. The old detector could sit after the theta update because
+	# it read the current angle directly instead of a crossing.
+	if _started and on_circuit:
+		for k in range(1, SECTORS):
+			if _crossed(cl, s, _trig[_active][k]) and _cur_sector == k - 1:
+				_record_sector(_cur_sector, _lap_t - _sector_start_t)
+				_sector_start_t = _lap_t
+				_cur_sector = k
 
-	# mid-lap sector boundaries (crossing into sector 1 or 2; the theta=0 boundary is the finish above)
-	if _started and rho > RMIN[_active] and rho < RMAX[_active]:
-		var sec := int(fposmod(theta, TAU) / (TAU / float(SECTORS))) % SECTORS
-		if sec == (_cur_sector + 1) % SECTORS and sec != 0:
-			_record_sector(_cur_sector, _lap_t - _sector_start_t)
-			_sector_start_t = _lap_t
-			_cur_sector = sec
+	_prev_s = s
+	_have_prev_s = true
 
 	_flash = maxf(0.0, _flash - delta)
-	_update_ghost(cp, rho)
+	_update_ghost(cp, float(np["lateral"]))
+
+# ---------------------------------------------------------------- arc-length triggers (D2)
+
+func build_triggers() -> void:
+	## Split positions are the arc lengths at the OLD theta-thirds, not equal thirds of the total.
+	## That distinction is the whole reason sector times survive the rewrite: arc length is not
+	## uniform in theta on a winding road, so equal-s thirds would silently move every split.
+	## A generated point-to-point stage has no theta and gets equal-s splits instead.
+	_trig.clear()
+	for i in range(centrelines.size()):
+		var cl: Centreline = centrelines[i]
+		var t: Array = [0.0]
+		var n := cl.sample_count()
+		for k in range(1, SECTORS):
+			if cl.is_loop() and n % SECTORS == 0:
+				t.append(cl.s_index(n * k / SECTORS))      # exact legacy boundary
+			else:
+				t.append(cl.length() * float(k) / float(SECTORS))
+		_trig.append(t)
+
+func _finish_trigger(cl: Centreline) -> float:
+	# A loop finishes where it starts; an open road finishes at its far end.
+	return 0.0 if cl.is_loop() else cl.length()
+
+func _crossed(cl: Centreline, s: float, trig: float) -> bool:
+	## Did we pass this trigger, travelling FORWARD, between the last tick and this one?
+	## Topology-agnostic by construction, which is the point - no wrap ray, no radius band.
+	if not _have_prev_s:
+		return false
+	var L := cl.length()
+	if not cl.is_loop():
+		# An open road's s CLAMPS to [0, L], so nothing is ever at a negative s and a start trigger
+		# at s = 0 could never be crossed from below. Entering the road IS the crossing: leaving
+		# the clamp is what starts the run.
+		if trig <= 0.0:
+			return _prev_s <= 0.0 and s > 0.0
+		return _prev_s < trig and s >= trig
+	# On a loop, work in forward distance travelled since the last tick. The half-length guard
+	# rejects a respawn/teleport (and any backwards motion) the way the old detector's
+	# `theta < 0.6` window did.
+	var d := fposmod(s - _prev_s, L)
+	if d <= 0.0 or d > L * 0.5:
+		return false
+	var to_trig := fposmod(trig - _prev_s, L)
+	return to_trig > 0.0 and to_trig <= d
+
+func _begin_run() -> void:
+	_lap_t = 0.0
+	_accum = 0.0
+	_pb = 0
+	_cur_sector = 0
+	_sector_start_t = 0.0
+	_clear_cur()
 
 func _switch_circuit(which: int) -> void:
 	_active = which
@@ -166,7 +240,13 @@ func _reset_lap(cp: Vector3) -> void:
 	_cur_sector = 0
 	_sector_start_t = 0.0
 	_clear_cur()
-	_prev_theta = atan2(cp.z, cp.x)     # avoid a false crossing right after the teleport
+	# Seed the arc-length cursor from where we actually are, so the teleport itself is not read
+	# as a forward crossing on the next tick.
+	_have_prev_s = false
+	if _active < centrelines.size() and centrelines[_active] != null:
+		var cl: Centreline = centrelines[_active]
+		_prev_s = float(cl.nearest_point(cp.x, cp.z)["s"])
+		_have_prev_s = true
 
 func _record_sector(s: int, t: float) -> void:
 	if t < 1.0:
@@ -203,7 +283,7 @@ func _clear_cur() -> void:
 
 # ---------------------------------------------------------------- ghost playback + delta
 
-func _update_ghost(cp: Vector3, rho: float) -> void:
+func _update_ghost(cp: Vector3, lateral: float) -> void:
 	if _ghost == null:
 		return
 	var b: Dictionary = _best[_active]
@@ -224,7 +304,7 @@ func _update_ghost(cp: Vector3, rho: float) -> void:
 	_ghost.global_transform = _pose_at(tt, bt, bp, bq, n)
 
 	# time delta vs the ghost at our current position (only meaningful while on the active circuit's band)
-	if rho > RMIN[_active] - 6.0 and rho < RMAX[_active] + 6.0:
+	if absf(lateral) <= LAT_MAX[_active] + 6.0:
 		var ni := 0
 		var bd := 1e18
 		for i in range(n):
