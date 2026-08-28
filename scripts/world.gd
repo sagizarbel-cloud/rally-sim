@@ -40,7 +40,8 @@ const TOD := [
 	{"name": "NIGHT",   "rot": Vector3(-46, -30, 0),  "col": Color(0.55, 0.65, 0.95), "energy": 0.30, "top": Color(0.02, 0.03, 0.09), "horizon": Color(0.08, 0.11, 0.20), "ambient": 0.4},
 ]
 
-var _circuit_cls: Array = []                  # D2: 3x Centreline, one per timed circuit
+var _circuit_cls: Array = []                  # D2/D3: one Centreline per timed circuit + the stage
+var _stage_area: StageArea = null            # D3: the generated SHAKEDOWN stage
 
 func _ready() -> void:
 	Engine.max_fps = 144
@@ -60,6 +61,8 @@ func _ready() -> void:
 	# output is unchanged, while none of them knows the road is polar any more. That last part is
 	# the phase: D3 replaces the polar road and these consumers do not change.
 	_circuit_cls = _build_circuit_centrelines(stage)
+	_stage_area = _build_stage_area(stage)        # D3: the generated SHAKEDOWN stage, its own area
+	_circuit_cls.append(_stage_area.gen.centreline)
 	var wn := _build_wear(car, stage)             # M6: surface degradation wraps grip_at (corners + braking zones)
 	_build_roughness(car, stage, wn)              # C1: procedural surface texture fed into the suspension raycast
 	_build_cameras(car)
@@ -133,6 +136,37 @@ func _build_component_hud(car: Node3D) -> void:
 
 const CIRCUIT_SAMPLES := 4320                 # LCM(1440 pace notes, 1080 wear), and divisible by 3 sectors
 
+func _build_stage_area(stage) -> StageArea:
+	## D3: generate a stage from parameters and build it as its own area. §1.1 - the legacy map is
+	## untouched; this is purely additive. The ground map takes it as an extra LAYER, which is why
+	## nothing in stage.gd, sound.gd, effects.gd, roughness.gd or wear.gd needed changing for the
+	## car to grip, sound and throw dust correctly on a road none of them knew about.
+	var sdef := StageDef.new()
+	var g := StageGen.new(sdef)
+	g.generate()
+	var area := StageArea.new()
+	area.name = "ShakedownStage"
+	area.gen = g
+	area.def = sdef
+	add_child(area)
+	stage.ground_map.areas.append(area)
+	return area
+
+func _wire_stage_area_live(area: StageArea, car: Node3D, tt: Node) -> void:
+	# live stage-parameter edits: rebuild, then re-point everything that holds the old centreline
+	area.car = car
+	area.regenerated.connect(func():
+		_circuit_cls[3] = area.gen.centreline
+		tt.centrelines = _circuit_cls
+		tt.build_triggers()
+		var pn := get_node_or_null("PaceNotes")
+		if pn != null:
+			pn.centrelines = _circuit_cls
+			pn.rebuild_routes()
+		if tt._active == 3:
+			car.spawn_transform = area.spawn_transform()
+			car.respawn())
+
 func _build_circuit_centrelines(stage) -> Array:
 	var out: Array = []
 	for which in range(3):
@@ -179,7 +213,9 @@ func _build_timetrial(car: Node3D, stage) -> Node3D:
 	tt.car = car            # records the best lap + replays a ghost to chase
 	tt.stage = stage        # for get_spawn_for() when toggling circuits
 	tt.centrelines = _circuit_cls          # D2: laps/sectors are arc-length triggers now
+	tt.area = _stage_area                  # D3: SHAKEDOWN spawns on its own start line
 	tt.build_triggers()
+	_wire_stage_area_live(_stage_area, car, tt)
 	add_child(tt)
 	return tt
 

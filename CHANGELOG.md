@@ -20,6 +20,121 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-28 (D3 — SHAKEDOWN: the first road in this project that nobody drew, and three road-design constraints that had to be discovered the hard way)
+
+Arc D generates a stage. `StageDef` describes one as PARAMETERS (seed, length, sinuosity, elevation
+character, design speed, width profile, authored control points); `StageGen` solves geometry from
+them; `StageArea` builds it as its own area well clear of the legacy map (§1.1 - the calibration bed
+stays untouched). It appears as **SHAKEDOWN**, the fourth `[B]` entry, and it is a point-to-point
+ROUTE, not a circuit. **AWAITING DRIVE VERDICT.**
+
+**What D1 and D2 bought, made concrete.** The generated stage grips, sounds, throws dust, lays wear
+and gets pace notes **without one line changing** in `stage.gd`, `sound.gd`, `effects.gd`,
+`roughness.gd` or `wear.gd`. The ground map took it as one extra LAYER; pace notes took it as one
+more `Centreline`. Two refactor phases that changed nothing you could feel are why this phase is
+additive rather than invasive - and SHAKEDOWN is also the first thing to actually exercise D2's
+open-road timing in the game rather than in a probe.
+
+**Probe 1, determinism - PASS.** Same seed, bit-identical centreline; different seed, different
+road. Same stage twice is the same stage (§1.3).
+
+**Probe 2, geometric sanity - PASS on every seed**, but only after three real defects, each found by
+the probe and each a lesson worth keeping:
+
+1. **A 60 km/h design speed was geometrically impossible and the generator could not say so.**
+   R = V^2/(127(e+f)) puts the minimum radius at 123 m, and one 180-degree turn then costs 387 m of
+   road - so 1200 m of road inside a 720 m box would spend two thirds of the stage on two U-turns.
+   The relaxation ran its full pass budget every time and shipped a road with 12 m corners against
+   its own 123 m limit. **A tighter design speed buys BOTH length and corner count**: at 30 km/h
+   (R = 30.8 m, a normal narrow forest road) the same box holds 1200 m with ~7 corners. Raising the
+   design speed makes a stage STRAIGHTER and SHORTER, never faster.
+2. **A free heading walk tied knots.** With no sense of progress the route doubled back and crossed
+   itself, and easing a corner open cannot untie a knot. Rebuilt as a bounded lateral offset along a
+   straight SPINE between start and finish: parameterised monotonically, that is a GRAPH over the
+   spine and **cannot self-intersect at all** - the property is structural, not tested-for. A stage
+   is a route from A to B, and building it that way is what makes it one.
+3. **The relaxation was relaxing the wrong thing.** It smoothed the DENSE spline samples (1.2 m
+   apart) while its own comment claimed it relaxed the control polygon; moving a 1.2 m point barely
+   changes curvature measured across its neighbours, so it took hundreds of passes to achieve
+   nothing. Relaxing the 22 m polygon and refitting converges in 7-14 passes.
+
+Final geometry, three seeds: length 1099-1168 m against a 1200 m target, **worst radius 30.9-31.5 m
+against the 30.8 m limit with zero over-limit samples**, zero self-intersections, worst heading step
+3.4 deg, and authored control points hit to **0.000 m**. Length is a target and the constraint set
+is hard - where they conflict, the constraints win and the road comes out slightly short.
+
+**Probe 3, the pace-note grammar test (§3.6's "real acceptance test") - PASS.** `pace_notes.gd`
+reads the generated road as a road book:
+
+    12 m RIGHT 2 | 88 m LEFT 3 long | 252 m RIGHT 2 long | 437 m LEFT 3 long
+    622 m RIGHT 2 long | 777 m LEFT 2 long crest | 877 m RIGHT 2 long crest | 999 m LEFT 3 long crest
+
+8 corners over 1129 m (7.1/km, against the rally loop's 9 over 1290 m), **4 left / 4 right**, mean
+gap 57 m, two severity bands. **Honest limitation:** severity clusters, because the relaxation drives
+every corner to the constraint boundary so they all read alike. A character envelope (slow sections
+of open sweepers alternating with tight technical sections) took it from 7x sev2 + 2x sev3 to
+5x + 3x, which is better but not a road book's full 1-6 range. **The lever for a future phase is a
+design speed that VARIES along the stage** - which is what real roads have.
+
+**Probe 4, vertical budget (§8.2) - and this one nearly shipped a stage that would have destroyed
+the car.** Measured as the INPUT rather than the response: the vertical acceleration a wheel sees is
+`a = v^2 * d2y/ds^2`, so comparing `d2y/ds^2` between two roads compares their severity at equal
+speed with no driver in the loop.
+
+| | rally loop (B3 bed) | SHAKEDOWN, grade limit only | SHAKEDOWN shipped |
+|---|---|---|---|
+| max grade | 20.68% | 12.00% | 10.13% |
+| d2y/ds2 rms | 0.00290 | 0.01017 (**3.5x**) | 0.00182 (0.63x) |
+| d2y/ds2 max | 0.01195 | 0.11034 (**9.2x**) | 0.01224 (1.02x) |
+| peak wheel accel @108 km/h | 1.10 g | **10.12 g** | 1.12 g |
+
+**The middle column is the trap: a road that was GENTLER than the rally loop by every slope measure
+and nine times worse by the measure that matters.** Limiting the grade clamps the slope, and a clamp
+leaves a CORNER where it stops biting - a kink is a curvature spike. Real roads join their grades
+with parabolic vertical curves sized so vertical acceleration stays comfortable at the design speed
+(AASHTO, ~0.3 m/s^2), and adding that constraint brought the peak input to **1.02x the rally loop**.
+Two constraints, and the vertical one only looks redundant until you measure the second derivative.
+
+**Also worth recording, because it cost real time:** three different algorithms were tried for grade
+limiting before the right one. Laplacian smoothing is a diffusion process (relaxing a run of k
+samples costs O(k^2) passes - 256 passes left 24.6% against a 12% limit); splitting each violating
+segment's excess between its endpoints is a valid convex projection but Gauss-Seidel-slow (1024
+passes left 18.7%). The standard slope-limited forward/backward sweep is **exact in four sweeps**:
+min-clamping gives the highest feasible profile (pure cut), max-clamping the lowest (pure fill), and
+since the feasible set is convex their average is feasible too - and averaging balances cut against
+fill instead of only digging. Earthworks come out at 3.0-3.8 m of cut and fill, which is what makes
+the road read as built rather than painted on.
+
+**Two smaller bugs the probes caught:** `Centreline`'s spline had degenerate first and last segments
+(centripetal Catmull-Rom needs phantom endpoints; clamping them collapses the knot spacing), leaving
+a single 22 m gap in an otherwise 1.2 m polyline - which then broke the grade limiter, since it
+smooths against neighbours and cannot cope with a 20x spacing jump. And building the area asked
+`nearest_point()` about all 103k terrain vertices, most of them hundreds of metres from the road
+where the now-provably-correct ring search expands ~38 rings before it can stop; a coarse corridor
+occupancy mask takes the build from minutes back to instant.
+
+**Cost.** The extra ground-map layer is free on the legacy map - **2.38 us/call, unchanged**, because
+a box test rejects every query before any centreline work. Inside the generated area it is
+5.16 us/call = **0.272 ms/tick at D1's measured 52.8 calls/tick, 15% of the 1.84 ms budget.**
+
+**Deferred, and said plainly:** §5 asks probe 4 for peak Fz and bottomed-frame count from a driven
+lap. The synthetic autopilot written for it could not drive either road representatively - the RALLY
+LOOP reference run spent **1103 of 2400 frames off the road**, and on SHAKEDOWN it managed 19 m in
+20 s - so rather than publish a number produced by a bad driver, that half goes to the drive test.
+C1.4 recorded the same limitation about its own autopilot.
+
+**Not built, by design:** the heightmap-import seam is DESIGNED per §5 (`StageDef.elevation_source`;
+every elevation read in the generator goes through `elevation_at()`, so swapping in a DEM is a
+one-place change) but there is no importer. Hydraulic erosion (§3.3) stays a named seam too - it is
+a global iterative process and §3.3's own resolution is to bake it per seed into area data, which
+belongs with D5.
+
+Stage parameters are live on the Tab panel (**Stage seed / sinuosity / elevation / design speed**);
+editing one rebuilds the stage about half a second after you stop dragging, and re-points timing and
+pace notes at the new road.
+
+---
+
 ## 2026-08-28 (drive verdict on both fixes: ACCEPTED — and a new one found: "tyre audio only plays when I pull the handbrake")
 
 **USER DRIVE VERDICT: "all read correctly".** The tyre-audio surface fix and the

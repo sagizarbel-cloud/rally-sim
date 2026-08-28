@@ -805,7 +805,36 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   ms/tick for 4 wheels against the 1.84 ms budget. Lap/sector/split times verified byte-identical
   against D2's saved baseline. **So D4 is no longer constrained on this point** — density may vary
   with streaming/LOD. Full numbers in `CHANGELOG.md` 2026-08-28.
-- [ ] D3 — The stage generator: parameters + control points (short, static)
+- [ ] D3 — The stage generator: parameters + control points — **BUILT AND PROBE-VERIFIED
+  2026-08-28, AWAITING DRIVE VERDICT.** `stage_def.gd` (StageDef), `stage_gen.gd` (StageGen),
+  `stage_area.gd` (StageArea, its own area per §1.1). Appears as **SHAKEDOWN**, the fourth `[B]`
+  entry, and is a point-to-point ROUTE - the first thing in the game to exercise D2's open-road
+  timing. Probes 1 (determinism), 2 (geometric sanity), 3 (pace-note grammar) all PASS; probe 4
+  measured as vertical INPUT (see below).
+  **DEVIATION from §5's file list:** the stage is built as its own node rather than inside
+  `stage.gd`, because D5's area manager loads and unloads whole areas and folding it into stage.gd
+  would have to be undone.
+  **THREE ROAD-DESIGN FINDINGS worth not rediscovering:**
+  (a) A 60 km/h design speed is geometrically impossible here - R = 123 m makes one U-turn cost
+  387 m of a 1200 m stage. 30 km/h (R = 30.8 m) fits 1200 m with ~7 corners in the same box. A
+  tighter design speed buys BOTH length and corner count; raising it makes a stage straighter and
+  shorter, never faster.
+  (b) A free heading walk self-intersects. Building the road as a bounded lateral offset along a
+  straight start-to-finish SPINE makes it a graph over that spine, so it CANNOT self-intersect -
+  structural, not tested-for.
+  (c) **Grade limiting alone made the road far WORSE.** Clamping slope leaves a kink, and a kink is
+  a curvature spike: the grade-limited stage was gentler than the rally loop by every slope measure
+  and **9.2x worse in peak d2y/ds2 - 10.12 g of wheel acceleration at 108 km/h**. Adding AASHTO's
+  vertical-curve comfort constraint (~0.3 m/s^2 at design speed) brought it to 1.02x the rally loop.
+  A road needs BOTH constraints; the vertical one looks redundant until the second derivative is
+  measured.
+  **Probe 4 is half-deferred:** peak Fz and bottomed-frame count need a driven lap, and the
+  synthetic autopilot could not drive either road representatively (the RALLY LOOP reference spent
+  1103/2400 frames off the road). Measured the vertical INPUT instead, which needs no driver. The
+  Fz half goes to the drive test.
+  **Open for a later phase:** corner severity clusters at the constraint boundary (2 bands, not a
+  road book's 1-6). The lever is a design speed that VARIES along the stage, which is what real
+  roads have. Full numbers in `CHANGELOG.md` 2026-08-28.
 - [ ] D4 — Chunked terrain, streaming and LOD
 - [ ] D5 — The area manager and the connecting tunnel
 - [ ] D6 — Mixed-surface transitions

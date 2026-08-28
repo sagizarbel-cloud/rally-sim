@@ -10,7 +10,12 @@ var car          # RigidBody3D
 var stage        # RallyStage (uses _road / _asphalt_r / _height / road_center)
 
 @export var samples := 1440           # samples per circuit centreline
-var centrelines: Array = []           # D2: 3x Centreline, set by world.gd (stage index order)
+var centrelines: Array = []           # D2: one Centreline per circuit, set by world.gd (stage order)
+# D3: a route no longer has to be `samples` points long, nor closed. The generated stage is an OPEN
+# road with its own sample count, so detection reads these instead of the export and never wraps
+# past an end that does not exist.
+var _rn := 0
+var _rloop := true
 @export var curv_min_dirt := 0.011    # rally loop corner threshold (1/m ~ 90 m radius)
 @export var curv_min_asph := 0.003    # asphalt ring threshold (big-radius street circuit -> gentler)
 @export var asph_sev_scale := 0.30    # asphalt corners are big-radius but FAST -> scale radius down for severity
@@ -38,13 +43,25 @@ func _ready() -> void:
 	layer = 6
 	_build_ui()
 	_init_tts()
+	rebuild_routes()
+
+func rebuild_routes() -> void:
+	## D3: also called when the SHAKEDOWN stage is regenerated from the Tab panel, so the co-driver
+	## is never reading notes for a road that no longer exists.
 	# D2: routes come from the shared Centreline per circuit, not from sampling theta here.
-	# NOTE the index convention differs from stage/time_trial on purpose-was-not: this file used
-	# 0=RALLY LOOP / 1=ASPHALT RING while stage._circuit_r uses 0=DIRT CIRCLE / 1=RALLY LOOP /
-	# 2=ASPHALT RING. Taking centrelines by stage index removes that second convention.
+	# NOTE the index convention differs from stage/time_trial: this file used 0=RALLY LOOP /
+	# 1=ASPHALT RING while stage._circuit_r uses 0=DIRT CIRCLE / 1=RALLY LOOP / 2=ASPHALT RING.
+	# Taking centrelines by stage index removes that second convention.
+	_routes.clear()
 	if centrelines.size() >= 3:
 		_routes.append(_build_route(centrelines[1], "RALLY LOOP", curv_min_dirt, 1.0))
 		_routes.append(_build_route(centrelines[2], "ASPHALT RING", curv_min_asph, asph_sev_scale))
+	# D3: the generated stage. It reaches corner detection through exactly the same door as the two
+	# polar circuits, because D2 made _build_route take a Centreline - which is the whole reason
+	# that phase existed. Its note list is the generator's real acceptance test (§3.6).
+	if centrelines.size() >= 4 and centrelines[3] != null:
+		_routes.append(_build_route(centrelines[3], "SHAKEDOWN", curv_min_dirt, 1.0))
+	_active = -1
 	if debug_print:
 		_dump()
 
@@ -56,38 +73,50 @@ func _build_route(cl: Centreline, rname: String, cmin: float, sev_scale: float) 
 	# else's problem. That is the whole re-parameterisation: _detect/_severity/_crest below are
 	# untouched, and a point-to-point stage reaches them through the same door.
 	var stride: int = maxi(1, cl.sample_count() / samples)
-	var pts := PackedVector3Array(); pts.resize(samples)
-	var elev := PackedFloat32Array(); elev.resize(samples)
-	for i in range(samples):
-		var p: Vector3 = cl.point_index(i * stride)
+	var count: int = cl.sample_count() / stride
+	_rn = count
+	_rloop = cl.is_loop()
+	var pts := PackedVector3Array(); pts.resize(count)
+	var elev := PackedFloat32Array(); elev.resize(count)
+	for i in range(count):
+		var p: Vector3 = cl.point_index(mini(i * stride, cl.sample_count() - 1))
 		pts[i] = p
 		elev[i] = p.y
-	var arc := PackedFloat32Array(); arc.resize(samples)
+	var arc := PackedFloat32Array(); arc.resize(count)
 	var s := 0.0
-	for i in range(samples):
+	for i in range(count):
 		arc[i] = s
+		if i == count - 1 and not _rloop:
+			break                          # an open road ends here; there is no closing segment
 		var a := pts[i]
-		var b := pts[(i + 1) % samples]
+		var b := pts[_idx(i + 1)]
 		s += Vector2(b.x - a.x, b.z - a.z).length()
 	var corners := _detect(pts, arc, elev, s, cmin, sev_scale)
 	return {"name": rname, "pts": pts, "arc": arc, "elev": elev, "total": s, "corners": corners}
 
+func _idx(i: int) -> int:
+	## Wrap on a closed circuit, CLAMP on an open stage. A point-to-point road has no sample after
+	## its last one, and pretending otherwise invents a corner joining the finish to the start.
+	if _rloop:
+		return ((i % _rn) + _rn) % _rn
+	return clampi(i, 0, _rn - 1)
+
 func _heading_at(pts: PackedVector3Array, i: int) -> Vector2:
 	var a := pts[i]
-	var b := pts[(i + 1) % samples]
+	var b := pts[_idx(i + 1)]
 	return Vector2(b.x - a.x, b.z - a.z).normalized()
 
 func _seg_len_at(pts: PackedVector3Array, i: int) -> float:
 	var a := pts[i]
-	var b := pts[(i + 1) % samples]
+	var b := pts[_idx(i + 1)]
 	return Vector2(b.x - a.x, b.z - a.z).length()
 
 func _detect(pts: PackedVector3Array, arc: PackedFloat32Array, elev: PackedFloat32Array, total: float, cmin: float, sev_scale: float) -> Array:
-	var kappa := PackedFloat32Array(); kappa.resize(samples)   # signed curvature rad/m
-	var turn := PackedFloat32Array(); turn.resize(samples)     # signed heading change rad (+ = left)
-	for i in range(samples):
+	var kappa := PackedFloat32Array(); kappa.resize(_rn)   # signed curvature rad/m
+	var turn := PackedFloat32Array(); turn.resize(_rn)     # signed heading change rad (+ = left)
+	for i in range(_rn):
 		var h0 := _heading_at(pts, i)
-		var h1 := _heading_at(pts, (i + 1) % samples)
+		var h1 := _heading_at(pts, _idx(i + 1))
 		var cross := h0.y * h1.x - h0.x * h1.y
 		var dot := clampf(h0.dot(h1), -1.0, 1.0)
 		var dphi := atan2(cross, dot)
@@ -96,11 +125,11 @@ func _detect(pts: PackedVector3Array, arc: PackedFloat32Array, elev: PackedFloat
 
 	var raw: Array = []
 	var i := 0
-	while i < samples:
+	while i < _rn:
 		if absf(kappa[i]) >= cmin:
 			var j := i
 			var sign_i := signf(kappa[i])
-			while j + 1 < samples and absf(kappa[j + 1]) >= cmin and signf(kappa[j + 1]) == sign_i:
+			while j + 1 < _rn and absf(kappa[j + 1]) >= cmin and signf(kappa[j + 1]) == sign_i:
 				j += 1
 			raw.append({"a": i, "b": j})
 			i = j + 1
@@ -169,7 +198,7 @@ func _severity(radius: float) -> int:
 	return 6
 
 func _crest(elev: PackedFloat32Array, a: int, b: int) -> bool:
-	var lo := (a - 6 + samples) % samples
+	var lo := _idx(a - 6)
 	var n := (b - a) + 12
 	var maxh := -1e9
 	var maxpos := -1
@@ -178,9 +207,9 @@ func _crest(elev: PackedFloat32Array, a: int, b: int) -> bool:
 		if elev[k] > maxh:
 			maxh = elev[k]
 			maxpos = s
-		k = (k + 1) % samples
+		k = _idx(k + 1)
 	var h_start: float = elev[lo]
-	var h_end: float = elev[(lo + n - 1) % samples]
+	var h_end: float = elev[_idx(lo + n - 1)]
 	var interior := maxpos > 1 and maxpos < n - 2
 	return interior and (maxh - h_start) > crest_prom and (maxh - h_end) > crest_prom
 
@@ -234,7 +263,7 @@ func _process(delta: float) -> void:
 	var best_j := 0
 	for ri in range(_routes.size()):
 		var rpts: PackedVector3Array = _routes[ri]["pts"]
-		for i in range(samples):
+		for i in range(rpts.size()):
 			var d := Vector2(cp.x - rpts[i].x, cp.z - rpts[i].z).length_squared()
 			if d < best_d:
 				best_d = d

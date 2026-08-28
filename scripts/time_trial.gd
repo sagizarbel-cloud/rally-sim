@@ -12,7 +12,10 @@ var stage   # RallyStage (for get_spawn_for on toggle)
 @export var sample_hz := 30.0                          # transform samples/sec recorded along a lap
 @export var ghost_color := Color(0.35, 0.8, 1.0, 0.34) # translucent cyan
 
-const NAMES := ["DIRT CIRCLE", "RALLY LOOP", "ASPHALT RING"]
+# D3: SHAKEDOWN is the generated point-to-point stage - the first ROUTE in a project that until now
+# had only closed circuits, and the first thing to actually exercise D2's open-road timing path
+# (start once, splits in order, finish TERMINATES the run). The three circuits keep their canon.
+const NAMES := ["DIRT CIRCLE", "RALLY LOOP", "ASPHALT RING", "SHAKEDOWN"]
 const SECTORS := 3                                     # M10: split each run into 3 sectors
 
 # D2: how far off a circuit's centreline you can be and still be considered ON it. This replaces
@@ -22,15 +25,16 @@ const SECTORS := 3                                     # M10: split each run int
 # just a sanity bound. The values are the legacy bands restated as a corridor half-width
 # ((RMAX-RMIN)/2 per circuit), so a lap that timed before still times now.
 # D3 replaces this with the stage's own corridor width.
-const LAT_MAX := [42.0, 75.0, 55.0]
+const LAT_MAX := [42.0, 75.0, 55.0, 30.0]
 
-var centrelines: Array = []                            # 3x Centreline, set by world.gd
+var centrelines: Array = []                            # one Centreline per entry, set by world.gd
+var area                                               # D3: StageArea for the generated stage
 
 var _active := 1                                       # matches the startup spawn (the RALLY LOOP)
 
 # per-circuit best + last-lap time
 var _best: Array = []                                  # 3x {t:PackedFloat32Array, p:PackedVector3Array, q:Array, time:float}
-var _last := [0.0, 0.0, 0.0]
+var _last: Array = []                                  # per-entry last time; sized from NAMES in _ready
 
 # active-lap state (only the active circuit is timed/recorded)
 var _lap_t := 0.0
@@ -55,7 +59,9 @@ var _delta_label: Label
 var _msg_label: Label
 
 func _ready() -> void:
-	for i in range(3):
+	_last.resize(NAMES.size())
+	for i in range(NAMES.size()):
+		_last[i] = 0.0
 		_best.append({"t": PackedFloat32Array(), "p": PackedVector3Array(), "q": [], "time": 0.0})
 		_best_sector.append([0.0, 0.0, 0.0])
 	_build_ui()
@@ -111,7 +117,7 @@ func _physics_process(delta: float) -> void:
 	var cp: Vector3 = car.global_position
 
 	if Input.is_action_just_pressed("circuit_toggle"):
-		_switch_circuit((_active + 1) % 3)
+		_switch_circuit((_active + 1) % NAMES.size())
 		return
 	if Input.is_action_just_pressed("reset"):
 		_reset_lap(cp)                                  # keep every circuit's best; ghost survives
@@ -223,8 +229,11 @@ func _begin_run() -> void:
 
 func _switch_circuit(which: int) -> void:
 	_active = which
-	if stage != null and car != null:
-		car.spawn_transform = stage.get_spawn_for(which)   # so [R] also respawns on this circuit
+	if car != null:
+		if which == 3 and area != null:
+			car.spawn_transform = area.spawn_transform()   # generated stage: on its start line
+		elif stage != null:
+			car.spawn_transform = stage.get_spawn_for(which)   # so [R] also respawns on this circuit
 		if car.has_method("respawn"):
 			car.respawn()
 	_reset_lap(car.global_position)

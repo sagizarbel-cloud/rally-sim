@@ -103,10 +103,18 @@ class_name VehicleM2
 # Tab panel - which only ever reads/writes `vehicle` properties - can reach them live. Synced into
 # roughness_field once per tick, before the raycast pass. Defaults are the C1.1 physically-derived
 # starting points; the drive test is expected to move them, same as B1's ride-frequency numbers.
+# D3: SHAKEDOWN stage parameters. They live here only because the Tab panel binds vehicle
+# properties; StageArea watches them and REGENERATES the stage when they settle. Changing these
+# rebuilds terrain, so it is debounced rather than applied per slider tick.
+@export var stage_seed := 20260828.0     # STAGE: whole-stage seed. Same seed = same stage, exactly.
+@export var stage_sinuosity := 0.55      # STAGE: 0 = direct, 1 = as twisty as the design speed allows
+@export var stage_elevation := 0.6       # STAGE: 0 = valley floor, 1 = over the ridges
+@export var stage_design_speed := 30.0   # STAGE: km/h. Sets the minimum corner radius. HIGHER =
+                                         # STRAIGHTER, because R = V^2/(127(e+f)).
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
-                                         # map (ON) or from the old grip threshold (OFF). Lives on
-                                         # the car only because the Tab panel binds vehicle props;
-                                         # sound.gd reads it. See CHANGELOG 2026-08-28.
+										 # map (ON) or from the old grip threshold (OFF). Lives on
+										 # the car only because the Tab panel binds vehicle props;
+										 # sound.gd reads it. See CHANGELOG 2026-08-28.
 @export var road_class_gravel := 128.0   # ISO 8608 Gd(n0), rally loop broadband "grain"
 @export var road_class_tarmac := 4.0     # ISO 8608 Gd(n0), asphalt broadband "grain"
 @export var washboard_amp := 0.02        # m, gravel corner/braking-zone corrugation depth

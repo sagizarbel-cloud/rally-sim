@@ -26,6 +26,13 @@ enum Surface { GRASS, DIRT, ASPHALT, PATCH }
 const SURFACE_NAMES: Array[StringName] = [&"grass", &"dirt", &"asphalt", &"dirt"]
 
 var stage                        # RallyStage - owns the geometry every layer is a function of
+
+# D3: EXTRA AREAS, queried before the legacy map's own layers. This is the composition D1 was built
+# for paying off - a second area exists by ADDING a layer, and not one line of stage.gd, sound.gd,
+# effects.gd, roughness.gd or wear.gd changed to make the generated stage grip, sound and throw dust
+# correctly. Each entry needs in_area(x, z) (a cheap box test, checked first so driving on the
+# legacy map costs almost nothing) and on_road(x, z).
+var areas: Array = []
 var road_class_source            # scripts/roughness.gd - owns the ISO 8608 coefficients (see below)
 
 # ISO 8608 fallbacks, used only if no road_class_source is wired. The LIVE values belong to the
@@ -49,6 +56,13 @@ func _classify(x: float, z: float) -> int:
 	# they both resolve to ASPHALT), but the two orders stop being equivalent the moment D6 adds
 	# an override that crosses a corridor - so this reads as an ordered list, and D6 changes the
 	# ORDER here rather than editing any consumer.
+
+	# 0. Generated areas (D3). Highest priority because they are somewhere else entirely - the box
+	# test rejects every query on the legacy map before any centreline work happens.
+	for a in areas:
+		if not a.in_area(x, z):
+			continue
+		return Surface.DIRT if a.on_road(x, z) else Surface.GRASS
 
 	# 1. Asphalt ring corridor.
 	var ad: float = stage._asphalt_dist(x, z)
