@@ -145,15 +145,21 @@ func in_area(x: float, z: float) -> bool:
 	return absf(x - _origin.x) <= half and absf(z - _origin.z) <= half
 
 func spawn_transform() -> Transform3D:
-	## On the start line, facing down the road.
+	## At the BEGINNING of the run-up, facing down the road - so you launch, cross the start line,
+	## and the clock starts on the line rather than under the car. Same idea as the legacy circuits'
+	## `start_runup`.
+	##
+	## Orientation uses looking_at, NOT a hand-rolled atan2. The first version computed
+	## `atan2(h.x, h.y)`, which spawned the car facing exactly BACKWARDS: a Y-rotation by theta puts
+	## forward at (-sin, 0, -cos), so matching a heading (h.x, h.y) needs atan2(-h.x, -h.y). Godot's
+	## forward is -Z and looking_at already knows that, so it cannot get the sign wrong.
 	var cl := gen.centreline
 	var p0: Dictionary = cl.point_at(0.0)
 	var pos: Vector3 = p0["pos"]
 	var h: Vector2 = p0["heading"]
-	var t := Transform3D()
-	t.origin = Vector3(pos.x, height_at(pos.x, pos.z) + 1.2, pos.z)
-	t.basis = Basis().rotated(Vector3.UP, atan2(h.x, h.y))
-	return t
+	var origin := Vector3(pos.x, height_at(pos.x, pos.z) + 1.8, pos.z)
+	var fwd := Vector3(h.x, 0.0, h.y).normalized()
+	return Transform3D(Basis(), origin).looking_at(origin + fwd, Vector3.UP)
 
 # ---------------------------------------------------------------- build
 
@@ -233,8 +239,9 @@ func _road_blend(x: float, z: float) -> float:
 	return 1.0 - smoothstep(half, half + 2.0, lat)
 
 func _build_markers() -> void:
-	_gate(0.0, "START")
-	_gate(gen.centreline.length(), "FINISH")
+	# The gates mark the TIMED window: run-up before START, runoff after FINISH.
+	_gate(gen.timed_start_s, "START")
+	_gate(gen.timed_end_s, "FINISH")
 
 func _gate(s: float, label: String) -> void:
 	var p: Dictionary = gen.centreline.point_at(s)

@@ -15,13 +15,25 @@ var seed: int = 20260828                  ## the whole stage derives from this; 
 var name: String = "SHAKEDOWN"
 
 # --- shape -------------------------------------------------------------------------------------
-var length_m: float = 1200.0              ## target road length. D3 stays short and static on purpose
-                                          ## (§5: "cap it at ~1-1.5 km"); D4 replaces the BUILD step,
-                                          ## not the generator, so this becomes a parameter not a rewrite.
+# Target TIMED length (start gate to finish gate; the run-up and runoff are extra). Defaulted to
+# what the constraint set can actually deliver in the default box, so the number means something:
+# at 1200 m the generator missed by 20% with no signal, because the usable spine shrinks once the
+# run-up, runoff and the road's own corridor width are cleared from the area edge. Raising it does
+# not lengthen the stage on its own - the box or the design speed has to give first.
+# D3 stays short and static on purpose (§5: "cap it at ~1-1.5 km"); D4 replaces the BUILD step, not
+# the generator, so this becomes a parameter change rather than a rewrite.
+var length_m: float = 870.0
 var sinuosity: float = 0.55               ## 0 = nearly straight, 1 = as twisty as the design speed allows.
                                           ## Spends a TURN BUDGET; the min-radius constraint still binds.
 var elevation_character: float = 0.6      ## 0 = flat valley floor, 1 = climbs and drops over ridges
 var width_m: float = 7.5                  ## nominal road width; width_profile varies it along s
+# A stage does not begin at its start line: you get a short run-up to it, and road to slow down on
+# past the finish. Both are ROAD, but neither is TIMED - the timed window is the stretch between the
+# two gates. The legacy circuits already work this way (`stage.start_runup`), which is why crossing
+# the line is what starts the clock rather than the spawn doing it.
+var start_runup_m: float = 45.0           ## road before the start line, to launch from
+var finish_runoff_m: float = 80.0         ## road past the finish line, to stop on
+
 var width_var: float = 0.30               ## 0..1, how much the road pinches and opens along its length
 
 # --- the constraint set (§3.2) -----------------------------------------------------------------
@@ -122,6 +134,7 @@ func duplicate_def() -> StageDef:
 	d.length_m = length_m; d.sinuosity = sinuosity
 	d.elevation_character = elevation_character
 	d.width_m = width_m; d.width_var = width_var
+	d.start_runup_m = start_runup_m; d.finish_runoff_m = finish_runoff_m
 	d.design_speed_kmh = design_speed_kmh
 	d.superelevation = superelevation; d.side_friction = side_friction
 	d.max_grade = max_grade

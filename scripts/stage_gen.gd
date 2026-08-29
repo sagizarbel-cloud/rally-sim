@@ -38,6 +38,10 @@ var _noise := FastNoiseLite.new()
 var _detail := FastNoiseLite.new()
 var _rng := RandomNumberGenerator.new()
 var _control: PackedVector2Array = PackedVector2Array()
+var timed_start_s := 0.0                  ## arc length of the START line (end of the run-up)
+var timed_end_s := 0.0                    ## arc length of the FINISH line (start of the runoff)
+var _pre_n := 0                           ## extension sample counts, so _build_centreline can hold
+var _post_n := 0                          ## the start area and runoff pad FLAT
 var _relax_used := 0
 var _worst_curvature := 0.0
 
@@ -151,7 +155,17 @@ func _route() -> PackedVector2Array:
 	## around high ground instead of climbing it. It just can no longer tie itself in a knot doing so.
 	var o := def.origin
 	var half := def.area_size * 0.5
-	var inset := half * 0.86
+	# THE INSET MUST PAY FOR THE RUN-UP AND RUNOFF. They extend straight out beyond both ends of the
+	# spine, so a spine that starts at the box corner pushes them off the edge of the terrain -
+	# measured: the runoff ended 21.9 m outside the mesh, i.e. you would drive off the world while
+	# braking. The spine runs the box diagonal, so an extension of length E costs E/sqrt(2) in each
+	# axis; derive the inset from that rather than from a picked fraction.
+	var ext := maxf(def.start_runup_m, def.finish_runoff_m)
+	# The margin has to clear the whole ROAD, not just its centreline: the corridor is half a road
+	# width plus its shoulder blend either side, so a centreline that merely fits leaves the road
+	# surface hanging over the edge of the mesh.
+	var edge_margin: float = 12.0 + def.width_m * 0.5 + 8.0
+	var inset := maxf(half - edge_margin - ext * 0.708, half * 0.30)
 	# Start and finish on opposite corners, so the spine is the box's diagonal - the longest run
 	# available, which leaves the wiggle amplitude small enough to stay inside the area.
 	var a := Vector2(o.x - inset, o.z - inset)
@@ -182,7 +196,9 @@ func _solve_amplitude(a: Vector2, dir: Vector2, nrm: Vector2, spine_len: float, 
 	## raw control polygon instead was measurably wrong: it hit 1200 m on the polygon and shipped a
 	## 926 m road. Terminates on the length tolerance; the iteration cap is a non-convergence guard.
 	var lo := 0.0
-	var hi := spine_len * 0.35
+	# Amplitude bracket bounded by the BOX, not by the spine length: the offset is perpendicular to
+	# the diagonal, so it also has to fit inside the terrain.
+	var hi: float = (def.area_size * 0.5) * 0.55
 	var best := PackedVector2Array()
 	var tol := maxf(def.length_m * 0.02, 5.0)
 	for _iter in range(24):
@@ -331,7 +347,45 @@ func _curvature_at(pts: PackedVector2Array, i: int) -> float:
 	var dphi := atan2(h0.x * h1.y - h0.y * h1.x, h0.dot(h1))
 	return absf(dphi) / maxf((h0.length() + h1.length()) * 0.5, 0.01)
 
-func _build_centreline(pts: PackedVector2Array) -> void:
+func _extend_ends(pts: PackedVector2Array) -> PackedVector2Array:
+	## Add straight tangent run-up and runoff. They are added BEFORE the vertical constraints run, so
+	## the grade limiter and the vertical-curve constraint smooth the join automatically instead of
+	## leaving a kink where the flat start area meets a sloping road - which is the same trap that
+	## made grade limiting alone worse than useless.
+	var n := pts.size()
+	if n < 2:
+		return pts
+	# MATCH THE ROAD'S OWN SAMPLE SPACING. A fixed 4 m step against the road's ~1.65 m samples puts
+	# a 2.4x spacing jump at each join, and the vertical smoother - like every stencil of its kind -
+	# assumes uniform spacing, so it cannot settle there. Measured with a fixed step: peak d2y/ds2
+	# 0.0512 against 0.0122 with matched spacing, i.e. 4.7 g of wheel acceleration at 108 km/h
+	# instead of 1.1 g, from nothing but two joins. Same trap as the spline's phantom endpoints.
+	var step := _polyline_length(pts) / maxf(float(n - 1), 1.0)
+	var head := (pts[0] - pts[1]).normalized()             # points BACK from the start
+	var tail := (pts[n - 1] - pts[n - 2]).normalized()     # points ON past the finish
+	var pre := int(ceil(def.start_runup_m / step))
+	var post := int(ceil(def.finish_runoff_m / step))
+	var out := PackedVector2Array()
+	for i in range(pre, 0, -1):
+		out.append(pts[0] + head * (float(i) * step))
+	out.append_array(pts)
+	for i in range(1, post + 1):
+		out.append(pts[n - 1] + tail * (float(i) * step))
+	timed_start_s = float(pre) * step
+	timed_end_s = timed_start_s + _polyline_length(pts)
+	# Say so when the constraint set beat the length target, instead of silently shipping a short
+	# stage. Length is a soft target; minimum radius, maximum grade and the area's own edges are
+	# hard, and where they conflict the constraints win - which is correct, but must not be silent.
+	var achieved := timed_end_s - timed_start_s
+	if absf(achieved - def.length_m) > def.length_m * 0.05:
+		push_warning("StageGen: timed length %.0f m vs target %.0f m - the constraint set is binding (min radius %.1f m, usable spine limited by run-up %.0f m + runoff %.0f m + corridor clearance)"
+				% [achieved, def.length_m, def.min_radius_m(), def.start_runup_m, def.finish_runoff_m])
+	_pre_n = pre
+	_post_n = post
+	return out
+
+func _build_centreline(pts_in: PackedVector2Array) -> void:
+	var pts := _extend_ends(pts_in)
 	var n := pts.size()
 	var world := PackedVector3Array(); world.resize(n)
 	var hw := PackedFloat32Array(); hw.resize(n)
@@ -343,6 +397,18 @@ func _build_centreline(pts: PackedVector2Array) -> void:
 		var t := float(i) / maxf(float(n - 1), 1.0)
 		var w := 1.0 - def.width_var * (0.5 + 0.5 * sin(t * TAU * 2.3 + float(def.seed % 17)))
 		hw[i] = def.width_m * 0.5 * w
+	# A start area and a runoff pad are FLAT in reality - they are built platforms, not road that
+	# happens to follow the hillside. Holding them level at the elevation of the line they serve also
+	# keeps terrain roughness out of the two joins, which is where the vertical profile is most
+	# fragile. The grade and vertical-curve limiters below then smooth the join into the road.
+	if _pre_n > 0 and n > _pre_n:
+		var y0: float = world[_pre_n].y
+		for k in range(_pre_n):
+			world[k] = Vector3(world[k].x, y0, world[k].z)
+	if _post_n > 0 and n > _post_n:
+		var y1: float = world[n - 1 - _post_n].y
+		for k in range(n - _post_n, n):
+			world[k] = Vector3(world[k].x, y1, world[k].z)
 	world = _limit_grade(world)                              # cut and fill: the VERTICAL constraint
 	centreline = Centreline.from_points(world, hw, false)     # OPEN: a stage is a route, not a lap
 

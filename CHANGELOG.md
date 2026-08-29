@@ -20,6 +20,65 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-28 (SHAKEDOWN gets a run-up and a runoff; the car was spawning backwards; and the runoff was hanging off the edge of the world)
+
+Two drive reports: *"i want the car to have a little track to start and a small runoff to finish"*
+and *"the car currently spawns backwards - looking towards the end of the map"*. Both fixed, and
+chasing the first one turned up a third bug neither of us had seen.
+
+**1. The car spawned facing exactly backwards.** `spawn_transform()` built its basis with
+`atan2(h.x, h.y)`. A Y-rotation by theta puts forward at `(-sin, 0, -cos)`, so matching a heading
+`(h.x, h.y)` needs `atan2(-h.x, -h.y)` - the version shipped pointed the car 180 degrees the wrong
+way, every time. Now built with `looking_at()`, the way `stage.get_spawn_for()` has always done it:
+Godot's forward is -Z and `looking_at` already knows that, so it cannot get the sign wrong.
+Verified numerically rather than by eye - `forward · road_heading = +1.0000`.
+
+**2. A stage does not begin at its start line.** There is now **45 m of run-up** before the START
+gate and **80 m of runoff** past the FINISH gate. Both are real road (`on_road` true along their
+whole length, gravel to the ground map); neither is TIMED. The car spawns at the very beginning of
+the run-up, so you launch, cross the line, and the clock starts on the line - the same arrangement
+the legacy circuits have always had via `start_runup`. Timing triggers moved onto the gates
+(start 45.4 m, splits 325.2 / 605.1, finish 885.0), and the gate posts mark the timed window rather
+than the ends of the road.
+
+**3. The runoff was hanging 21.9 m off the edge of the terrain** - you would have driven off the
+world while braking. The spine started at a fixed 86% of the box half-width, which left no room for
+extensions that stick out past both of its ends. The inset is now DERIVED from what has to fit: the
+spine runs the box diagonal, so an extension of length E costs E/sqrt(2) in each axis, and the
+margin also has to clear half a road width plus its shoulder blend, because a centreline that merely
+fits still leaves the road surface overhanging. **Closest approach to the edge: -21.9 m (outside)
+-> +22.6 m (inside).**
+
+**One more trap, found by measuring instead of assuming.** The first version of the extensions used
+a fixed 4 m point spacing against the road's own ~1.6 m samples. That 2.4x spacing jump at each join
+wrecked the vertical profile, because the vertical-curve smoother - like every stencil of its kind -
+assumes uniform spacing and cannot settle across a discontinuity:
+
+| | peak d2y/ds2 | at 108 km/h |
+|---|---|---|
+| rally loop (calibration bed) | 0.01195 | 1.10 g |
+| extensions at a fixed 4 m step | 0.05118 | **4.70 g** |
+| extensions at the road's own spacing | 0.00707 | **0.65 g** |
+
+**4.7 g of wheel acceleration from nothing but two joins.** This is the same class of bug as the
+spline's phantom endpoints and the grade smoother's uniform-spacing assumption - the third time in
+this phase that a non-uniform sample spacing has quietly broken a stencil. The start area and runoff
+pad are also held FLAT now, the way real built platforms are, which keeps terrain roughness out of
+the two joins entirely.
+
+**Net effect on the stage:** 965 m of road (45 run-up + 840 timed + 80 runoff), and the vertical
+input is now **gentler than the rally loop on both measures** - rms 0.00203 vs 0.00290, peak 0.65 g
+vs 1.10 g. Geometry constraints still hold exactly: worst radius 31.0 m against the 30.8 m limit,
+zero over-limit samples, zero self-intersections.
+
+**`length_m` now means what it says.** Clearing the run-up, runoff and corridor width from the area
+edge shortens the usable spine, and at the old 1200 m target the generator silently shipped 20%
+short. The default is now an achievable 870 m, **and the generator warns when the constraint set
+beats the target** instead of quietly missing it - length is a soft goal, while minimum radius,
+maximum grade and the area's own edges are hard, and it should be visible when they win.
+
+---
+
 ## 2026-08-28 (fixed: the SHAKEDOWN terrain was see-through from above and solid from below — backwards winding, again)
 
 Drive report: *"the map normals are upside down - the same mistake that often happens because of

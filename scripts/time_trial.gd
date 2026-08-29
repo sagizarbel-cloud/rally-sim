@@ -184,18 +184,29 @@ func build_triggers() -> void:
 	_trig.clear()
 	for i in range(centrelines.size()):
 		var cl: Centreline = centrelines[i]
-		var t: Array = [0.0]
+		# A generated stage is TIMED between its gates, not end to end: the run-up before the start
+		# line and the runoff past the finish are road you drive but not road you are scored on.
+		var s0 := 0.0
+		var s1 := cl.length()
+		if not cl.is_loop() and area != null and i == 3:
+			s0 = float(area.gen.timed_start_s)
+			s1 = float(area.gen.timed_end_s)
+		var t: Array = [s0]
 		var n := cl.sample_count()
 		for k in range(1, SECTORS):
 			if cl.is_loop() and n % SECTORS == 0:
 				t.append(cl.s_index(n * k / SECTORS))      # exact legacy boundary
 			else:
-				t.append(cl.length() * float(k) / float(SECTORS))
+				t.append(s0 + (s1 - s0) * float(k) / float(SECTORS))
+		t.append(s1)                                       # index SECTORS = the finish trigger
 		_trig.append(t)
 
 func _finish_trigger(cl: Centreline) -> float:
-	# A loop finishes where it starts; an open road finishes at its far end.
-	return 0.0 if cl.is_loop() else cl.length()
+	# A loop finishes where it starts; an open stage finishes at its finish GATE, which is before
+	# the end of the road - the runoff past it is for slowing down, not for scoring.
+	if cl.is_loop():
+		return 0.0
+	return float(_trig[_active][SECTORS])
 
 func _crossed(cl: Centreline, s: float, trig: float) -> bool:
 	## Did we pass this trigger, travelling FORWARD, between the last tick and this one?
@@ -209,7 +220,7 @@ func _crossed(cl: Centreline, s: float, trig: float) -> bool:
 		# the clamp is what starts the run.
 		if trig <= 0.0:
 			return _prev_s <= 0.0 and s > 0.0
-		return _prev_s < trig and s >= trig
+		return _prev_s < trig and s >= trig      # a real start line is crossed, not entered
 	# On a loop, work in forward distance travelled since the last tick. The half-length guard
 	# rejects a respawn/teleport (and any backwards motion) the way the old detector's
 	# `theta < 0.6` window did.
