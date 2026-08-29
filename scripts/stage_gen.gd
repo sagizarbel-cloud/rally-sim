@@ -40,6 +40,11 @@ var _rng := RandomNumberGenerator.new()
 var _control: PackedVector2Array = PackedVector2Array()
 var timed_start_s := 0.0                  ## arc length of the START line (end of the run-up)
 var timed_end_s := 0.0                    ## arc length of the FINISH line (start of the runoff)
+var _spine_pts: PackedVector2Array = PackedVector2Array()
+var _arc_lo := 0
+var _arc_hi := 0
+var _hairpin_r := 0.0
+var _hairpin_sweep := 0.0
 var _pre_n := 0                           ## extension sample counts, so _build_centreline can hold
 var _post_n := 0                          ## the start area and runoff pad FLAT
 var _relax_used := 0
@@ -101,10 +106,20 @@ func generate() -> void:
 	_build_centreline(pts)
 
 func _violations(pts: PackedVector2Array) -> PackedInt32Array:
+	## Corners tighter than the design speed allows - EXCLUDING the hairpin, which is built at a
+	## known legal radius and is deliberately exempt from relaxation. Counting it here made the
+	## non-convergence warning permanent: the spline overshoots the arc slightly, relaxation is not
+	## allowed to touch it, so the "violation" could never clear. The hairpin's delivered radius is
+	## reported separately by hairpin_radius() instead of being hidden in this count.
 	var kmax := def.max_curvature()
+	var n := _spine_pts.size()
+	var dn := pts.size()
 	var hot := PackedInt32Array()
-	for i in range(pts.size()):
-		if _curvature_at(pts, i) > kmax:
+	for i in range(dn):
+		if _curvature_at(pts, i) > kmax * 1.02:   # 2% tolerance: an exact test flags rounding noise
+			var v := int(round(float(i) * float(maxi(n - 1, 1)) / float(maxi(dn - 1, 1))))
+			if v >= _arc_lo - 2 and v <= _arc_hi + 2:
+				continue
 			hot.append(i)
 	return hot
 
@@ -134,89 +149,196 @@ func _relax_polygon(poly: PackedVector2Array, hot: PackedInt32Array, dense_n: in
 	for i in range(1, n - 1):
 		if touch[i] <= 0.0:
 			continue
+		# LEAVE THE HAIRPIN ALONE. It is built at 1.12x the minimum radius, so it is legal by
+		# construction and has nothing to relax - but smoothing a vertex toward its neighbours'
+		# midpoint FLATTENS an arc, and running that on the hairpin every refit walked a 130-degree
+		# turn down to 96 and still did not converge. The relaxation exists for the offset wiggle.
+		if i >= _arc_lo and i <= _arc_hi:
+			continue
 		out[i] = poly[i].lerp((poly[i - 1] + poly[i + 1]) * 0.5, 0.45 * touch[i])
 	if def.control_points.size() > 0:
 		out = _apply_control_points(out)
 	return out
 
 func _route() -> PackedVector2Array:
-	## A stage is a ROUTE: it goes from a start line to a finish line (§1.2 answer 1). So the road is
-	## built as a lateral offset along a straight SPINE between two points, not as a free heading
-	## walk across the terrain.
+	## A stage is a ROUTE from a start line to a finish line (§1.2 answer 1), built as a bounded
+	## lateral offset along a SPINE. Parameterised monotonically along that spine, the road is a
+	## GRAPH over it and therefore cannot self-intersect - a structural guarantee, not a test.
 	##
-	## That is not a simplification, it is the fix for a real defect. A free walk has no sense of
-	## progress, so it can double back and cross itself - measured on the default seed, which
-	## produced a self-intersecting road the curvature relaxation could not repair, because easing a
-	## corner open cannot untie a knot. A curve expressed as a bounded offset along a straight spine,
-	## parameterised monotonically, is a GRAPH over that spine and therefore cannot self-intersect at
-	## all. The property is structural rather than tested-for.
+	## The spine BENDS. A straight spine confines the road's heading to +-90 degrees of it, so a
+	## hairpin - a turn of more than 90 degrees - is impossible by construction, which is why the
+	## first version could not produce one at any sinuosity. The spine now runs out to an apex and
+	## doubles back, and the road is filleted through that apex at the tightest radius the design
+	## speed allows. That IS the hairpin; everything else is offset wiggle either side of it.
 	##
-	## The terrain still shapes it: the offset is nudged toward the flatter side, so the road leans
-	## around high ground instead of climbing it. It just can no longer tie itself in a knot doing so.
+	## The offset tapers to zero through the hairpin, which is both realistic (a real hairpin is a
+	## clean constant-radius turn, not a wiggly one) and what keeps the graph property safe where
+	## the spine's own curvature is highest.
 	var o := def.origin
 	var half := def.area_size * 0.5
-	# THE INSET MUST PAY FOR THE RUN-UP AND RUNOFF. They extend straight out beyond both ends of the
-	# spine, so a spine that starts at the box corner pushes them off the edge of the terrain -
-	# measured: the runoff ended 21.9 m outside the mesh, i.e. you would drive off the world while
-	# braking. The spine runs the box diagonal, so an extension of length E costs E/sqrt(2) in each
-	# axis; derive the inset from that rather than from a picked fraction.
+	# The inset must pay for the run-up and runoff, which stick straight out past both ends, AND
+	# clear half a road width plus its shoulder, or the road surface overhangs the mesh edge.
 	var ext := maxf(def.start_runup_m, def.finish_runoff_m)
-	# The margin has to clear the whole ROAD, not just its centreline: the corridor is half a road
-	# width plus its shoulder blend either side, so a centreline that merely fits leaves the road
-	# surface hanging over the edge of the mesh.
 	var edge_margin: float = 12.0 + def.width_m * 0.5 + 8.0
-	var inset := maxf(half - edge_margin - ext * 0.708, half * 0.30)
-	# Start and finish on opposite corners, so the spine is the box's diagonal - the longest run
-	# available, which leaves the wiggle amplitude small enough to stay inside the area.
-	var a := Vector2(o.x - inset, o.z - inset)
-	var b := Vector2(o.x + inset, o.z + inset)
-	var span := b - a
-	var spine_len := span.length()
-	var dir := span / spine_len
-	var nrm := Vector2(-dir.y, dir.x)
+	var inset := maxf(half - edge_margin - ext, half * 0.30)
 
-	var step := 22.0
-	var n := maxi(8, int(ceil(spine_len / step)))
-
-	# WAVELENGTH IS DERIVED FROM THE LENGTH TARGET, not chosen. A sinusoid of amplitude A and
-	# wavelength L adds a length fraction of about (A*2*PI/L)^2 / 4, and the curvature limit caps
-	# A at kmax*L^2/(4*PI^2). Substituting, the achievable gain is (kmax*L/(2*PI))^2 / 4, so the
-	# wavelength that just reaches the target is L = 4*PI*sqrt(gain)/kmax. Solving for it rather
-	# than picking it is what lets length_m, sinuosity and design_speed stay independent knobs.
-	var gain := maxf(def.length_m / spine_len - 1.0, 0.0)
-	var kmax := def.max_curvature()
-	var wavelength := clampf(4.0 * PI * sqrt(gain) / maxf(kmax, 1e-6),
-			4.0 * def.min_radius_m(), spine_len)
-	return _solve_amplitude(a, dir, nrm, spine_len, n, wavelength)
-
-func _solve_amplitude(a: Vector2, dir: Vector2, nrm: Vector2, spine_len: float, n: int,
-		wavelength: float) -> PackedVector2Array:
-	## Bisect the offset amplitude against the length the road ACTUALLY ends up with - after the
-	## spline fit and after the min-radius relaxation, both of which shorten it. Solving against the
-	## raw control polygon instead was measurably wrong: it hit 1200 m on the polygon and shipped a
-	## 926 m road. Terminates on the length tolerance; the iteration cap is a non-convergence guard.
-	var lo := 0.0
-	# Amplitude bracket bounded by the BOX, not by the spine length: the offset is perpendicular to
-	# the diagonal, so it also has to fit inside the terrain.
-	var hi: float = (def.area_size * 0.5) * 0.55
+	# LENGTH AND CHARACTER ARE SEPARATE KNOBS, and were not before. Solving the spine for a fraction
+	# of the target and then bisecting AMPLITUDE for the rest chased its own tail: after tapering
+	# around the hairpin and both ends, the wiggle contributes almost nothing to length, so the two
+	# solves fought and the stage always came out ~10% short. Now:
+	#   - `sinuosity` sets the offset amplitude, as a fraction of what the curvature limit allows.
+	#     It controls how much the road WEAVES - its character - and nothing else.
+	#   - the apex position is bisected so the FINISHED road (offset, fitted and relaxed) comes out
+	#     at `length_m`. Length is a property of the route, which is what a route length is.
+	var lo := 0.06
+	var hi := 0.95
+	var apex := 0.5
 	var best := PackedVector2Array()
-	var tol := maxf(def.length_m * 0.02, 5.0)
-	for _iter in range(24):
-		var amp := (lo + hi) * 0.5
-		var poly := _offset_polygon(a, dir, nrm, spine_len, n, amp, wavelength)
+	for _i in range(16):
+		apex = (lo + hi) * 0.5
+		var sp := _spine(apex, inset, o)
+		if sp.size() < 2:
+			break
+		var poly := _offset_polygon(sp, _amplitude_for(sp))
 		if def.control_points.size() > 0:
 			poly = _apply_control_points(poly)
+		_spine_pts = sp
 		best = poly
-		var got := _final_length(poly)
-		if absf(got - def.length_m) <= tol:
-			break
-		if got < def.length_m:
-			lo = amp
+		if _final_length(poly) < def.length_m:
+			lo = apex
 		else:
-			hi = amp
+			hi = apex
 	return best
 
+func _amplitude_for(spine: PackedVector2Array) -> float:
+	## How far the road weaves either side of its route. Bounded by the curvature limit - a sinusoid
+	## of amplitude A and wavelength L peaks at A(2*PI/L)^2 - so sinuosity 1.0 is "as twisty as the
+	## design speed permits" and cannot ask for a corner the constraint set forbids.
+	var wl := _wavelength_for(spine)
+	var legal := def.max_curvature() * wl * wl / (4.0 * PI * PI)
+	return clampf(def.sinuosity, 0.05, 1.0) * legal
+
+func _wavelength_for(_spine: PackedVector2Array) -> float:
+	## How OFTEN the road changes direction, in metres per weave. Expressed in minimum radii so it
+	## scales with the design speed: a tighter road turns more often as well as more sharply.
+	# Measured: a 296 m weave over a 900 m stage gave 2.9 corners/km, which reads as a long road with
+	# almost nothing on it. Real stages are far busier than that. Tightening the mapping raises the
+	# corner count directly, and the amplitude bound above keeps every one of them legal.
+	return def.min_radius_m() * lerpf(11.0, 3.5, clampf(def.sinuosity, 0.0, 1.0))
+
+func _spine(apex_frac: float, inset: float, o: Vector3) -> PackedVector2Array:
+	## Out to an apex and back, with the apex filleted at the tightest radius the design speed
+	## allows - so the fillet IS a hairpin rather than a kink the relaxation would have to open up.
+	var a := Vector2(o.x - inset, o.z - inset * 0.62)
+	var b := Vector2(o.x + inset * apex_frac, o.z)
+	var c := Vector2(o.x - inset, o.z + inset * 0.62)
+	var d1 := (a - b).normalized()
+	var d2 := (c - b).normalized()
+	var cosphi := clampf(d1.dot(d2), -0.9999, 0.9999)
+	var phi := acos(cosphi)                                  # interior angle at the apex
+	var r := def.min_radius_m() * 1.12                       # a genuine hairpin, just inside legal
+	var tanlen := r / maxf(tan(phi * 0.5), 0.05)
+	var maxtan := minf((a - b).length(), (c - b).length()) * 0.8
+	if tanlen > maxtan:
+		tanlen = maxtan
+		r = tanlen * tan(phi * 0.5)
+	var p1 := b + d1 * tanlen
+	var p2 := b + d2 * tanlen
+	var bis := (d1 + d2).normalized()
+	var centre := b + bis * (r / maxf(sin(phi * 0.5), 0.05))
+
+	var out := PackedVector2Array()
+	# Fine spine steps around a tight arc: the Catmull-Rom fit overshoots where curvature changes
+	# abruptly, and sparse control points make that worse. Real roads use transition spirals for the
+	# same reason; densifying is the cheap stand-in.
+	var step := 2.0
+	# straight in
+	var seg1 := (p1 - a).length()
+	var n1 := maxi(2, int(ceil(seg1 / step)))
+	for i in range(n1):
+		out.append(a.lerp(p1, float(i) / float(n1)))
+	# the hairpin arc itself
+	var ang1 := (p1 - centre).angle()
+	var ang2 := (p2 - centre).angle()
+	var sweep := wrapf(ang2 - ang1, -PI, PI)
+	var narc := maxi(6, int(ceil(absf(sweep) * r / step)))
+	_arc_lo = out.size()
+	for i in range(narc + 1):
+		var t := float(i) / float(narc)
+		var ang := ang1 + sweep * t
+		out.append(centre + Vector2(cos(ang), sin(ang)) * r)
+	_arc_hi = out.size() - 1
+	# straight out
+	var seg2 := (c - p2).length()
+	var n2 := maxi(2, int(ceil(seg2 / step)))
+	for i in range(1, n2 + 1):
+		out.append(p2.lerp(c, float(i) / float(n2)))
+	_hairpin_r = r
+	_hairpin_sweep = absf(sweep)
+	return out
+
+func _offset_polygon(spine: PackedVector2Array, amp: float) -> PackedVector2Array:
+	var n := spine.size()
+	var out := PackedVector2Array(); out.resize(n)
+	var total := _polyline_length(spine)
+	var env_phase := float(def.seed % 29) * 0.216
+	var phase := float(def.seed % 61) * 0.103
+	var wavelength: float = minf(_wavelength_for(spine), maxf(total, 1.0))
+	# TAPER LENGTH IS DERIVED FROM THE CURVATURE LIMIT, not picked. Ramping the offset from zero to
+	# amplitude A over a length L is itself a corner: a smoothstep ramp peaks at 6A/L^2 of curvature,
+	# so L must be at least sqrt(6A/kmax) or the taper alone violates the minimum radius. A picked
+	# 60 m ramp produced 12.2 m corners against a 30.8 m limit, and the relaxation could not open
+	# them because the taper kept re-creating them on the next refit.
+	var spacing: float = total / float(maxi(n - 1, 1))
+	var taper_len: float = sqrt(6.0 * maxf(amp, 0.01) / maxf(def.max_curvature(), 1e-6))
+	var taper_samples := maxi(4, int(ceil(taper_len / maxf(spacing, 0.1))))
+	var along := 0.0
+	var prev_along := 0.0
+	for i in range(n):
+		if i > 0:
+			along += spine[i].distance_to(spine[i - 1])
+		var u := along / maxf(total, 1.0)
+		# CHARACTER ENVELOPE: open sweeping sections alternating with tight technical ones, so the
+		# road book has more than one severity to say.
+		var tight := 0.5 + 0.5 * sin(TAU * u * 1.5 + env_phase)
+		tight = clampf(tight * 0.85 + 0.15 * _noise.get_noise_2d(u * 260.0, 91.0), 0.0, 1.0)
+		var local_wl := wavelength * lerpf(1.45, 0.62, tight)
+		var local_amp := lerpf(0.72, 1.18, tight)
+		phase += TAU * (along - prev_along) / maxf(local_wl, 1.0)
+		prev_along = along
+		var w := sin(phase) + 0.55 * _noise.get_noise_2d(along * 0.9, float(def.seed) * 0.21)
+		w = clampf(w / 1.55, -1.0, 1.0) * local_amp
+
+		# taper to zero at both ends (so start and finish sit on the spine) AND through the
+		# hairpin (a real hairpin is a clean constant-radius turn, and a flat offset there is what
+		# keeps the graph-over-the-spine guarantee safe where spine curvature is highest)
+		# End taper over a FIXED DISTANCE, not a half-sine across the whole road. The half-sine held
+		# the weave below the corner-detection threshold for the entire first and last third -
+		# measured, every corner on a 1 km stage fell between 397 m and 718 m, with nothing to call
+		# either side of that. Its only job is to put the start and finish lines on the spine, and
+		# that only needs the last few dozen metres.
+		var taper: float = smoothstep(0.0, taper_len, along) * smoothstep(0.0, taper_len, total - along)
+		var d_arc := 0
+		if i < _arc_lo:
+			d_arc = _arc_lo - i
+		elif i > _arc_hi:
+			d_arc = i - _arc_hi
+		# smoothstep, not linear: a linear ramp has a kink at each end, which is a curvature spike
+		taper *= smoothstep(0.0, 1.0, clampf(float(d_arc) / float(taper_samples), 0.0, 1.0))
+
+		var tangent: Vector2 = (spine[mini(i + 1, n - 1)] - spine[maxi(i - 1, 0)]).normalized()
+		var nrm := Vector2(-tangent.y, tangent.x)
+		var base := spine[i]
+		var probe := 26.0
+		var hl := def.elevation_at(base.x + nrm.x * probe, base.y + nrm.y * probe)
+		var hr := def.elevation_at(base.x - nrm.x * probe, base.y - nrm.y * probe)
+		var lean := clampf((hr - hl) / 14.0, -1.0, 1.0) * clampf(def.elevation_character, 0.0, 1.0)
+		var lat := amp * (w + lean * 0.35) * taper * clampf(def.sinuosity, 0.05, 1.0)
+		out[i] = base + nrm * lat
+	return out
+
 func _final_length(poly: PackedVector2Array) -> float:
+	## The length the road ACTUALLY ends up with: fitted and relaxed, not the raw control polygon.
 	var pts := _fit_spline(poly)
 	for _p in range(RELAX_PASSES_MAX):
 		var hot := _violations(pts)
@@ -226,48 +348,11 @@ func _final_length(poly: PackedVector2Array) -> float:
 		pts = _fit_spline(poly)
 	return _polyline_length(pts)
 
-func _offset_polygon(a: Vector2, dir: Vector2, nrm: Vector2, spine_len: float, n: int,
-		amp: float, wavelength: float) -> PackedVector2Array:
-	var out := PackedVector2Array(); out.resize(n + 1)
-	# CHARACTER ENVELOPE. Without it every corner sits hard against the minimum radius, because the
-	# relaxation drives them all to the same limit - measured: 7 of 9 corners came out the same
-	# severity, a road with rhythm but no variety. A slow envelope over the stage makes some
-	# sections open and fast and others tight and technical, which is what gives a road book more
-	# than one severity to say. The envelope is a function of position along the stage, so it is
-	# still fully determined by the seed.
-	var env_phase := float(def.seed % 29) * 0.216
-	var phase := float(def.seed % 61) * 0.103
-	var prev_along := 0.0
-	for i in range(n + 1):
-		var u := float(i) / float(n)
-		var along := u * spine_len
-		# 0 = open sweeping section, 1 = tight technical section
-		var tight := 0.5 + 0.5 * sin(TAU * u * 1.5 + env_phase)
-		tight = clampf(tight * 0.85 + 0.15 * _noise.get_noise_2d(u * 260.0, 91.0), 0.0, 1.0)
-		# tighter sections turn more often AND harder; both terms push curvature up together, which
-		# is what actually separates a hairpin from a sweeper.
-		var local_wl := wavelength * lerpf(1.45, 0.62, tight)
-		var local_amp := lerpf(0.72, 1.18, tight)
-		phase += TAU * (along - prev_along) / maxf(local_wl, 1.0)
-		prev_along = along
-		# Low-frequency shape so corners arrive in SEQUENCES rather than as independent noise -
-		# "corners have rhythm" is the drive-checklist item this is aimed at.
-		var w := sin(phase)
-		w += 0.55 * _noise.get_noise_2d(along * 0.9, float(def.seed) * 0.21)
-		w = clampf(w / 1.55, -1.0, 1.0) * local_amp
-		# taper to zero at both ends so the start and finish lines sit exactly on the spine
-		var taper := sin(PI * clampf(u, 0.0, 1.0))
-		var lat := amp * w * taper * clampf(def.sinuosity, 0.05, 1.0)
+func hairpin_radius() -> float:
+	return _hairpin_r
 
-		var base := a + dir * along
-		# terrain bias: lean toward the flatter side, so the road contours instead of climbing.
-		var probe := 26.0
-		var hl := def.elevation_at(base.x + nrm.x * probe, base.y + nrm.y * probe)
-		var hr := def.elevation_at(base.x - nrm.x * probe, base.y - nrm.y * probe)
-		var lean := clampf((hr - hl) / 14.0, -1.0, 1.0) * clampf(def.elevation_character, 0.0, 1.0)
-		lat += lean * amp * 0.35 * taper
-		out[i] = base + nrm * lat
-	return out
+func hairpin_sweep_deg() -> float:
+	return rad_to_deg(_hairpin_sweep)
 
 func _polyline_length(p: PackedVector2Array) -> float:
 	var l := 0.0
@@ -306,7 +391,6 @@ func _fit_spline(poly: PackedVector2Array) -> PackedVector2Array:
 	var n := poly.size()
 	if n < 4:
 		return poly
-	var per_seg := maxi(2, int(ceil(22.0 * SAMPLES_PER_METRE)))
 	for i in range(n - 1):
 		# PHANTOM ENDPOINTS. Clamping p0/p3 to the first/last control point makes them coincide with
 		# p1/p3 at the ends, which collapses the centripetal knot spacing to zero and drops the end
@@ -325,6 +409,10 @@ func _fit_spline(poly: PackedVector2Array) -> PackedVector2Array:
 		if t1 <= t0 or t2 <= t1 or t3 <= t2:
 			out.append(p1)
 			continue
+		# Sample density follows the SEGMENT LENGTH. This used to be a fixed 18 samples per segment,
+		# a number tied to the 22 m control spacing the first router happened to use - so halving the
+		# spine step to 2 m silently made the spline 9x denser and generation took minutes.
+		var per_seg := maxi(2, int(ceil(p1.distance_to(p2) * SAMPLES_PER_METRE)))
 		for k in range(per_seg):
 			var t := lerpf(t1, t2, float(k) / float(per_seg))
 			var a1 := p0 * ((t1 - t) / (t1 - t0)) + p1 * ((t - t0) / (t1 - t0))
@@ -411,6 +499,7 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 			world[k] = Vector3(world[k].x, y1, world[k].z)
 	world = _limit_grade(world)                              # cut and fill: the VERTICAL constraint
 	centreline = Centreline.from_points(world, hw, false)     # OPEN: a stage is a route, not a lap
+	_build_bank_curvature()
 
 func _limit_grade(world: PackedVector3Array) -> PackedVector3Array:
 	## The vertical constraint, and the reason a generated road looks BUILT rather than painted on.
@@ -492,6 +581,46 @@ func _limit_vertical_curvature(world: PackedVector3Array, ds: PackedFloat32Array
 	return out
 
 # ---------------------------------------------------------------- reporting (probes read these)
+
+var _bank_k: PackedFloat32Array = PackedFloat32Array()
+var _bank_ds := 1.0
+
+func bank_curvature_at(s_in: float) -> float:
+	## Curvature for SUPERELEVATION, smoothed over the length a real road takes to roll into a
+	## corner. The raw per-sample curvature cannot be used for this: it is a numerical second
+	## difference over ~1.6 m of a relaxed spline, and it was measured swinging 0.023 1/m over 2 m
+	## of road - 70% of the whole design range. Multiplied by the lateral lever arm that produced a
+	## 0.56 m height step between neighbouring terrain samples, which is what "jagged edges where
+	## the ground meets the track" was.
+	##
+	## The smoothing window is DERIVED, not picked: superelevation is developed over a transition
+	## whose conventional length is the distance covered in about two seconds at the design speed.
+	if _bank_k.is_empty():
+		return 0.0
+	var i := clampi(int(round(s_in / maxf(_bank_ds, 0.01))), 0, _bank_k.size() - 1)
+	return _bank_k[i]
+
+func _build_bank_curvature() -> void:
+	var cl := centreline
+	var n := cl.sample_count()
+	if n < 3:
+		return
+	_bank_ds = cl.length() / maxf(float(n - 1), 1.0)
+	var raw := PackedFloat32Array(); raw.resize(n)
+	for i in range(n):
+		raw[i] = float(cl.point_at(float(i) * _bank_ds)["curvature"])
+	var window_m: float = (def.design_speed_kmh / 3.6) * 2.0     # superelevation runoff length
+	var half_w := maxi(1, int(round(window_m * 0.5 / maxf(_bank_ds, 0.01))))
+	_bank_k = PackedFloat32Array(); _bank_k.resize(n)
+	for i in range(n):
+		var acc := 0.0
+		var cnt := 0
+		for j in range(i - half_w, i + half_w + 1):
+			if j < 0 or j >= n:
+				continue
+			acc += raw[j]
+			cnt += 1
+		_bank_k[i] = acc / maxf(float(cnt), 1.0)
 
 func control_polygon() -> PackedVector2Array:
 	return _control

@@ -22,8 +22,12 @@ var name: String = "SHAKEDOWN"
 # not lengthen the stage on its own - the box or the design speed has to give first.
 # D3 stays short and static on purpose (§5: "cap it at ~1-1.5 km"); D4 replaces the BUILD step, not
 # the generator, so this becomes a parameter change rather than a rewrite.
-var length_m: float = 870.0
-var sinuosity: float = 0.55               ## 0 = nearly straight, 1 = as twisty as the design speed allows.
+var length_m: float = 900.0
+# Note what this actually controls: with the amplitude bounded by the curvature limit, the weave's
+# curvature works out at exactly sinuosity * max_curvature - so sinuosity IS "what fraction of the
+# tightest legal corner does this road habitually turn at". 0.55 gives 56 m corners, which measured
+# at 2 corners/km and read as a long road with nothing on it. 0.85 gives 36 m corners.
+var sinuosity: float = 0.85               ## 0 = nearly straight, 1 = as twisty as the design speed allows.
                                           ## Spends a TURN BUDGET; the min-radius constraint still binds.
 var elevation_character: float = 0.6      ## 0 = flat valley floor, 1 = climbs and drops over ridges
 var width_m: float = 7.5                  ## nominal road width; width_profile varies it along s
@@ -88,7 +92,13 @@ var origin: Vector3 = Vector3(0.0, 0.0, -3000.0)
 var area_size: float = 720.0              ## square side. The road WINDS inside this box rather than
                                           ## running across it, so a 1.2 km road needs no more terrain
                                           ## than the legacy map already builds - same mesh cost.
-var area_cells: int = 320                 ## matches the legacy map's ~2.25 m/cell
+var area_cells: int = 512                 ## 1.41 m/cell. The legacy map's 2.25 m/cell resolves a
+                                          ## 7.5 m road with only ~3 vertices across, which stair-
+                                          ## steps its edges no matter how smooth the height
+                                          ## function underneath is - and no height-field
+                                          ## measurement can see that, because it samples the
+                                          ## function rather than the mesh. 2.6x the vertices for a
+                                          ## road that is actually resolved.
 
 # --- THE HEIGHTMAP-IMPORT SEAM (§5 D3: "Design it; do not build it") ---------------------------
 # Elevation must be reachable through ONE function so that swapping the procedural source for an

@@ -107,10 +107,10 @@ class_name VehicleM2
 # properties; StageArea watches them and REGENERATES the stage when they settle. Changing these
 # rebuilds terrain, so it is debounced rather than applied per slider tick.
 @export var stage_seed := 20260828.0     # STAGE: whole-stage seed. Same seed = same stage, exactly.
-@export var stage_sinuosity := 0.55      # STAGE: 0 = direct, 1 = as twisty as the design speed allows
+@export var stage_sinuosity := 0.85      # STAGE: 0 = direct, 1 = as twisty as the design speed allows
 @export var stage_elevation := 0.6       # STAGE: 0 = valley floor, 1 = over the ridges
 @export var stage_design_speed := 30.0   # STAGE: km/h. Sets the minimum corner radius. HIGHER =
-                                         # STRAIGHTER, because R = V^2/(127(e+f)).
+										 # STRAIGHTER, because R = V^2/(127(e+f)).
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;

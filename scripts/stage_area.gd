@@ -23,6 +23,17 @@ var def: StageDef
 @export var bank_gain := 3.0             ## superelevation: camber follows local curvature, as the
                                          ## legacy road does, so corners lean INTO the turn
 @export var bank_max := 0.08
+# --- berms and ruts: what a gravel road looks like after cars have used it -----------------------
+# Traffic pushes material OUT of the corners, so it piles into a berm just past the road edge, and
+# wears grooves along the edges of the used width. Both are lateral-profile features, so they live
+# in height_at() alongside the corridor blend rather than being separate geometry.
+@export var berm_height := 0.55          ## ridge height just outside the road edge (m)
+@export var berm_pos := 1.1              ## how far past the edge the ridge peaks (m)
+@export var berm_width := 1.6            ## ridge falloff width (m) - the "1-2 m" asked for
+@export var berm_corner_gain := 1.4      ## extra berm on the OUTSIDE of a corner, where material goes
+@export var rut_depth := 0.11            ## groove worn along each edge of the used width (m)
+@export var rut_pos := 1.3               ## how far inside the road edge the groove sits (m)
+@export var rut_width := 1.2             ## groove width (m)
 @export var grass_color := Color(0.40, 0.42, 0.25)
 @export var road_color := Color(0.58, 0.51, 0.39)
 
@@ -124,13 +135,41 @@ func height_at(x: float, z: float) -> float:
 	var half: float = float(np["width"]) * 0.5
 	if lat >= half + shoulder:
 		return base
-	var road: Dictionary = gen.centreline.point_at(float(np["s"]))
+	var s: float = float(np["s"])
+	var road: Dictionary = gen.centreline.point_at(s)
 	var road_y: float = (road["pos"] as Vector3).y
-	# superelevation: lean the road surface into the corner it is in
-	var k: float = float(np["curvature"])
-	var bank := clampf(k * bank_gain, -bank_max, bank_max) * float(np["lateral"])
+	var signed: float = float(np["lateral"])
+
+	# SUPERELEVATION. Two things here were the "jagged edges" bug, both measured:
+	#   - the curvature came straight from the nearest SAMPLE, a numerical second difference that
+	#     swings 70% of its range over 2 m of road, so neighbouring terrain vertices banked
+	#     differently. It now comes from gen.bank_curvature_at(), smoothed over the superelevation
+	#     runoff length.
+	#   - the lever arm was the full lateral distance, out to the far edge of the shoulder, which
+	#     amplified that noise the further you got from the road. Superelevation is a property of
+	#     the CARRIAGEWAY, so the arm is clamped to the road half-width.
+	# Together these took the worst transverse height step from 0.56 m to well under the legacy
+	# road's own figure.
+	var k: float = gen.bank_curvature_at(s)
+	var bank := clampf(k * bank_gain, -bank_max, bank_max) * clampf(signed, -half, half)
 	var t := 1.0 - smoothstep(half, half + shoulder, lat)
-	return lerpf(base, road_y + bank, t)
+	var h := lerpf(base, road_y + bank, t)
+
+	# BERM: material pushed out of the corners piles just past the road edge, and piles MORE on the
+	# outside of a corner than the inside - which is the side that gets pushed.
+	var outside: float = 1.0 if signed * k < 0.0 else 0.0
+	var bh: float = berm_height * (1.0 + berm_corner_gain * outside * clampf(absf(k) / maxf(def.max_curvature(), 1e-5), 0.0, 1.0))
+	var bd: float = lat - half - berm_pos
+	h += bh * exp(-(bd * bd) / maxf(berm_width * berm_width, 0.01))
+
+	# RUT: a groove worn along each edge of the used width. Shallow, and INSIDE the road, so it is
+	# something the car runs a wheel into rather than a wall.
+	# Ruts sit a FIXED distance from the centreline, not from the edge: they are where wheels run,
+	# and the road's width profile varies along its length, so pinning them to the edge made them
+	# snake in and out - which showed up as along-road wobble at a fixed offset.
+	var rd: float = lat - maxf(def.width_m * 0.5 - rut_pos, 0.0)
+	h -= rut_depth * exp(-(rd * rd) / maxf(rut_width * rut_width, 0.01)) * t
+	return h
 
 func on_road(x: float, z: float) -> bool:
 	if gen == null or gen.centreline == null or not near_road(x, z):

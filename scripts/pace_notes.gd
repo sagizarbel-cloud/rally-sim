@@ -92,6 +92,15 @@ func _build_route(cl: Centreline, rname: String, cmin: float, sev_scale: float) 
 		var b := pts[_idx(i + 1)]
 		s += Vector2(b.x - a.x, b.z - a.z).length()
 	var corners := _detect(pts, arc, elev, s, cmin, sev_scale)
+	if not _rloop:
+		# A road book ends by calling the FINISH. On a closed circuit there is nothing to call - you
+		# just come round again - but on a point-to-point stage the co-driver telling you the finish
+		# is coming is the difference between committing and lifting. It is a call, not a corner:
+		# no direction, no severity, so `dir` is 0 and the UI renders it without an arrow.
+		var s_fin: float = arc[count - 1]
+		corners.append({"a": count - 1, "b": count - 1, "s0": s_fin, "s1": s_fin,
+			"dir": 0, "sev": 0, "mods": [], "link": false, "spoken": false,
+			"display": "FINISH", "speech_base": "finish"})
 	return {"name": rname, "pts": pts, "arc": arc, "elev": elev, "total": s, "corners": corners}
 
 func _idx(i: int) -> int:
@@ -364,8 +373,14 @@ func _update_ui(nxt: Dictionary, rem: float, driving: bool) -> void:
 		_cur_label.text = ""
 		_next_label.text = ""
 		return
-	var col := Color(0.55, 0.8, 1.0) if nxt["dir"] > 0 else Color(1.0, 0.7, 0.45)   # blue=left, orange=right
-	var arrow := "◄  " if nxt["dir"] > 0 else "  ►"
+	var d: int = int(nxt["dir"])
+	var col := Color(0.55, 0.8, 1.0) if d > 0 else Color(1.0, 0.7, 0.45)   # blue=left, orange=right
+	if d == 0:
+		col = Color(0.85, 1.0, 0.6)                                        # a call, not a corner
+	var arrow := "◄  " if d > 0 else "  ►"
 	_cur_label.add_theme_color_override("font_color", col if _hold > 0.0 else col.darkened(0.15))
-	_cur_label.text = (arrow if nxt["dir"] > 0 else "") + nxt["display"] + ("" if nxt["dir"] > 0 else arrow)
+	if d == 0:
+		_cur_label.text = String(nxt["display"])
+	else:
+		_cur_label.text = (arrow if d > 0 else "") + String(nxt["display"]) + ("" if d > 0 else arrow)
 	_next_label.text = "%d m" % int(round(rem))

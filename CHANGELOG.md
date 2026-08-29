@@ -20,6 +20,104 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-29 (SHAKEDOWN drive feedback: a hairpin, berms and ruts, 10.7 corners/km, a FINISH call — and the jagged edges were mesh resolution)
+
+Drive report on D3: pace notes good but *"dont describe finish"*; road drivable but *"i would like it
+to be more complex, have a wider berms and ruts on the sides (1-2meters) and include a hairpin"*;
+*"a bit of noise where the surrounding ground connects to the track- like jagged edges"*; and — the
+one that closes probe 4 — ***"the car doesnt bottom out"***. All addressed. **AWAITING RE-DRIVE.**
+
+**Probe 4's deferred half is now answered by the driver: the car does not bottom out on SHAKEDOWN.**
+That was the measurement the synthetic autopilot could not produce honestly, and it agrees with the
+vertical-input figures (peak 0.65-1.06 g against the rally loop's 1.10 g).
+
+### The jagged edges were MESH RESOLUTION, and no height-field measurement could have found it
+
+Three things were measured before anything was changed. Two were real and one was a red herring:
+
+1. **Banking noise (real).** `nearest_point()` returns `_curvature[best_i]` - a raw per-sample
+   numerical second difference - and the bank multiplied it by the FULL lateral distance, out to the
+   far edge of the shoulder. Measured: curvature swinging **0.0226 1/m over 2 m** of road, 70% of the
+   entire design range, giving neighbouring terrain vertices wildly different bank. Fixed by a
+   curvature smoothed over the **superelevation runoff length** (the distance covered in ~2 s at
+   design speed, derived not picked) and by clamping the lever arm to the carriageway, since
+   superelevation is a property of the road, not of the field next to it.
+2. **Mesh resolution (the actual cause).** The road is 7.5 m wide on a **2.25 m grid** - about three
+   vertices across - so its edges stair-step no matter how smooth the height function underneath is.
+   **No measurement in this session could see it**, because every probe samples the height FUNCTION
+   and the artefact is in the MESH. A screenshot found it in one look, and `area_cells` 320 -> 512
+   (1.41 m/cell, 2.6x the vertices) removed it. Photographed before and after.
+3. **Transverse "roughness" (red herring).** The first metric compared height steps ACROSS the road,
+   which conflated intentional shape with noise - adding berms made the number worse while the road
+   got better. Jaggedness is the edge wobbling ALONG its length; measuring that instead separated
+   the two.
+
+### Berms and ruts
+
+Traffic pushes material out of corners, so it piles just past the road edge and wears grooves along
+the used width. Both are lateral-profile terms in `height_at()`: a **0.55 m berm peaking 1.1 m past
+the edge over a 1.6 m falloff**, with **40% more berm on the OUTSIDE of a corner** (the side that
+gets pushed), and **0.11 m ruts 1.2 m wide**. Ruts sit a fixed distance from the CENTRELINE, not from
+the edge - pinning them to a varying road width made them snake in and out.
+
+### The hairpin needed the spine to bend
+
+**A graph over a straight spine can never turn more than 90 degrees**, so the previous router could
+not produce a hairpin at any sinuosity - the guarantee that made it self-intersection-proof also made
+it hairpin-proof. The spine now runs out to an apex and doubles back, filleted at **1.12x the minimum
+radius**, and the offset tapers to zero through the fillet - which is both what a real hairpin looks
+like (a clean constant-radius turn, not a wiggly one) and what keeps the graph property safe where
+spine curvature is highest. **Delivered: a 154-degree continuous turn, worst radius 30.3 m against
+the 30.8 m limit, zero over-limit samples, zero self-intersections.**
+
+Three defects surfaced getting there, all found by probes:
+- **The taper was itself a corner.** Ramping the offset from zero to amplitude A over length L peaks
+  at ~6A/L^2 of curvature; a picked 60 m ramp produced **12.2 m corners against a 30.8 m limit**, and
+  the relaxation could not fix them because the taper recreated them on every refit. Taper length is
+  now derived as sqrt(6A/kmax), and smoothstep rather than linear (a linear ramp has a kink at each
+  end).
+- **The relaxation was flattening the hairpin.** Smoothing a vertex toward its neighbours' midpoint
+  flattens an arc, and running that on a legally-constructed hairpin walked a 130-degree turn down to
+  96 without converging. The arc is now exempt from relaxation AND from the violation count - counting
+  it made the non-convergence warning permanent, since relaxation was not allowed to act on it.
+- **A constant tied to a retired assumption.** `_fit_spline` used a fixed 18 samples per control
+  segment, a number that only made sense for the 22 m spacing the first router happened to use.
+  Halving the spine step to 2 m silently made the spline 9x denser and generation went from seconds
+  to minutes. Sample density now follows segment length.
+
+### Length and character were fighting each other
+
+Solving the spine for a fraction of the target and bisecting AMPLITUDE for the rest chased its own
+tail: after tapering around the hairpin and both ends the wiggle adds almost nothing to length, so
+the stage came out **~10% short no matter what the target was**. They are separate knobs now:
+**`sinuosity` sets the weave amplitude** as a fraction of what the curvature limit allows - and since
+that bound is A <= kmax*L^2/(4*PI^2), the weave's curvature works out at exactly `sinuosity * kmax`,
+so the parameter means "what fraction of the tightest legal corner does this road habitually turn
+at" - while **the apex position is bisected so the FINISHED road hits `length_m`**. Timed length is
+now **900 m against a 900 m target**, exactly, with no shortfall warning.
+
+### The road is 3.7x busier, and the notes now end properly
+
+Two things were holding the corner count down, both measured:
+- sinuosity 0.55 means 56 m corners, which read as a long road with nothing on it. **0.85 gives 36 m
+  corners.**
+- the end taper was a half-sine across the WHOLE road, which held the weave below the
+  corner-detection threshold for the entire first and last third: **every corner on a 1 km stage fell
+  between 397 m and 718 m**. Its only job is to put the start and finish on the spine, so it is now a
+  fixed distance at each end.
+
+Road book before and after, same seed:
+
+    before:  3 corners over 1026 m   2.9/km   1 left / 2 right   2 severity bands
+    after:  11 corners over 1026 m  10.7/km   5 left / 6 right   3 severity bands, gap 45 m
+
+**And the co-driver calls the FINISH.** A closed circuit has nothing to call - you just come round
+again - but on a point-to-point stage knowing the finish is coming is the difference between
+committing and lifting. It is a call, not a corner (no direction, no severity), so it renders without
+an arrow.
+
+---
+
 ## 2026-08-28 (SHAKEDOWN gets a run-up and a runoff; the car was spawning backwards; and the runoff was hanging off the edge of the world)
 
 Two drive reports: *"i want the car to have a little track to start and a small runoff to finish"*
