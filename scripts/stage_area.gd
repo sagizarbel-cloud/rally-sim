@@ -188,7 +188,12 @@ func _build() -> void:
 			var b := j * _n + i + 1
 			var c := (j + 1) * _n + i
 			var d := (j + 1) * _n + i + 1
-			idxs.append_array([a, c, b, b, c, d])
+			# WOUND SO THE TOP IS THE FRONT FACE. Reversing these two triangles makes the terrain
+			# invisible from above and solid from below - this project has hit that exact bug before
+			# (see docs/ROADMAP.md M5 gotchas), and it looks like a shader or normals problem while
+			# actually being winding order. This matches stage.gd's index order deliberately; do not
+			# "tidy" it into a,c,b.
+			idxs.append_array([a, b, c, b, d, c])
 
 	var arr := []
 	arr.resize(Mesh.ARRAY_MAX)

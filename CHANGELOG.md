@@ -20,6 +20,42 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-28 (fixed: the SHAKEDOWN terrain was see-through from above and solid from below — backwards winding, again)
+
+Drive report: *"the map normals are upside down - the same mistake that often happens because of
+godot. the map is see through from above and looks normal from below."* Correct diagnosis, and it
+was **triangle winding, not normals**.
+
+`stage_area.gd` wound its grid quads `a,c,b` / `b,c,d`; the working `stage.gd` winds them
+`a,b,c` / `b,d,c` with the comment *"wound so the top is the front face"*. Both of my triangles
+were reversed, so backface culling removed the terrain when viewed from above and kept it when
+viewed from below. **The normals were already right** - `Vector3(hl-hr, 2*cs, hd-hu)` is
+character-for-character what `stage.gd` computes - which is exactly why this bug is misleading: it
+presents as a lighting or normals problem and is neither.
+
+**This is the second time this project has hit it** (see `docs/ROADMAP.md` M5: *"mesh winding was
+backwards -> half invisible/upside-down"*), so it is now in `CLAUDE.md`'s gotcha list with the
+correct index order written out, rather than left to be re-derived.
+
+**Verified by photograph, not by assertion** - the project's own lesson about screenshotting before
+reasoning about shader maths:
+
+| camera | terrain pixels | sky pixels |
+|---|---|---|
+| above the stage | **99.1%** | 0.9% |
+| below the stage | 3.5% | **96.5%** |
+
+Exactly inverted from the reported symptom. The legacy map photographed from the same height for
+comparison reads 94.2% terrain, and its colours match SHAKEDOWN's closely - so the pale, washed-out
+look from directly overhead is the noon sun, not a second bug in the new area.
+
+**Also checked while in there, because a screenshot cannot see it:** the collider agrees with the
+visual mesh to **8 mm over 20 points along the road, with no ray misses**, so the car drives on
+exactly what it is shown. A mis-scaled `HeightMapShape3D` would drop the car through the floor and
+look perfectly fine in a picture.
+
+---
+
 ## 2026-08-28 (D3 — SHAKEDOWN: the first road in this project that nobody drew, and three road-design constraints that had to be discovered the hard way)
 
 Arc D generates a stage. `StageDef` describes one as PARAMETERS (seed, length, sinuosity, elevation
