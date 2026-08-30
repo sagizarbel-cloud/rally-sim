@@ -835,7 +835,13 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   **Open for a later phase:** corner severity clusters at the constraint boundary (2 bands, not a
   road book's 1-6). The lever is a design speed that VARIES along the stage, which is what real
   roads have. Full numbers in `CHANGELOG.md` 2026-08-28.
-- [ ] D4 — Chunked terrain, streaming and LOD
+- [ ] D4 — Chunked terrain, streaming and LOD — **execution prompt written 2026-08-29:
+  `docs/PROMPT-d4-streaming.md`.** Gated on D3 being drive-verified. Carries forward the three D3
+  traps that will reappear here in new costumes: non-uniform sample spacing breaking stencils (a
+  chunk boundary IS a spacing discontinuity), height-field probes being blind to mesh artefacts
+  (D3's jagged edges were resolution, found only by screenshot), and derived-vs-picked bounds.
+  Note the file-list deviation: `stage_chunks.gd` belongs inside `StageArea`, replacing its
+  `_build()`, because D3 built the stage as its own node for D5's benefit.
 - [ ] D5 — The area manager and the connecting tunnel
 - [ ] D6 — Mixed-surface transitions
 - [ ] D7 — Deformable ruts along the corridor (optional)
