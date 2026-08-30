@@ -274,10 +274,10 @@ class_name VehicleM2
 @export var final_drive := 3.9
 @export var driveline_eff := 0.9
 @export var torque_split := 0.5              # AWD centre diff: fraction of drive to the REAR.
-                                            # 50/50 on the user's call 2026-08-29 - the 0.6 rally
-                                            # rear-bias A3 shipped drove with more oversteer than
-                                            # wanted. This is a drive-verified value being changed
-                                            # deliberately, not a default nobody had looked at.
+											# 50/50 on the user's call 2026-08-29 - the 0.6 rally
+											# rear-bias A3 shipped drove with more oversteer than
+											# wanted. This is a drive-verified value being changed
+											# deliberately, not a default nobody had looked at.
 
 # --- Slip-ratio drivetrain (dynamic: per-wheel spin + differential) ---
 @export var wheel_inertia := 1.4             # kg*m^2 per wheel (tyre + rim)
