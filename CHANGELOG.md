@@ -20,6 +20,239 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-30 (D4 drive verdict) — "felt good", and the stair-stepped edges are back. Half of them were never geometry at all
+
+**DRIVE VERDICT on the streamed 4.9 km stage: "i test drove the stage and it felt good".** Three
+things reported, all acted on:
+
+**1. "stair stepped edges ... they still occur"**, with the steer that raising resolution may be a
+performance problem and *"it will need a creative solution"*. Photographed from directly overhead
+before touching anything, and the picture splits the problem in two:
+
+- **HALF OF IT WAS NEVER GEOMETRY — it was the COLOUR.** The grass/road boundary was a per-VERTEX
+  colour, so the rasteriser interpolated an already-thresholded value across each triangle and put
+  the road edge on the TRIANGULATION. That is a sawtooth whose period is the mesh, and no amount of
+  height-field accuracy affects it. Fixed for free: `sample_at` now also returns the **edge distance
+  field** (metres outside the carriageway edge, negative on the road), the chunk mesh carries it in
+  UV, and a small shader thresholds it PER PIXEL. `d` is near-linear across a quad, so the edge comes
+  out as a smooth curve at *the same vertex count*. Confirmed by photograph: the sawtooth is gone.
+- **The rest is genuinely geometric, and it is the BERM.** `berm_width` is 1.6 m and the lattice is
+  1.41 m, so the berm's Gaussian ridge is about ONE vertex across - it cannot help but scallop, and
+  its shadow is the serration still visible along the outside of a corner. This is the part that a
+  resolution increase would fix and the part the user was right to flag as expensive: a 2x-denser
+  corridor chunk is 4x the vertices, and vertices are 96% of chunk cost. **Not fixed here, and named
+  rather than quietly left:** the principled answer is a road-aligned ribbon mesh for the
+  carriageway and its shoulders, where the cross-section is resolved ACROSS the road (12-16
+  vertices) instead of by a square lattice that happens to pass through it. That is a real piece of
+  work and it belongs with D6/D7, which already touch the corridor.
+
+**2. "maybe a lesser LOD for the continuation should be considered so the user wont see the stage
+popping in."** View distance was 361 m, derived from a draw-call budget spent on a DISC. It is now a
+**driving horizon**: `v_max * 12 s`, i.e. roughly the next twelve seconds of road at the speed the
+car can actually reach.
+
+**3. "there is a lot of dead space that is loaded to the sides."** Correct, and it was most of the
+budget: beyond the driveable shell the streamer was filling a full disc, beyond which the road only
+occupies a thin strip. The far field is now **corridor-only**, marked once at chunk resolution by
+walking the centreline, and the freed draw calls are spent on making that band as WIDE as the budget
+allows rather than on ground nobody looks at.
+
+**The first attempt at 3 looked worse than the problem, which is why it was photographed twice.**
+Reusing the existing corridor mask gave a ~106 m ribbon - the mask is sized for collision queries,
+not for looking at - so the world ended in a hard jagged edge a few metres from the road. The band
+width is now derived: whatever the draw-call budget has left after the full-detail disc, spread
+across the length of road in view.
+
+**Also fixed while photographing: seam exactness had silently regressed to 0.000488 m** (it had been
+exactly 0). `1/2048` is the tell - a float32 ulp. When the area grew to 4 km the cell size stopped
+being exactly representable (720/512 = 1.40625 is, 4000/2844 is not), and the mesh built vertices as
+`origin + i*step` while the sampler used the integer lattice index: `a*c + b*c` and `(a+b)*c` are
+not the same float. Vertices now come from the integer index, one multiply, so neighbours derive a
+shared edge from an identical expression. **Back to 0.000000000 m over 2673 shared vertices**, with
+order independence still bit-identical over 48 chunks.
+
+**A probe harness lesson, recorded because it wasted a round.** The first screenshots came out as
+three identical pictures of the car with the HUD over them (world.gd re-points its own camera every
+physics frame, so setting `current` once does nothing), and the next set photographed the procedural
+sky's ground hemisphere and nearly got read as "the terrain is rendering dark" - because the camera
+was 2.2 km from the CAR, and the streamer builds around the car, so there was simply nothing there.
+Take the world's processing down, hide the CanvasLayers, re-assert `current` on the captured frame,
+and **put the car where the camera is**.
+
+---
+
+## 2026-08-30 (later still) — ONE `nearest_point` call cost 478 ms. Driving away from a road made the whole game 60x slower, and it was never D4's fault
+
+**Symptom in driving words: on the generated stage the game ran at about two frames a second,
+while the legacy circuits were fine.** Measured: **482 ms per physics tick** against the 8.33 ms a
+120 Hz tick allows and the 1.84 ms baseline. Found while probing D4 and fixed there, but **this bug
+predates D4** — it is in `Centreline`, which D2/C1.0 own, and any code path that asks a centreline
+about a point far away from it hits it.
+
+**Four hypotheses were measured and REFUTED before the real one was found.** Recording them because
+each looked obviously right, and the wrong one nearly got "fixed":
+
+| suspected | test | result |
+|---|---|---|
+| the chunk streamer | disabled `update()`, hid every chunk mesh | 497 → 487 ms (2%) |
+| some script's per-frame work | bisected the node tree, processing off one by one | ~0% |
+| many shapes on one `StaticBody3D` | detached all 23 chunk colliders | 483 ms (0%) |
+| … scaling with shape count | re-attached 1, then 12 | 483 → 486 ms (0%) |
+
+**The actual cause: `Centreline._nearest_sample()`'s ring walk is O(max_ring³).** It iterated the
+whole `(2r+1)²` square at every ring and `continue`d past the interior, instead of walking only the
+ring's perimeter. On-road queries return at ring 0, so this never showed. But the ring cap is
+DERIVED from the road's extent over its cell size — 202 rings for the rally loop — so a query from
+far away walks about **11 million `Vector2i` + dictionary probes**: profiled at **478 ms for a
+single call**, i.e. **99.7% of the entire physics tick**.
+
+The caller was `time_trial.gd` asking the ACTIVE circuit where the car is, while the car sat on
+SHAKEDOWN 2.6 km away. In normal play `[B]` sets the active circuit to the one you are on, which is
+why nobody has felt this yet — but `wear`, `roughness`, the ground map and D5's connecting tunnel
+all query centrelines they may be far from, so it was a landmine, not a curiosity.
+
+**Two fixes, both derived rather than tuned:**
+1. **Walk the perimeter, not the square.** A stride does the skipping: on the two edge columns every
+   `dz` is scanned, between them only `dz = ±r`. Same cells, and the same ORDER (dx outer, dz
+   ascending), so the winner among any exact tie is unchanged — which matters because C1's washboard
+   phase is keyed off *which sample* comes back, not merely a nearby position.
+2. **Far queries skip straight to brute force.** Reaching distance d costs ~`4(d/cell)²` cell probes
+   while brute force costs `_n`, so brute force wins beyond `d = cell·sqrt(_n/4)` — that crossover
+   is the threshold, not a picked number.
+
+**Proved equivalent, not assumed.** Against brute-force truth over the centre line, road edge,
+shoulder, well off-road and far-away positions: **0 mismatches in 3220 tests on every one of the
+four centrelines** (DIRT CIRCLE, RALLY LOOP, ASPHALT RING, SHAKEDOWN), worst arc-length difference
+0.0000 m. This is the same standard the 2026-08-28 rewrite was held to, and for the same reason: the
+old fixed 3x3 was wrong at 9.85% of road-edge positions and scrambled the washboard.
+
+**Cost of one far query: 478 ms → 0.289 ms on the rally loop — 1650x.** SHAKEDOWN's is 1.229 ms
+(it has 4765 samples, so its brute-force fallback is proportionally bigger).
+
+**A probe was the reason this stayed hidden, and that is the lesson worth keeping.** The driven
+probe reported a "worst physics frame" of 1.05 ms while the process was managing 2.7 ticks per
+second, because it timed only its OWN `_physics_process` — the cost sat entirely outside the
+measurement window. A probe that measures the thing it can see rather than the thing you care about
+will confirm whatever you already believe. It now reads
+`Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)`, the engine's own number.
+
+---
+
+## 2026-08-30 (later) — D4: the stage is streamed, and it is 4.9 km. The plan's "the collider cook is the spike" was wrong by two orders of magnitude
+
+**PHASE D4 BUILT AND PROBE-VERIFIED — AWAITING DRIVE VERDICT.** SHAKEDOWN's ground is no longer one
+513x513 mesh and one collider over a 720 m box; it is chunks on a global lattice, streamed around
+the car with detail and colliders that follow it. That is what lifts the stage from D3's static
+~900 m to **4779 m timed / 4905 m of road** in a 4 km box, inside the arc's 4–6 km target.
+
+**THE PLAN'S CENTRAL ASSUMPTION IS WRONG, AND IT WAS MEASURED BEFORE ANY CODE WAS WRITTEN.**
+§3.4 and the D4 prompt both say collider cooking is the frame-time spike to design around, and that
+cook-ahead distance is therefore the whole game. Measured cost of building one chunk on the
+corridor:
+
+| chunk | `sample_at` | mesh | **cook** |
+|---|---|---|---|
+| 32 cells (45.0 m span, 1089 verts) | 15.45 ms | 0.60 ms | **0.11 ms** |
+| 64 cells (90.0 m span, 4225 verts) | 64.27 ms | 2.28 ms | **0.35 ms** |
+
+**The cook is 0.5% of the cost. 96% of it is `sample_at`, at 11.4 us per corridor vertex**, because
+every vertex pays `Centreline.nearest_point()` — the provably-correct expanding ring search that
+2026-08-28 installed after the old fixed 3x3 was found wrong at 9.85% of road-edge positions. That
+search was deliberately NOT traded for a cheap local one: this stage has a hairpin, a hairpin folds
+the road back on itself *inside a single chunk*, and that is exactly where a local search locks onto
+the wrong branch. So the spike is not avoided by cooking early — **it is avoided by never doing a
+chunk's work in one frame.** A build is a resumable job with a hard per-tick time budget, so the
+worst frame is bounded by construction rather than by hoping a cook lands between wheels.
+
+**Everything else is derived from that measurement**, not picked: lead distance from the measured
+cost of a vertex, the budget and the car's own top speed; hysteresis from the chunk span; the view
+radius from the triangle and draw-call cost of the static area it replaces (which is why it lands
+at ~406 m — more ground than the legacy map shows in any direction). The one dial is
+**Stage streaming budget** (Tab, default 1.00 ms/tick).
+
+**Probe 3, seam continuity — the phase's central probe — PASSES EXACTLY, not within tolerance.**
+75 adjacent full-detail chunk pairs, 2475 shared vertices: **worst position step 0.000000000 m,
+worst normal discontinuity 0.000000000 deg.** Two things make that structural rather than lucky.
+The lattice is GLOBAL, so neighbours compute a shared edge from the identical integer expression;
+and every chunk samples a one-vertex APRON outside itself, so normals use a true central difference
+at the border instead of a one-sided one. Without the apron every seam reads as a crease under a
+low sun — the "a stencil breaks at a spacing discontinuity" trap that got D3 three times, in its
+D4 costume.
+
+**Probe 4, order independence — PASSES.** 45 chunks dropped and rebuilt in the reverse order:
+**0 differing vertices**, bit-identical.
+
+**Probe 2, memory ceiling — PASSES, and it is FLAT.** Driving the full 4906 m: resident chunks sit
+at **256–264 across the entire middle of the stage** (peak 283, peak colliders 38), falling only
+near the area edge where the disc is clipped. Bounded, not growing with distance travelled — which
+is the property that is invisible over 900 m and fatal over 5 km.
+
+**Probe 5, bottoming over the full streamed stage — no worse than the rally loop.** 4/4 corners
+pegged, 598 frames on the stops over 4906 m = **0.122 frames/m** against B3's rally-loop baseline of
+177 over ~1290 m = **0.143 frames/m**; peak Fz **24.1 kN** against 23.1 kN. And the car never fell
+through the world: worst sink **-0.366 m** (negative = always above the height field), so the
+streamer stayed ahead of it for the whole stage.
+
+**Probe 1, frame-time spikes — DOES NOT MEET ITS STATED PASS CONDITION, and the reason is not
+chunking.** Worst physics frame **23.73 ms** against the 8.333 ms a 120 Hz tick allows, with
+**359 of 33,109 frames (1.1%) over budget**. But the streamer's own contribution is bounded and
+small: **worst chunk finalise 2.20 ms**, and the worst frame happened with **no chunk build in
+flight**. The control settles it — the same autopilot on the LEGACY RALLY LOOP, which is one mesh,
+one collider and no streaming at all:
+
+| | worst physics frame | frames over 8.333 ms |
+|---|---|---|
+| streamed stage (D4) | 23.73 ms | 359 / 33109 (1.1%) |
+| legacy rally loop (control) | **62.10 ms** | **721 / 36001 (2.0%)** |
+
+**The calibration bed spikes harder than the streamed stage** — 2.6x the worst frame and twice the
+proportion over budget. Spikes of this size are therefore a pre-existing property of the car and the
+physics step, not something D4 introduced. Caveat recorded honestly: the control autopilot drove
+worse (off-road 10.8% of frames vs 3.3%, bottoming 1.24 frames/m vs 0.122), so its 62 ms is not a
+clean like-for-like; the clean attribution is the 2.20 ms finalise measured on the stage itself.
+**Whether any of this is FELT is the drive verdict's job, not a probe's.**
+
+**Unloading is budgeted too, as of this phase.** Building was time-sliced but freeing was not, so one
+tick could `queue_free` a dozen ArrayMeshes and HeightMapShape3Ds and pay for all of them at
+end-of-frame. Chunks leave the disc at about v/span per second (~0.4/s at 18 m/s), so the cap is two
+per TICK — 240/s, two orders of magnitude more headroom than the rate needs, while still bounding
+the spike.
+
+**§8 risk 6 asserted at the new length, and it HOLDS — better than at 1 km.** The prompt calls this
+"the assumption the whole arc rests on". `nearest_point` on the 4.9 km centreline:
+centre line **0.0177 ms/tick** for 4 wheels (D3 at ~1 km: 0.018), road edge **0.0308** (was 0.046),
+shoulder **0.0299** (was 0.071), against the 1.84 ms budget. Cost did not grow with stage length.
+
+**Three defects found by measuring rather than by reasoning, all fixed:**
+1. **The streamer followed the car around the LEGACY map.** With no area clipping it built 293
+   chunks of SHAKEDOWN's landform 3 km from the stage, on top of the circuits §1.1 says stay
+   untouched. Chunks now exist only inside the generated area, as D3's single slab did.
+2. **LOD thrash: 702 chunk builds in the first 155 m** of the stage against ~245 resident — most of
+   the streaming budget went on rebuilding ground that was already there at a different detail.
+   Fixed with one-sided hysteresis on the LOD bands (a chunk resists being coarsened but is refined
+   immediately), and by re-deriving the radii only when the measured cost actually moves rather than
+   every 16 builds, which was itself pushing chunks back across band edges.
+3. **A collider was cooked for every full-detail chunk** — 79 heightfields in the physics world when
+   ~30 can ever be touched. Colliders now exist only within `r_solid`, attached and dropped from
+   kept heights without rebuilding the chunk.
+
+**Deviations from §5 worth not re-litigating.** Chunks are indexed on a global XZ lattice and
+streamed by distance from the CAR, not "along `s`" as §5 says. Along-`s` chunking cannot answer what
+happens when the driver leaves the road, and an `s`-aligned ribbon cannot be a `HeightMapShape3D`
+(which is an axis-aligned grid) without falling back to a trimesh. The lattice version makes seam
+continuity and order independence structural rather than tested-for, which is worth more than
+matching the plan's wording. §8 risk 7 (erosion) remains NOT implemented and still baked-per-seed if
+it ever is, exactly as D3 left it.
+
+**Also fixed in passing:** `height_at` and `_road_blend` were two functions each paying their own
+11.4 us `nearest_point` for the same vertex; they are now one `sample_at` returning both, by value
+rather than through a Dictionary (D1 measured a Dictionary on a per-vertex path at 0.487 ms/tick
+against 0.153 for the same work returned by value). And `StageDef.area_cells` is now DERIVED from
+`cell_size_m`, so growing the area adds cells instead of enlarging them — D3's stair-stepped road
+edges came from cells that were too big, and only a screenshot could see it.
+
+---
+
 ## 2026-08-30 — D3 DRIVE-VERIFIED. The finish was called 80 m late, the co-driver went silent on 30% of the rally loop, and "same seed = same stage" was not true
 
 **D3 IS ACCEPTED.** Drive verdict: *"road is drivable and feels like a road"*, *"corners do have

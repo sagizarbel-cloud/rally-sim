@@ -50,6 +50,7 @@ var _size := 0.0
 var _origin := Vector3.ZERO
 
 var car                                  # set by world.gd: watched for live stage-parameter edits
+var chunks: StageChunks                  # D4: the streamed ground
 var _pending := 0.0
 var _last_params: Array = []
 
@@ -140,17 +141,39 @@ func near_road(x: float, z: float) -> bool:
 	return _corridor.has(_ckey(x, z))
 
 func height_at(x: float, z: float) -> float:
+	return sample_at(x, z).x
+
+func _road_blend(x: float, z: float) -> float:
+	return sample_at(x, z).y
+
+func sample_at(x: float, z: float) -> Vector3:
+	## (height, road blend, EDGE DISTANCE) from ONE nearest_point call.
+	##
+	## The third component is metres OUTSIDE the carriageway edge (negative = on the road). It exists
+	## so the chunk mesh can carry a DISTANCE FIELD per vertex and threshold it per PIXEL, instead of
+	## carrying an already-thresholded colour and letting the rasteriser interpolate that. Those are
+	## not the same picture: a thresholded colour interpolated across a triangle puts the road edge on
+	## the triangulation, which is the sawtooth the driver sees. `d` is near-linear across a quad, so
+	## thresholding it in the fragment shader gives a smooth curve at the SAME vertex count.
+	##
+	## D4 measured why this is one function and not two: nearest_point costs 11.4 us on the corridor
+	## - 96% of everything a chunk vertex costs, against 0.08 us for the collider cook the plan
+	## warned about - and building a chunk needs BOTH the height and the colour blend at every
+	## vertex. Asking separately paid that 11.4 us twice. Returns a Vector2 rather than a Dictionary
+	## deliberately: D1 measured a Dictionary on a per-vertex path at 0.487 ms/tick against 0.153 for
+	## the same work returned by value.
 	## Base terrain, with the road corridor cut into it. The road holds the elevation the generator
 	## solved for (grade-limited, so it is NOT simply the terrain height) and the ground blends up or
 	## down to meet it over `shoulder` metres - which is where the cut and fill becomes visible.
 	var base: float = def.elevation_at(x, z)
 	if gen == null or gen.centreline == null or not near_road(x, z):
-		return base
+		return Vector3(base, 0.0, 999.0)
 	var np := gen.centreline.nearest_point(x, z)
 	var lat: float = absf(float(np["lateral"]))
 	var half: float = float(np["width"]) * 0.5
+	var blend: float = 1.0 - smoothstep(half, half + 2.0, lat)
 	if lat >= half + shoulder:
-		return base
+		return Vector3(base, blend, lat - half)
 	var s: float = float(np["s"])
 	var road: Dictionary = gen.centreline.point_at(s)
 	var road_y: float = (road["pos"] as Vector3).y
@@ -185,7 +208,7 @@ func height_at(x: float, z: float) -> float:
 	# snake in and out - which showed up as along-road wobble at a fixed offset.
 	var rd: float = lat - maxf(def.width_m * 0.5 - rut_pos, 0.0)
 	h -= rut_depth * exp(-(rd * rd) / maxf(rut_width * rut_width, 0.01)) * t
-	return h
+	return Vector3(h, blend, lat - half)
 
 func on_road(x: float, z: float) -> bool:
 	if gen == null or gen.centreline == null or not near_road(x, z):
@@ -219,79 +242,57 @@ func spawn_transform() -> Transform3D:
 # ---------------------------------------------------------------- build
 
 func _build() -> void:
-	var verts := PackedVector3Array(); verts.resize(_n * _n)
-	var norms := PackedVector3Array(); norms.resize(_n * _n)
-	var cols := PackedColorArray(); cols.resize(_n * _n)
-	var heights := PackedFloat32Array(); heights.resize(_n * _n)
-	var half := _size * 0.5
-	for j in range(_n):
-		for i in range(_n):
-			var x := _origin.x - half + float(i) * _cs
-			var z := _origin.z - half + float(j) * _cs
-			var h := height_at(x, z)
-			var idx := j * _n + i
-			verts[idx] = Vector3(x, h, z)
-			heights[idx] = h
-			cols[idx] = grass_color.lerp(road_color, _road_blend(x, z))
-	# normals from the height field
-	for j in range(_n):
-		for i in range(_n):
-			var i0 := maxi(i - 1, 0); var i1 := mini(i + 1, _n - 1)
-			var j0 := maxi(j - 1, 0); var j1 := mini(j + 1, _n - 1)
-			var hx: float = heights[j * _n + i1] - heights[j * _n + i0]
-			var hz: float = heights[j1 * _n + i] - heights[j0 * _n + i]
-			norms[j * _n + i] = Vector3(-hx, 2.0 * _cs, -hz).normalized()
+	## D4: the ground is STREAMED now. This used to build one 513x513 mesh and one HeightMapShape3D
+	## over the whole 720 m box, which is why the stage could only ever be ~900 m long - a 5 km
+	## stage in one slab is 18 billion cells at the 1.41 m the road edges need. The chunk manager
+	## owns the same height function; see scripts/stage_chunks.gd for why the cost that forced this
+	## design is sample_at() and not the collider cook the plan expected.
+	chunks = StageChunks.new()
+	chunks.name = "Chunks"
+	chunks.area = self
+	chunks.car = car
+	add_child(chunks)
+	chunks.configure()
+	chunks.prime(_prime_point())
 
-	var idxs := PackedInt32Array()
-	for j in range(_n - 1):
-		for i in range(_n - 1):
-			var a := j * _n + i
-			var b := j * _n + i + 1
-			var c := (j + 1) * _n + i
-			var d := (j + 1) * _n + i + 1
-			# WOUND SO THE TOP IS THE FRONT FACE. Reversing these two triangles makes the terrain
-			# invisible from above and solid from below - this project has hit that exact bug before
-			# (see docs/ROADMAP.md M5 gotchas), and it looks like a shader or normals problem while
-			# actually being winding order. This matches stage.gd's index order deliberately; do not
-			# "tidy" it into a,c,b.
-			idxs.append_array([a, b, c, b, d, c])
+func attach_car(c) -> void:
+	## world.gd wires the car AFTER the area is in the tree, so _ready() has already primed the
+	## ground from the spawn point. Re-derive once the car exists, because the lead distance comes
+	## from the car's own top speed - re-gear the car and the streamer follows.
+	car = c
+	if chunks != null:
+		chunks.car = c
+		chunks.configure()
 
-	var arr := []
-	arr.resize(Mesh.ARRAY_MAX)
-	arr[Mesh.ARRAY_VERTEX] = verts
-	arr[Mesh.ARRAY_NORMAL] = norms
-	arr[Mesh.ARRAY_COLOR] = cols
-	arr[Mesh.ARRAY_INDEX] = idxs
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 1.0
-	mesh.surface_set_material(0, mat)
-	var mi := MeshInstance3D.new()
-	mi.name = "AreaMesh"
-	mi.mesh = mesh
-	add_child(mi)
+func _prime_point() -> Vector3:
+	## WHAT A LIVE SEED CHANGE MEANS UNDER STREAMING - decided here rather than left implicit.
+	## D3 rebuilt the whole 720 m box on every parameter edit, which was affordable for one slab and
+	## is impossible for a 4 km corridor. The rule is: DROP EVERY CHUNK AND RE-STREAM FROM WHERE THE
+	## CAR IS. `_regenerate` already frees the chunk manager with the rest of the area's children, so
+	## the drop is free; the only real question is where the new ground must be solid FIRST, and the
+	## answer is under the car - not at the start line. Priming at the start line was right at
+	## startup, when that is where the car is, and wrong for a seed change made from half way down
+	## the stage, which would leave the car over ground that had not been built yet.
+	## (When the car is on SHAKEDOWN, world.gd also respawns it, because the road it was driving no
+	## longer exists - a new seed is a new road, not a repaint of the old one.)
+	if car != null and in_area(car.global_position.x, car.global_position.z):
+		return car.global_position
+	if gen != null and gen.centreline != null:
+		var p0: Dictionary = gen.centreline.point_at(0.0)
+		return p0["pos"]
+	return _origin
 
-	var shape := HeightMapShape3D.new()
-	shape.map_width = _n
-	shape.map_depth = _n
-	shape.map_data = heights
-	var cs := CollisionShape3D.new()
-	cs.shape = shape
-	# HeightMapShape3D is centred on its own origin and spans map_width x map_depth UNITS, so it has
-	# to be scaled to the cell size and moved to the area centre.
-	cs.scale = Vector3(_cs, 1.0, _cs)
-	cs.position = Vector3(_origin.x, 0.0, _origin.z)
-	add_child(cs)
+func _physics_process(_d: float) -> void:
+	if chunks == null or car == null:
+		return
+	# The Tab panel binds VEHICLE properties, so the streaming budget is mirrored on the car and
+	# pushed here - the same pattern stage_seed / stage_sinuosity use.
+	var b: float = float(car.stage_chunk_budget_ms)
+	if not is_equal_approx(b, chunks.build_budget_ms):
+		chunks.build_budget_ms = b
+		chunks._derive()                     # the lead distance is derived FROM the budget
+	chunks.update(car.global_position)
 
-func _road_blend(x: float, z: float) -> float:
-	if gen == null or gen.centreline == null or not near_road(x, z):
-		return 0.0
-	var np := gen.centreline.nearest_point(x, z)
-	var lat: float = absf(float(np["lateral"]))
-	var half: float = float(np["width"]) * 0.5
-	return 1.0 - smoothstep(half, half + 2.0, lat)
 
 func _build_markers() -> void:
 	# The gates mark the TIMED window: run-up before START, runoff after FINISH.

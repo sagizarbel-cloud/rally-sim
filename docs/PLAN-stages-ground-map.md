@@ -857,13 +857,60 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   **Open for a later phase:** corner severity clusters at the constraint boundary (2 bands, not a
   road book's 1-6). The lever is a design speed that VARIES along the stage, which is what real
   roads have. Full numbers in `CHANGELOG.md` 2026-08-28.
-- [ ] D4 — Chunked terrain, streaming and LOD — **execution prompt written 2026-08-29:
-  `docs/PROMPT-d4-streaming.md`.** Gated on D3 being drive-verified. Carries forward the three D3
-  traps that will reappear here in new costumes: non-uniform sample spacing breaking stencils (a
-  chunk boundary IS a spacing discontinuity), height-field probes being blind to mesh artefacts
-  (D3's jagged edges were resolution, found only by screenshot), and derived-vs-picked bounds.
-  Note the file-list deviation: `stage_chunks.gd` belongs inside `StageArea`, replacing its
-  `_build()`, because D3 built the stage as its own node for D5's benefit.
+- [ ] D4 — Chunked terrain, streaming and LOD — **BUILT AND PROBE-VERIFIED 2026-08-30, AWAITING
+  DRIVE VERDICT.** `scripts/stage_chunks.gd` replaces `StageArea._build()`. The stage is now
+  **4779 m timed / 4905 m of road** in a 4 km box, inside §1.2's 4–6 km target.
+  **THIS PHASE'S PLAN TEXT IS WRONG ON ITS CENTRAL POINT, and it was measured before any code was
+  written.** §3.4 and the D4 prompt say collider cooking is the spike to design around. Building one
+  45 m chunk costs **15.45 ms in `sample_at`, 0.60 ms in mesh assembly and 0.11 ms in the cook** —
+  the cook is 0.5%, and 96% is `Centreline.nearest_point()` at 11.4 us per corridor vertex. That
+  search is not negotiable (the 2026-08-28 fix; and a hairpin folds the road back inside one chunk,
+  which is exactly where a cheap local search picks the wrong branch), so the spike is avoided by
+  **never doing a chunk's work in one frame**: a build is a resumable job under a hard per-tick
+  budget, and the worst frame is bounded by construction. Lead distance, hysteresis and view radius
+  are all derived from that measurement, the budget and the car's own top speed.
+  **Probe 3 (seam continuity), the phase's central probe, passes EXACTLY**: 75 adjacent full-detail
+  pairs / 2475 shared vertices, worst position step 0.000000000 m, worst normal discontinuity
+  0.000000000 deg. Structural, not lucky: a GLOBAL lattice means neighbours derive a shared edge
+  from the identical integer expression, and a one-vertex APRON per chunk keeps normals on a true
+  central difference at the border. **Probe 4 (order independence) passes bit-identical** over 45
+  chunks rebuilt in reverse.
+  **§8 risk 6 asserted at 4.9 km and it HOLDS** — `nearest_point` 0.0177 ms/tick on the centre line
+  (1 km: 0.018), 0.0308 at the road edge (was 0.046), 0.0299 at the shoulder (was 0.071). Cost does
+  not grow with stage length, which is what the rest of the arc was resting on.
+  **DEVIATIONS from §5, deliberate:** chunks are indexed on a global XZ lattice and streamed by
+  distance from the CAR, not "along `s`". Along-`s` chunking has no answer for the driver leaving
+  the road, and an `s`-aligned ribbon cannot be a `HeightMapShape3D` without becoming a trimesh; the
+  lattice makes probes 3 and 4 structural instead of tested-for. §8 risk 7 (erosion) still NOT
+  implemented, as D3 left it.
+  **Probe 2 (memory ceiling) PASSES and is FLAT**: 256–264 resident chunks across the whole middle
+  of the 4906 m stage (peak 283, 38 colliders), falling only at the area edge. **Probe 5 (bottoming)
+  is no worse than the rally loop**: 0.122 frames on the stops per metre against B3's 0.143, peak Fz
+  24.1 kN against 23.1 kN, and the car never fell through (worst sink -0.366 m, i.e. always above
+  the height field).
+  **Probe 1 (frame-time spikes) does NOT meet its stated pass condition, and the cause is not
+  chunking.** Worst physics frame 23.73 ms against the 8.333 ms tick, 359/33109 frames (1.1%) over.
+  The streamer's own contribution is bounded at **2.20 ms** (worst chunk finalise) and the worst
+  frame had **no build in flight**. The control decides it: the same autopilot on the LEGACY RALLY
+  LOOP — one mesh, one collider, no streaming — spikes to **62.10 ms with 721/36001 (2.0%) over
+  budget**, i.e. the calibration bed is WORSE than the streamed stage. These spikes pre-date D4.
+  (Caveat: the control's driver was worse — 10.8% off-road vs 3.3% — so 62 ms is not like-for-like;
+  the clean number is the 2.20 ms finalise.) Whether any of it is FELT is the drive verdict's job.
+  **Four defects found by measuring:** the streamer followed the car around the LEGACY map (293
+  chunks built on top of the circuits §1.1 protects); LOD thrash rebuilt 702 chunks in the first
+  155 m; a collider was cooked for every full-detail chunk (79 where ~30 are reachable); and
+  unloading was unbudgeted while building was time-sliced. All fixed — see `CHANGELOG.md`
+  2026-08-30 (later).
+  **A BUG OLDER THAN THIS PHASE WAS FOUND WHILE PROBING IT, and it is the session's biggest find:**
+  `Centreline._nearest_sample`'s ring walk iterated the whole `(2r+1)^2` square per ring instead of
+  the perimeter, making it O(cap^3). The cap is derived from road extent (202 rings on the rally
+  loop), so **ONE query from 2.6 km away cost 478 ms — 99.7% of a 482 ms physics tick.** On-road
+  queries return at ring 0, which is why it hid. Fixed by walking the perimeter and by sending far
+  queries straight to brute force past the derived crossover `d = cell*sqrt(_n/4)`; **proved
+  equivalent, 0 mismatches in 3220 tests on each of the four centrelines**, 478 ms -> 0.289 ms.
+  This is `Centreline` (D2/C1.0) code and it affects `wear`, `roughness` and D5's connecting tunnel,
+  not just D4.
+  Feel cannot be verified here: **awaiting the user drive checklist below.**
 - [ ] D5 — The area manager and the connecting tunnel
 - [ ] D6 — Mixed-surface transitions
 - [ ] D7 — Deformable ruts along the corridor (optional)

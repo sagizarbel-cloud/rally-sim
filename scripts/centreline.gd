@@ -35,6 +35,9 @@ var _cell_size := 20.0
 var _min_x := 0.0
 var _min_z := 0.0
 var _max_ring := 8
+var _max_x := 0.0
+var _max_z := 0.0
+var _brute_dist := 0.0
 
 static func from_polar(center: Vector3, radius_fn: Callable, halfwidth_fn: Callable,
 		height_fn: Callable, samples: int) -> Centreline:
@@ -191,6 +194,9 @@ func _build_grid() -> void:
 	# A hard-coded bound is exactly how the _mf_peak_u bisection silently mis-placed a curve peak
 	# (see docs/PLAN-drivetrain-suspension.md §9 B4), so this follows the grid's real extent.
 	_max_ring = int(ceil(maxf(maxx - minx, maxz - minz) / _cell_size)) + 2
+	_max_x = maxx; _max_z = maxz
+	# Crossover from ring walking to brute force, derived (see _nearest_sample).
+	_brute_dist = _cell_size * sqrt(maxf(float(_n), 1.0) / 4.0)
 	for i in range(_n):
 		var key := _key(_pts[i].x, _pts[i].z)
 		if not _grid.has(key):
@@ -219,13 +225,35 @@ func _nearest_sample(x: float, z: float) -> int:
 	var ck := _key(x, z)
 	var best_i := -1
 	var best_d2 := INF
+
+	# FAR QUERIES GO STRAIGHT TO BRUTE FORCE. Walking rings out to a road you are kilometres from
+	# costs far more than simply testing every sample, and the crossover is derivable: reaching a
+	# distance d costs about 4*(d/cell)^2 cell probes, brute force costs _n, so brute force wins
+	# beyond d = cell * sqrt(_n / 4). Measured before this existed: ONE query from 2.6 km away took
+	# 478 ms - 99.7% of a 482 ms physics tick - because the ring walk ran to the derived cap first.
+	var dx_out: float = maxf(maxf(_min_x - x, x - _max_x), 0.0)
+	var dz_out: float = maxf(maxf(_min_z - z, z - _max_z), 0.0)
+	if dx_out * dx_out + dz_out * dz_out > _brute_dist * _brute_dist:
+		for i in range(_n):
+			var d2f := Vector2(_pts[i].x - x, _pts[i].z - z).length_squared()
+			if d2f < best_d2:
+				best_d2 = d2f; best_i = i
+		return best_i
+
 	var r := 0
 	while r <= _max_ring:
+		# ONLY THE RING'S PERIMETER. This used to iterate the whole (2r+1)^2 square and `continue`
+		# past the interior, which made the walk O(_max_ring^3) overall - about 11 million cell
+		# probes at the rally loop's 202-ring cap. The stride does the skipping instead: on the two
+		# edge columns every dz is scanned, and between them only dz = -r and +r. Same cells, same
+		# ORDER (dx outer, dz ascending), so the winner among any exact tie is unchanged - which
+		# matters because C1's washboard phase is keyed off which sample this returns.
 		for dxi in range(-r, r + 1):
-			for dzi in range(-r, r + 1):
-				if r > 0 and maxi(absi(dxi), absi(dzi)) != r:
-					continue                      # interior already scanned by a smaller ring
+			var stride: int = 1 if (absi(dxi) == r or r == 0) else 2 * r
+			var dzi := -r
+			while dzi <= r:
 				var key := Vector2i(ck.x + dxi, ck.y + dzi)
+				dzi += stride
 				if not _grid.has(key):
 					continue
 				for idx in _grid[key]:

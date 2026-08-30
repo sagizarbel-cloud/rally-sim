@@ -77,6 +77,7 @@ func _ready() -> void:
 	_build_rearview(car)
 	_build_reactive_patch(car, stage)
 	_build_sound(car, stage)
+
 func _physics_process(delta: float) -> void:
 	if _car == null:
 		return
@@ -155,7 +156,7 @@ func _build_stage_area(stage) -> StageArea:
 
 func _wire_stage_area_live(area: StageArea, car: Node3D, tt: Node) -> void:
 	# live stage-parameter edits: rebuild, then re-point everything that holds the old centreline
-	area.car = car
+	area.attach_car(car)               # D4: also re-derives the streamer's lead from the car's speed
 	area.regenerated.connect(func():
 		_circuit_cls[3] = area.gen.centreline
 		tt.centrelines = _circuit_cls

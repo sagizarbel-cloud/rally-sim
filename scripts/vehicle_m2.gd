@@ -111,6 +111,11 @@ class_name VehicleM2
 @export var stage_elevation := 0.6       # STAGE: 0 = valley floor, 1 = over the ridges
 @export var stage_design_speed := 30.0   # STAGE: km/h. Sets the minimum corner radius. HIGHER =
 										 # STRAIGHTER, because R = V^2/(127(e+f)).
+# D4: the streamed ground's share of a physics tick. Every other D4 size (lead distance, how far
+# ahead the ground is solid) is DERIVED from this and the measured cost of a chunk vertex, so this
+# is the one dial: raise it and the ground streams further ahead but the worst frame grows; lower it
+# and frames get calmer while the ground is built closer to the car.
+@export var stage_chunk_budget_ms := 1.0 # STAGE: ms per tick the stage may spend building ground
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;

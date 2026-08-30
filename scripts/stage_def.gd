@@ -22,7 +22,7 @@ var name: String = "SHAKEDOWN"
 # not lengthen the stage on its own - the box or the design speed has to give first.
 # D3 stays short and static on purpose (§5: "cap it at ~1-1.5 km"); D4 replaces the BUILD step, not
 # the generator, so this becomes a parameter change rather than a rewrite.
-var length_m: float = 900.0
+var length_m: float = 4800.0
 # Note what this actually controls: with the amplitude bounded by the curvature limit, the weave's
 # curvature works out at exactly sinuosity * max_curvature - so sinuosity IS "what fraction of the
 # tightest legal corner does this road habitually turn at". 0.55 gives 56 m corners, which measured
@@ -104,16 +104,27 @@ var control_tolerance_m: float = 2.0
 # their terms. This origin keeps the stage clear of the legacy map (which spans +-360 m plus the
 # drag strip out to x = 4285).
 var origin: Vector3 = Vector3(0.0, 0.0, -3000.0)
-var area_size: float = 720.0              ## square side. The road WINDS inside this box rather than
-                                          ## running across it, so a 1.2 km road needs no more terrain
-                                          ## than the legacy map already builds - same mesh cost.
-var area_cells: int = 512                 ## 1.41 m/cell. The legacy map's 2.25 m/cell resolves a
-                                          ## 7.5 m road with only ~3 vertices across, which stair-
-                                          ## steps its edges no matter how smooth the height
-                                          ## function underneath is - and no height-field
-                                          ## measurement can see that, because it samples the
-                                          ## function rather than the mesh. 2.6x the vertices for a
-                                          ## road that is actually resolved.
+var area_size: float = 4000.0             ## square side. The road WINDS inside this box rather than
+                                          ## running across it. D3 held this at 720 m because the
+                                          ## whole box was ONE mesh and one collider; D4 streams the
+                                          ## ground in chunks, so the box is now just the bound the
+                                          ## road is routed inside and costs nothing where the road
+                                          ## does not go. Centre (0, 0, -3000) with a 4 km side spans
+                                          ## z -5000..-1000, still clear of the legacy map (+-360 m)
+                                          ## and of the drag strip out at x 4285, z ~ 0.
+var cell_size_m: float = 1.40625          ## THE invariant, and the reason area_cells is derived from
+                                          ## it rather than the other way round. D3 measured that a
+                                          ## 7.5 m road on the legacy map's 2.25 m/cell is only ~3
+                                          ## vertices across, so its edges stair-step no matter how
+                                          ## smooth the height function underneath is - and no
+                                          ## height-field probe can see that, because it samples the
+                                          ## function rather than the mesh. It took a screenshot to
+                                          ## find and area_cells 320 -> 512 to fix. Growing the area
+                                          ## must therefore add CELLS, never enlarge them.
+
+var area_cells: int:                      ## derived: how many cells the box is wide at that pitch
+	get:
+		return maxi(int(round(area_size / maxf(cell_size_m, 0.01))), 1)
 
 # --- THE HEIGHTMAP-IMPORT SEAM (§5 D3: "Design it; do not build it") ---------------------------
 # Elevation must be reachable through ONE function so that swapping the procedural source for an
@@ -179,6 +190,6 @@ func duplicate_def() -> StageDef:
 	d.surface = surface
 	d.control_points = control_points.duplicate()
 	d.control_tolerance_m = control_tolerance_m
-	d.origin = origin; d.area_size = area_size; d.area_cells = area_cells
+	d.origin = origin; d.area_size = area_size; d.cell_size_m = cell_size_m
 	d.elevation_source = elevation_source
 	return d
