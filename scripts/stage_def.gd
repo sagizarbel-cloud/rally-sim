@@ -68,6 +68,21 @@ var max_grade: float = 0.12               ## the VERTICAL half of the constraint
 # suspension 9x the rally loop's peak d2y/ds2, because clamping a slope leaves a corner behind.
 var vertical_comfort_accel: float = 0.3   ## m/s^2
 
+# THE HAIRPIN HAS ITS OWN DESIGN SPEED, and that is how real roads work: a mountain road signed
+# for 30 km/h still posts 15-20 on its hairpins, because one tight turn does not set the standard
+# for the whole road. Using the single global design speed for everything gave a 34.5 m hairpin,
+# which pace_notes correctly read as a mere "2" - not a hairpin at all. 20 km/h puts it at 13.7 m,
+# which reads as a 1 and sits just above the 12 m threshold where the note becomes "hairpin".
+var hairpin_design_speed_kmh: float = 20.0
+
+# CURVE WIDENING, from vehicle off-tracking. A long vehicle's rear wheels cut inside its front ones
+# through a bend, so its swept path is wider than the vehicle: W = L^2 / (2R) for R >> L. Roads are
+# therefore built wider on tight curves, which is exactly the runoff room a hairpin needs. The
+# design vehicle is a rigid truck, not the rally car - mountain roads are built for what has to get
+# up them. At 8 m and the hairpin's 13.7 m radius that is +2.34 m of road; through the ordinary
+# 36 m weave it is +0.89 m. Derived, not decorative.
+var design_vehicle_wheelbase: float = 8.0
+
 var superelevation: float = 0.07          ## e, the banking the road is built with (7% is a normal max)
 var side_friction: float = 0.16           ## f, the side-friction factor a road is designed against
 
@@ -131,6 +146,16 @@ func min_radius_m() -> float:
 	var v := maxf(design_speed_kmh, 5.0)
 	return (v * v) / (127.0 * maxf(superelevation + side_friction, 0.01))
 
+func hairpin_radius_m() -> float:
+	## Same AASHTO relation, the hairpin's own (much lower) design speed.
+	var v := maxf(hairpin_design_speed_kmh, 5.0)
+	return (v * v) / (127.0 * maxf(superelevation + side_friction, 0.01))
+
+func curve_widening_m(curvature: float) -> float:
+	## Off-tracking widening W = L^2/(2R) = L^2*k/2, total across the carriageway.
+	var l := maxf(design_vehicle_wheelbase, 0.0)
+	return l * l * absf(curvature) * 0.5
+
 func max_vertical_curvature() -> float:
 	var v := maxf(design_speed_kmh, 5.0) / 3.6      # m/s
 	return vertical_comfort_accel / maxf(v * v, 1.0)
@@ -147,6 +172,8 @@ func duplicate_def() -> StageDef:
 	d.start_runup_m = start_runup_m; d.finish_runoff_m = finish_runoff_m
 	d.design_speed_kmh = design_speed_kmh
 	d.superelevation = superelevation; d.side_friction = side_friction
+	d.hairpin_design_speed_kmh = hairpin_design_speed_kmh
+	d.design_vehicle_wheelbase = design_vehicle_wheelbase
 	d.max_grade = max_grade
 	d.vertical_comfort_accel = vertical_comfort_accel
 	d.surface = surface

@@ -236,7 +236,7 @@ func _spine(apex_frac: float, inset: float, o: Vector3) -> PackedVector2Array:
 	var d2 := (c - b).normalized()
 	var cosphi := clampf(d1.dot(d2), -0.9999, 0.9999)
 	var phi := acos(cosphi)                                  # interior angle at the apex
-	var r := def.min_radius_m() * 1.12                       # a genuine hairpin, just inside legal
+	var r := def.hairpin_radius_m()                          # its OWN design speed, not the road's
 	var tanlen := r / maxf(tan(phi * 0.5), 0.05)
 	var maxtan := minf((a - b).length(), (c - b).length()) * 0.8
 	if tanlen > maxtan:
@@ -480,11 +480,7 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 	for i in range(n):
 		var p := pts[i]
 		world[i] = Vector3(p.x, def.elevation_at(p.x, p.y), p.y)
-		# width profile: the road pinches and opens along its length, low-frequency so it reads as
-		# the road narrowing through a section rather than flickering
-		var t := float(i) / maxf(float(n - 1), 1.0)
-		var w := 1.0 - def.width_var * (0.5 + 0.5 * sin(t * TAU * 2.3 + float(def.seed % 17)))
-		hw[i] = def.width_m * 0.5 * w
+		hw[i] = def.width_m * 0.5
 	# A start area and a runoff pad are FLAT in reality - they are built platforms, not road that
 	# happens to follow the hillside. Holding them level at the elevation of the line they serve also
 	# keeps terrain roughness out of the two joins, which is where the vertical profile is most
@@ -497,6 +493,28 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 		var y1: float = world[n - 1 - _post_n].y
 		for k in range(n - _post_n, n):
 			world[k] = Vector3(world[k].x, y1, world[k].z)
+	# CURVE WIDENING. Roads are built wider through tight bends because a long vehicle's rear wheels
+	# cut inside its front ones, so its swept path is wider than the vehicle: W = L^2/(2R). That is
+	# also exactly the runoff room a hairpin wants. Applied symmetrically, from the LOCAL curvature,
+	# so the road opens up through every bend and opens most through the tightest one.
+	for i in range(n):
+		var im := maxi(i - 1, 0)
+		var ip := mini(i + 1, n - 1)
+		var u0 := Vector2(world[i].x - world[im].x, world[i].z - world[im].z)
+		var v0 := Vector2(world[ip].x - world[i].x, world[ip].z - world[i].z)
+		var k := 0.0
+		if u0.length() > 1e-5 and v0.length() > 1e-5:
+			var dphi := atan2(u0.x * v0.y - u0.y * v0.x, u0.dot(v0))
+			k = absf(dphi) / maxf((u0.length() + v0.length()) * 0.5, 0.01)
+		var tight: float = clampf(k / maxf(def.max_curvature(), 1e-5), 0.0, 1.0)
+		# The pinch/open profile is SUPPRESSED where the road is tight. A road narrows on straights
+		# and open bends; it does not narrow at a hairpin. Measured before this: the pinch happened
+		# to bottom out exactly at the hairpin and cancelled the whole widening, so a corner that
+		# should have opened to 9.9 m came out at 7.8 m.
+		var t := float(i) / maxf(float(n - 1), 1.0)
+		var pinch := (0.5 + 0.5 * sin(t * TAU * 2.3 + float(def.seed % 17))) * (1.0 - tight)
+		hw[i] = def.width_m * 0.5 * (1.0 - def.width_var * pinch) \
+				+ def.curve_widening_m(k) * 0.5              # half the total widening per side
 	world = _limit_grade(world)                              # cut and fill: the VERTICAL constraint
 	centreline = Centreline.from_points(world, hw, false)     # OPEN: a stage is a route, not a lap
 	_build_bank_curvature()

@@ -21,8 +21,10 @@ var _rloop := true
 @export var asph_sev_scale := 0.30    # asphalt corners are big-radius but FAST -> scale radius down for severity
 @export var merge_gap := 14.0         # merge same-direction corner fragments closer than this (m)
 @export var link_gap := 26.0          # straight shorter than this -> corners are "into" each other
-@export var lead_base := 30.0         # call a corner this many metres before it...
-@export var lead_time := 1.7          # ...plus this many seconds of travel (faster = earlier call)
+@export var lead_base := 24.0         # call a corner this many metres before it...
+@export var lead_time := 1.35         # ...plus this many seconds of travel (faster = earlier call).
+                                      # 30 m + 1.7 s called ~67 m ahead at 80 km/h, which drove as
+                                      # too early; 24 + 1.35 is ~2.3 s of warning at that speed.
 @export var on_route_dist := 45.0     # only call notes within this distance of a circuit centreline
 @export var crest_prom := 0.7         # elevation bump (m) that counts as a crest
 @export var speech_rate := 1.18       # co-drivers talk briskly

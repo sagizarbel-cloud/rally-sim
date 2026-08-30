@@ -27,10 +27,11 @@ var def: StageDef
 # Traffic pushes material OUT of the corners, so it piles into a berm just past the road edge, and
 # wears grooves along the edges of the used width. Both are lateral-profile features, so they live
 # in height_at() alongside the corridor blend rather than being separate geometry.
-@export var berm_height := 0.55          ## ridge height just outside the road edge (m)
+@export var berm_height := 0.28          ## ridge height just outside the road edge (m).
+                                         ## 0.55 drove as too aggressive; halved on the drive verdict.
 @export var berm_pos := 1.1              ## how far past the edge the ridge peaks (m)
 @export var berm_width := 1.6            ## ridge falloff width (m) - the "1-2 m" asked for
-@export var berm_corner_gain := 1.4      ## extra berm on the OUTSIDE of a corner, where material goes
+@export var berm_corner_gain := 0.7      ## extra berm on the OUTSIDE of a corner, where material goes
 @export var rut_depth := 0.11            ## groove worn along each edge of the used width (m)
 @export var rut_pos := 1.3               ## how far inside the road edge the groove sits (m)
 @export var rut_width := 1.2             ## groove width (m)

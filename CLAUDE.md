@@ -5,7 +5,7 @@ Native Apple-Silicon (M1) realistic rally sim, **Godot 4.4 + Jolt**, built proce
 ## Verify every code change (headless)
 After editing `.gd` files, run **`./check.sh`** (or the command below). It must print no errors:
 ```bash
-"/Users/sgyzrbl/Downloads/Godot.app/Contents/MacOS/Godot" --headless --path /Users/sgyzrbl/rally-sim --quit-after 60 2>&1 | grep -iE "SCRIPT ERROR|Parse Error|Failed to load|Invalid call|nonexistent|Cannot infer"
+"/Applications/Godot.app/Contents/MacOS/Godot" --headless --path /Users/sgyzrbl/rally-sim --quit-after 60 2>&1 | grep -iE "SCRIPT ERROR|Parse Error|Failed to load|Invalid call|nonexistent|Cannot infer"
 ```
 I verify that code **compiles/loads**; the **user drives to test feel** (grip, handling, sound). I cannot verify feel headlessly — don't claim a feel change works, ask the user to test it.
 
@@ -44,7 +44,8 @@ with one of these, confirm WHICH of the four before changing anything - the fixe
 
 ## GDScript / Godot gotchas (these cause real bugs)
 - **Tabs, not spaces** for indentation — never mix.
-- **A NEW `class_name` script is not resolvable until the global class cache is rebuilt.** `Foo.new()` fails with *"Nonexistent function 'new' in base 'GDScript'"* even though the file parses, because this project never opens the editor. Fix: `"/Users/sgyzrbl/Downloads/Godot.app/Contents/MacOS/Godot" --headless --path . --import`, then re-run `./check.sh`.
+- **A NEW `class_name` script is not resolvable until the global class cache is rebuilt.** `Foo.new()` fails with *"Nonexistent function 'new' in base 'GDScript'"* even though the file parses, because this project never opens the editor. Fix: `"/Applications/Godot.app/Contents/MacOS/Godot" --headless --path . --import`, then re-run `./check.sh`.
+- **`./check.sh` only verifies scripts the running game actually LOADS.** A new file nothing instantiates yet can be badly broken and still pass. Check one directly with `--check-only --script res://scripts/<file>.gd`.
 - `:=` CANNOT infer a type from a Variant (`dict[key]`, untyped `stage.*` calls, `Array` elements) → use `var x: Type = ...`.
 - **Terrain invisible from above but solid from below = TRIANGLE WINDING, not normals or shaders.** It has bitten this project twice (M5's stage, then D3's `stage_area.gd`). A grid quad must be wound `a,b,c` / `b,d,c` with `a=(i,j) b=(i+1,j) c=(i,j+1) d=(i+1,j+1)` so the TOP is the front face — copy the order from `stage.gd`, don't re-derive it. (Distinct from `cull_mode = CULL_DISABLED`, where a back-to-front face renders DARK rather than invisible.) Verify with a screenshot from above AND below before theorising.
 - Unshaded `StandardMaterial3D` ignores emission → toggle `albedo_color` instead.

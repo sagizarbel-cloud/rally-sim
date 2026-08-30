@@ -20,6 +20,74 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-29 (later — a real hairpin that widens for runoff, calmer berms, later notes, 50/50 diff; and the compile gate was silently passing)
+
+Drive feedback: *"hairpin- the turn is too big- it should be smaller tighter radius and the road
+should get a little wider at the turn to allow a bit of runoff to the side- so the design speed of
+60/30km/h can be dropped and we will give another criteria instead"*, *"berms are too aggressive"*,
+*"notes might go a little to early sometimes"*, *"its only a 2 turn and should be less then 1 or
+close to 1"*, and *"i would like the diff default value to be 50/50- less oversteer"*.
+**AWAITING DRIVE VERDICT.**
+
+### THE COMPILE GATE WAS SILENTLY PASSING — read this first
+
+`Godot.app` moved from `~/Downloads` to `/Applications`. `check.sh` had that path hard-coded, and
+when it could not find the binary it printed a note to stderr and **`exit 0`**. So the gate reported
+success while verifying nothing, and every `./check.sh && <next step>` chain sailed straight through.
+This was caught by luck - the "skipping" line happened to be the one `tail -1` showed.
+
+**A gate that passes when it cannot run is worse than no gate at all.** Now: `check.sh` searches the
+known install locations, and a missing binary is a **hard failure (exit 1)** with the fix printed.
+Environments that genuinely cannot run Godot (remote sessions on claude.ai/code) set `GODOT_SKIP=1`
+and get the old behaviour explicitly, with `NOTHING WAS VERIFIED` in the message. Verified all three
+paths: found = 0, missing = 1, missing + `GODOT_SKIP` = 0. `CLAUDE.md`'s documented command updated
+to the new path. **Note the related trap, also now in `CLAUDE.md`: `check.sh` only verifies scripts
+the running game actually LOADS**, so a new file nothing instantiates yet can be badly broken and
+still pass - check it directly with `--check-only --script`.
+
+### The hairpin: its own design speed, and widening from off-tracking
+
+The user's instinct was right and the fix is a real road-design criterion, not a fudge. **A mountain
+road signed for 30 km/h still posts 15-20 on its hairpins** - one tight turn does not set the
+standard for the whole road. Using the single global design speed for everything produced a 34.5 m
+hairpin, which `pace_notes.gd` correctly read as a mere **"2"**. Giving the hairpin its own design
+speed of **20 km/h puts it at 13.7 m**, and the note it earns is now **0 - which in this severity
+scale IS "hairpin"** (`<12 m = 0`, `<22 m = 1`, `<35 m = 2`).
+
+| | before | after |
+|---|---|---|
+| hairpin radius built / delivered | 34.5 / 30.3 m | **13.7 / 13.1 m** |
+| pace note it earns | 2 | **0 (hairpin)** |
+| road width at the hairpin | 7.76 m | **9.93 m (+2.43)** |
+
+**The widening is derived, not decorative.** A long vehicle's rear wheels cut inside its front ones
+through a bend, so its swept path is wider than the vehicle: **W = L²/(2R)**. Roads are built wider
+on tight curves for exactly that reason, and that is precisely the runoff room a hairpin wants. The
+design vehicle is a **rigid truck at 8 m**, not the rally car - mountain roads are built for whatever
+has to get up them. That gives **+2.43 m at the hairpin** and **+0.89 m through the ordinary 36 m
+weave**, so the whole road now breathes through its corners.
+
+**A bug this exposed:** the first attempt widened correctly and the hairpin still came out at 7.76 m,
+because the road's pinch/open `width_var` profile happened to bottom out exactly there and cancelled
+it. **A road narrows on straights and open bends; it does not narrow at a hairpin.** The pinch is now
+suppressed in proportion to local curvature, so the two profiles no longer fight.
+
+Guarantees all still hold with the much tighter arc: **away from the hairpin, worst radius 30.4 m
+against the road's own 30.8 m limit with zero violations, zero self-intersections**, and the vertical
+input actually improved to **0.40 g peak at 108 km/h against the rally loop's 1.10 g**.
+
+### The other three
+
+- **Berms halved.** `berm_height` 0.55 -> **0.28 m**, `berm_corner_gain` 1.4 -> 0.7. They read as too
+  aggressive; the shape and the physical reasoning are unchanged, only the amount.
+- **Notes called later.** `lead_base` 30 -> 24 m and `lead_time` 1.7 -> 1.35 s. At 80 km/h that was
+  calling **67 m ahead**; it is now ~51 m, about **2.3 s of warning**.
+- **Centre diff 50/50.** `torque_split` 0.6 -> **0.50**. This is a drive-verified A3 value being
+  changed deliberately on the user's call for less oversteer, not a default nobody had looked at -
+  noted so a future session does not "restore" it.
+
+---
+
 ## 2026-08-29 (SHAKEDOWN drive feedback: a hairpin, berms and ruts, 10.7 corners/km, a FINISH call — and the jagged edges were mesh resolution)
 
 Drive report on D3: pace notes good but *"dont describe finish"*; road drivable but *"i would like it
