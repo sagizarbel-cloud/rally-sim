@@ -51,7 +51,7 @@ var _origin := Vector3.ZERO
 
 var car                                  # set by world.gd: watched for live stage-parameter edits
 var _pending := 0.0
-var _last_params := Vector4.ZERO
+var _last_params: Array = []
 
 func _process(delta: float) -> void:
 	## Live regeneration. The drive checklist asks the user to change `seed` and see a genuinely
@@ -60,8 +60,23 @@ func _process(delta: float) -> void:
 	## so edits are DEBOUNCED: move the slider freely, and the stage rebuilds once you stop.
 	if car == null:
 		return
-	var now := Vector4(float(car.stage_seed), float(car.stage_sinuosity),
-			float(car.stage_elevation), float(car.stage_design_speed))
+	# The parameters travel as an ARRAY, never a Vector4. Vector4 stores 32-bit floats, and that
+	# quietly broke the one promise this panel makes - "same seed = same stage, exactly":
+	#   * the seed is a ~2e7 integer, where float32 spacing is 2, so every ODD seed was rounded to
+	#     an even neighbour. Half of all seeds were unreachable and seed N vs N+1 gave the SAME road.
+	#   * sinuosity 0.85 round-trips through float32 as 0.850000023841858, so the FIRST rebuild
+	#     silently built a different road from the one the identical-looking parameters had built at
+	#     startup - measured: the startup road and a rebuild with untouched sliders had different
+	#     centrelines. That also made returning to a seed unable to reproduce its own stage.
+	# GDScript int and float are both 64-bit, so an Array carries all four exactly.
+	var now: Array = [int(car.stage_seed), float(car.stage_sinuosity),
+			float(car.stage_elevation), float(car.stage_design_speed)]
+	if _last_params.is_empty():
+		# First tick: the area is ALREADY built from these values by _ready(). Recording them without
+		# arming the debounce is what stops a spurious rebuild ~0.55 s into every session, which used
+		# to throw away the road _ready() had just built and (see above) replace it with a different one.
+		_last_params = now
+		return
 	if now != _last_params:
 		_last_params = now
 		_pending = 0.55
@@ -72,11 +87,11 @@ func _process(delta: float) -> void:
 	if _pending <= 0.0:
 		_regenerate(now)
 
-func _regenerate(p: Vector4) -> void:
-	def.seed = int(p.x)
-	def.sinuosity = p.y
-	def.elevation_character = p.z
-	def.design_speed_kmh = p.w
+func _regenerate(p: Array) -> void:
+	def.seed = int(p[0])
+	def.sinuosity = float(p[1])
+	def.elevation_character = float(p[2])
+	def.design_speed_kmh = float(p[3])
 	gen = StageGen.new(def)
 	gen.generate()
 	_corridor.clear()

@@ -53,17 +53,15 @@ var _flash := 0.0
 var _flash_text := ""
 var _flash_color := Color(1.0, 0.9, 0.4)
 var _best_sector: Array = []                           # M10: [circuit][sector] best sector time
+var _road_fp: Array = []                               # fingerprint of the road each entry currently holds
+var _fp_cache: Dictionary = {}                         # road fingerprint -> {best, sectors, last}
 var _cur_sector := 0
 var _sector_start_t := 0.0
 var _delta_label: Label
 var _msg_label: Label
 
 func _ready() -> void:
-	_last.resize(NAMES.size())
-	for i in range(NAMES.size()):
-		_last[i] = 0.0
-		_best.append({"t": PackedFloat32Array(), "p": PackedVector3Array(), "q": [], "time": 0.0})
-		_best_sector.append([0.0, 0.0, 0.0])
+	_ensure_slots()
 	_build_ui()
 	await get_tree().physics_frame     # let the wheels pose by suspension before we clone the ghost mesh
 	await get_tree().physics_frame
@@ -200,6 +198,59 @@ func build_triggers() -> void:
 				t.append(s0 + (s1 - s0) * float(k) / float(SECTORS))
 		t.append(s1)                                       # index SECTORS = the finish trigger
 		_trig.append(t)
+	_rebind_roads()
+
+# ---------------------------------------------------------------- bests belong to ROADS (D3 verdict)
+
+func _ensure_slots() -> void:
+	## world.gd calls build_triggers() BEFORE add_child(), so _ready has not run when _rebind_roads
+	## first needs these. Idempotent by construction (grow-to-size, never re-append), so both entry
+	## points can call it in either order.
+	while _last.size() < NAMES.size():
+		_last.append(0.0)
+	while _best.size() < NAMES.size():
+		_best.append({"t": PackedFloat32Array(), "p": PackedVector3Array(), "q": [], "time": 0.0})
+	while _best_sector.size() < NAMES.size():
+		_best_sector.append([0.0, 0.0, 0.0])
+	while _road_fp.size() < NAMES.size():
+		_road_fp.append(0)
+
+func _rebind_roads() -> void:
+	## DRIVE VERDICT 2026-08-30: "seed change works but keeps the ghost from last seed".
+	##
+	## A best lap and its ghost belong to the ROAD they were driven on, not to the [B] slot they
+	## were driven in. Regenerating SHAKEDOWN replaces the road underneath them, so the old ghost
+	## then flew through terrain that no longer existed and the HUD showed a best set on a different
+	## stage. Simply clearing on regeneration would fix the wrong ghost but throw away a real lap
+	## every time the seed is nudged, and the seed is a dial the user turns to browse stages.
+	##
+	## So bests are FILED under the road's own fingerprint: changing seed puts your ghost away,
+	## coming back to that seed takes it out again. Nothing is lost and nothing is misattributed.
+	## This is per entry rather than special-cased to index 3, because D4 streams the same road and
+	## D5 will swap whole areas - both are "the road changed underneath a recording" in a new costume.
+	_ensure_slots()
+	for i in range(mini(centrelines.size(), NAMES.size())):
+		var cl: Centreline = centrelines[i]
+		if cl == null:
+			continue
+		var fp: int = cl.fingerprint()
+		if fp == _road_fp[i]:
+			continue                                       # same road: keep the ghost you earned
+		if _road_fp[i] != 0:
+			_fp_cache[_road_fp[i]] = {"best": _best[i], "sectors": _best_sector[i], "last": _last[i]}
+		_road_fp[i] = fp
+		if _fp_cache.has(fp):
+			var c: Dictionary = _fp_cache[fp]
+			_best[i] = c["best"]
+			_best_sector[i] = c["sectors"]
+			_last[i] = c["last"]
+		else:
+			_best[i] = {"t": PackedFloat32Array(), "p": PackedVector3Array(), "q": [], "time": 0.0}
+			_best_sector[i] = [0.0, 0.0, 0.0]
+			_last[i] = 0.0
+		# A run in progress was started on the road that just went away - it cannot be scored.
+		if i == _active and car != null:
+			_reset_lap(car.global_position)
 
 func _finish_trigger(cl: Centreline) -> float:
 	# A loop finishes where it starts; an open stage finishes at its finish GATE, which is before

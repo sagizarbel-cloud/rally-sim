@@ -8,6 +8,7 @@ extends CanvasLayer
 
 var car          # RigidBody3D
 var stage        # RallyStage (uses _road / _asphalt_r / _height / road_center)
+var stage_area   # D3: StageArea for the generated stage - read for its timed FINISH gate
 
 @export var samples := 1440           # samples per circuit centreline
 var centrelines: Array = []           # D2: one Centreline per circuit, set by world.gd (stage order)
@@ -62,14 +63,19 @@ func rebuild_routes() -> void:
 	# polar circuits, because D2 made _build_route take a Centreline - which is the whole reason
 	# that phase existed. Its note list is the generator's real acceptance test (§3.6).
 	if centrelines.size() >= 4 and centrelines[3] != null:
-		_routes.append(_build_route(centrelines[3], "SHAKEDOWN", curv_min_dirt, 1.0))
+		# The stage is TIMED between its gates; the run-up and runoff are road you drive but are not
+		# scored on. Pass the finish GATE so the co-driver calls the finish where the clock stops.
+		var s_fin := -1.0
+		if stage_area != null and stage_area.gen != null:
+			s_fin = float(stage_area.gen.timed_end_s)
+		_routes.append(_build_route(centrelines[3], "SHAKEDOWN", curv_min_dirt, 1.0, s_fin))
 	_active = -1
 	if debug_print:
 		_dump()
 
 # ---------------------------------------------------------------- build a circuit's route + notes
 
-func _build_route(cl: Centreline, rname: String, cmin: float, sev_scale: float) -> Dictionary:
+func _build_route(cl: Centreline, rname: String, cmin: float, sev_scale: float, finish_s := -1.0) -> Dictionary:
 	# Take every stride-th centreline sample, which lands on exactly the positions this file used
 	# to compute itself - so the corner list is unchanged - while the road's SHAPE is now somebody
 	# else's problem. That is the whole re-parameterisation: _detect/_severity/_crest below are
@@ -99,11 +105,37 @@ func _build_route(cl: Centreline, rname: String, cmin: float, sev_scale: float) 
 		# just come round again - but on a point-to-point stage the co-driver telling you the finish
 		# is coming is the difference between committing and lifting. It is a call, not a corner:
 		# no direction, no severity, so `dir` is 0 and the UI renders it without an arrow.
-		var s_fin: float = arc[count - 1]
-		corners.append({"a": count - 1, "b": count - 1, "s0": s_fin, "s1": s_fin,
+		#
+		# DRIVE VERDICT 2026-08-30: "finish pace notes referring to the end of the road instead of
+		# the finish line". This used to sit at arc[count - 1] - the far end of the RUNOFF, which is
+		# `finish_runoff_m` (80 m) PAST the finish gate - so the co-driver called the finish long
+		# after you had crossed it, and at a lead distance that put the call somewhere in the
+		# slowing-down area. The gate is `StageGen.timed_end_s`: the same arc length `time_trial.gd`
+		# stops the clock on and `stage_area.gd` builds the FINISH banner at. Caller passes it, so
+		# the call, the clock and the banner now all refer to one place on the road.
+		var s_end: float = arc[count - 1]
+		var s_fin: float = s_end if finish_s < 0.0 else clampf(finish_s, 0.0, s_end)
+		corners.append({"a": _index_at_s(arc, s_fin), "b": _index_at_s(arc, s_fin),
+			"s0": s_fin, "s1": s_fin,
 			"dir": 0, "sev": 0, "mods": [], "link": false, "spoken": false,
 			"display": "FINISH", "speech_base": "finish"})
-	return {"name": rname, "pts": pts, "arc": arc, "elev": elev, "total": s, "corners": corners}
+	# `loop` and `n` travel WITH the route. They used to live only in the members _rloop/_rn, which
+	# are per-build scratch: the last route built wins, and _process then read another road's
+	# topology through _idx. See _process for the measured damage that did.
+	return {"name": rname, "pts": pts, "arc": arc, "elev": elev, "total": s, "corners": corners,
+		"loop": _rloop, "n": count}
+
+func _index_at_s(arc: PackedFloat32Array, s_target: float) -> int:
+	## Nearest sample to an arc length. The gate is a distance along the road, not a sample index,
+	## and the two only coincide by luck.
+	var best := 0
+	var bd := 1e18
+	for i in range(arc.size()):
+		var d: float = absf(arc[i] - s_target)
+		if d < bd:
+			bd = d
+			best = i
+	return best
 
 func _idx(i: int) -> int:
 	## Wrap on a closed circuit, CLAMP on an open stage. A point-to-point road has no sample after
@@ -289,6 +321,16 @@ func _process(delta: float) -> void:
 
 	var on_route := sqrt(best_d) < on_route_dist
 	var route: Dictionary = _routes[best_r]
+	# Adopt THIS route's topology before anything calls _idx (via _heading_at below). _rn/_rloop are
+	# written per route while building, so without this they hold whichever route was built LAST -
+	# the open SHAKEDOWN stage, whose sample count is far short of a circuit's 1440. _idx then
+	# CLAMPED every index past its end, so _heading_at read a heading between two unrelated points.
+	# MEASURED before this line existed: 434/1440 samples of both the RALLY LOOP and the ASPHALT
+	# RING (30.1%) got a wrong heading, worst case 180 deg, and all 434 drove `fwd` below the 0.25
+	# gate - i.e. the co-driver went SILENT over 30% of both legacy circuits. It appeared the moment
+	# D3 added a third route and nothing on the old map had changed.
+	_rn = int(route["n"])
+	_rloop = bool(route["loop"])
 	var pts: PackedVector3Array = route["pts"]
 	var arc: PackedFloat32Array = route["arc"]
 	var total: float = route["total"]

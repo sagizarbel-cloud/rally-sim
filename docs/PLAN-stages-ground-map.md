@@ -805,8 +805,30 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   ms/tick for 4 wheels against the 1.84 ms budget. Lap/sector/split times verified byte-identical
   against D2's saved baseline. **So D4 is no longer constrained on this point** — density may vary
   with streaming/LOD. Full numbers in `CHANGELOG.md` 2026-08-28.
-- [ ] D3 — The stage generator: parameters + control points — **BUILT AND PROBE-VERIFIED
-  2026-08-28, AWAITING DRIVE VERDICT.** `stage_def.gd` (StageDef), `stage_gen.gd` (StageGen),
+- [x] D3 — The stage generator: parameters + control points — **DONE, DRIVE-VERIFIED 2026-08-30:
+  "road is drivable and feels like a road", "pace notes describe correctly and there is finish",
+  corner rhythm accepted.** Two defects reported on the drive and fixed the same day; chasing the
+  second uncovered three more, all recorded in `CHANGELOG.md` 2026-08-30. In driving words: the
+  co-driver called the FINISH 80.6 m after you crossed it (it was placed at the end of the runoff,
+  not the gate); the co-driver went SILENT over 30% of the RALLY LOOP and ASPHALT RING (D3's third
+  route left its own topology in `pace_notes`' member vars, so `_heading_at` read the wrong
+  heading at 434/1440 samples on both legacy circuits — a regression on the untouched calibration
+  bed); and the ghost survived a seed change.
+  **The ghost bug was the shallow end of a §0 REPEATABILITY VIOLATION, and D4 must not inherit it:**
+  stage parameters travelled in a `Vector4`, which stores 32-bit floats. Odd seeds near 2e7 were
+  rounded away (half of all seeds unreachable; seed N and N+1 gave the same road), `sinuosity 0.85`
+  became `0.850000023841858` on the first rebuild so a rebuild with untouched sliders built a
+  DIFFERENT road from startup, and the area silently regenerated itself ~0.55 s into every session.
+  Parameters now travel as an `Array` (64-bit), the first tick arms nothing, and the seed slider's
+  range was widened so the default seed 20260828 is actually reachable (it was off the end of its
+  own 1..99999 dial, so Reset could not restore it). Same seed now reproduces its road exactly and
+  a different seed gives a different one - both measured.
+  Bests and ghosts are now filed under `Centreline.fingerprint()`, so they follow the ROAD rather
+  than the `[B]` slot: change the seed and your ghost is put away, change it back and it returns.
+  **Open for a later phase, from the drive:** corner rhythm "might improve in the future", and the
+  hairpin "can be tighter in future seeds - this should not be the limit". Both point at the same
+  lever already named below: a design speed that VARIES along the stage.
+  Original build record follows. **BUILT AND PROBE-VERIFIED 2026-08-28.** `stage_def.gd` (StageDef), `stage_gen.gd` (StageGen),
   `stage_area.gd` (StageArea, its own area per §1.1). Appears as **SHAKEDOWN**, the fourth `[B]`
   entry, and is a point-to-point ROUTE - the first thing in the game to exercise D2's open-road
   timing. Probes 1 (determinism), 2 (geometric sanity), 3 (pace-note grammar) all PASS; probe 4

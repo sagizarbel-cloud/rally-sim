@@ -80,6 +80,18 @@ static func from_points(pts: PackedVector3Array, halfwidths: PackedFloat32Array,
 func sample_count() -> int:
 	return _n
 
+func fingerprint() -> int:
+	## Identity of the ROAD, not of the slot it is loaded into. Two centrelines describe the same
+	## road iff their samples match, so anything that was recorded against a road (a best lap and
+	## its ghost) can be filed under this and handed back only to the road it belongs to.
+	##
+	## A hash of the geometry rather than of the generating parameters ON PURPOSE: the parameter
+	## list grows (D3 exposes four; StageDef holds a dozen), and a fingerprint that misses a new
+	## one would silently hand back a ghost for a different road. The geometry cannot miss anything
+	## that changed the geometry. Safe to compare exactly because regeneration from the same seed is
+	## bit-identical - D3 probe 1 (determinism) is what makes this an equality test and not a metric.
+	return hash(_pts)
+
 func point_index(i: int) -> Vector3:
 	return _pts[i]
 

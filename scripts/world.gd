@@ -111,6 +111,7 @@ func _build_pacenotes(car: Node3D, stage) -> void:
 	pn.car = car
 	pn.stage = stage        # still used for _height and the note trigger geometry
 	pn.centrelines = _circuit_cls   # D2: routes are built from the shared centrelines
+	pn.stage_area = _stage_area     # D3: the generated stage's FINISH gate (timed end, not road end)
 	add_child(pn)
 
 func _build_status_hud(car: Node3D) -> void:

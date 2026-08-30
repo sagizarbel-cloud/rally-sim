@@ -202,7 +202,11 @@ var _specs := [
 	["Roughness gain (M2)",  "roughness_gain",         0.0,      2.0,   0.1,  func(v): return "%.1fx" % v],
 	["Damper reads road (M2)","damper_reads_road",     0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
 	["Tyre audio surface (M2)","tyre_audio_surface",   0.0,      1.0,   1.0,  func(v): return "ON" if v else "OFF"],
-	["Stage seed (M2)",      "stage_seed",         1.0,  99999.0,   1.0,  func(v): return "%d" % int(v)],
+	# The range must be able to EXPRESS the seed the stage starts on (20260828). At 1..99999 the
+	# slider clamped its own display to 99999, so the default seed was off the end of its own dial:
+	# once you moved it you could never get back to the stage you had been driving, and Reset could
+	# not restore it either (Reset writes the captured default THROUGH this slider, which clamped it).
+	["Stage seed (M2)",      "stage_seed",         1.0, 99999999.0, 1.0,  func(v): return "%d" % int(v)],
 	["Stage sinuosity (M2)", "stage_sinuosity",    0.05,     1.0,  0.05,  func(v): return "%.2f" % v],
 	["Stage elevation (M2)", "stage_elevation",    0.0,      1.0,  0.05,  func(v): return "%.2f" % v],
 	["Stage design speed (M2)","stage_design_speed", 20.0,   80.0,   5.0,  func(v): return "%.0f km/h" % v],

@@ -20,6 +20,70 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-30 — D3 DRIVE-VERIFIED. The finish was called 80 m late, the co-driver went silent on 30% of the rally loop, and "same seed = same stage" was not true
+
+**D3 IS ACCEPTED.** Drive verdict: *"road is drivable and feels like a road"*, *"corners do have
+rhythm but we might improve it in the future"*, *"pace notes describe correctly and there is
+finish"*, *"the hairpin is tight — can be tighter in future seeds, meaning this should not be the
+limit"*. Two defects reported, and chasing the second one uncovered three more.
+
+Noted for a later phase, NOT defects: corner rhythm is accepted but wants improving, and the
+hairpin is not to be treated as the tightness limit — a future seed may go tighter. (The lever
+named in D3 is a design speed that VARIES along the stage.)
+
+**"Finish pace notes referring to the end of the road instead of the finish line."** The FINISH
+call sat at `arc[count - 1]` — the far end of the 80 m RUNOFF, not the finish gate. So the
+co-driver called the finish **80.6 m after you had already crossed it**, while the clock and the
+finish banner used the real gate. `pace_notes._build_route` now takes the gate
+(`StageGen.timed_end_s`, the same arc length `time_trial` stops the clock on) and places the call
+there: measured error **80.6 m → 0.00 m**.
+
+**The co-driver went SILENT over 30% of the RALLY LOOP and the ASPHALT RING** — a regression D3
+introduced on the legacy map without touching it. `_rn`/`_rloop` are written per route while
+building routes, so they held whichever route was built LAST: the open SHAKEDOWN stage, 1007
+samples against a circuit's 1440. `_idx` then CLAMPED every index past 1007, so `_heading_at`
+returned a heading between two unrelated points, `fwd` fell under the 0.25 gate, and no note was
+called. Measured: **434 of 1440 samples (30.1%) wrong on BOTH legacy circuits, worst error 180°,
+all 434 silencing**. Topology now travels with the route dict (`loop`, `n`) and `_process` adopts
+the active route's. After: **0 wrong on all three routes.** Symptom to grep for if it returns:
+*co-driver stops calling corners on part of a circuit that used to work*.
+
+**"Seed change works but keeps the ghost from last seed."** Three separate faults under one root
+cause, all found chasing this:
+
+1. **`Vector4` is a 32-bit float carrier, and the stage parameters travelled in one.** The seed is
+   a ~2e7 integer, where float32 spacing is **2**, so every ODD seed was silently rounded to an
+   even neighbour: **half of all seeds were unreachable, and seed N vs N+1 gave the SAME road.**
+   Worse, `sinuosity 0.85` round-trips through float32 as `0.850000023841858`, so a rebuild with
+   *untouched sliders* produced a **different centreline from the startup road**. Parameters now
+   travel as an `Array` (GDScript int and float are 64-bit). Measured after: same seed reproduces
+   its road exactly, a different seed gives a different one (seed 20260829 now yields 1011 samples
+   / 1025.95 m vs 20260828's 1007 / 1026.54 m — before the fix the two were byte-identical).
+   **This was a live violation of §0's hard repeatability requirement for Arc D**, and it would
+   have propagated straight into D4's chunk generation.
+2. **The stage silently rebuilt itself ~0.55 s into every session.** `_last_params` started at
+   `Vector4.ZERO`, so the first `_process` always read a "change" and armed the debounce — throwing
+   away the road `_ready()` had just built and (per 1) replacing it with a subtly different one.
+   The first tick now records the parameters without arming. Measured: idle 180 frames →
+   **1 regeneration → 0**, road unchanged; a real slider edit still gives exactly 1.
+3. **The seed slider could not express the seed the stage starts on.** Range was `1..99999`
+   against a default seed of `20260828`, so the slider clamped its own display to 99999: once you
+   moved it you could never get back to the stage you had been driving, and **Reset could not
+   restore it either**, because Reset writes the captured default *through* the slider. Range is
+   now `1..99999999`. The panel's promise — *"change it back to get the first one again exactly"* —
+   is true for the first time.
+
+**And the ghost itself:** a best lap and its ghost belong to the ROAD they were driven on, not to
+the `[B]` slot. Bests are now filed under `Centreline.fingerprint()` (a hash of the road's own
+samples, not of the parameter list — the parameter list grows, and a fingerprint that missed a new
+one would hand back a ghost for a different road). Changing seed **puts your ghost away**; coming
+back to that seed **takes it out again**. Nothing is cleared and nothing is misattributed, and a
+run in progress when the road changes is reset because it can no longer be scored. Verified: plant
+a best → change seed → best 0.0 → change back → **best and all three sector times restored, road
+fingerprint identical**. The legacy circuits' bests are never touched.
+
+---
+
 ## 2026-08-29 (later — a real hairpin that widens for runoff, calmer berms, later notes, 50/50 diff; and the compile gate was silently passing)
 
 Drive feedback: *"hairpin- the turn is too big- it should be smaller tighter radius and the road
