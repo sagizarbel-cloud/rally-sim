@@ -85,6 +85,51 @@ damage model, not a bigger threshold — see `docs/ROADMAP.md`.
 
 ---
 
+## 2026-08-31 (later) — "tried entering the tunnel but the ledge is too high". It was 8.15 m
+
+**Symptom in driving words: you cannot get into the tunnel — there is a step at the mouth.**
+Measured before touching anything, by walking the approach profile out from each portal:
+
+| portal | ground at the mouth | tunnel floor | step |
+|---|---|---|---|
+| calibration | 0.85 m | 1.45 m | 0.60 m |
+| **stage** | **-6.77 m** | **1.39 m** | **8.15 m** |
+
+**The cause is a design error, not a tuning one.** The tube was a FLAT horizontal box, raised to
+clear the highest ground anywhere beneath it. That is fine over level ground and absurd over a
+hill: the stage portal bores into rising ground — terrain -6.77 m at the mouth and +1.14 m some
+64 m in — so clearing the peak left the mouth **eight metres in the air**. The earlier fix for the
+opposite failure (a tube buried in the hillside, wedging the car between floor and terrain) had
+simply traded one for the other.
+
+**A tunnel through hilly ground has to be built the way a real one is: along the ground.** The tube
+is now 22 segments that FOLLOW the terrain profile, each a slab rotated to the local slope, with the
+floor a constant `floor_lift` (0.12 m) above the ground beneath it. Both mouths now sit **0.12 m**
+above the ground — a lip, not a ledge — and the approach ramp is gone entirely, because there is no
+longer a lift to bridge.
+
+**Two consequences that had to be handled, and one that bit:**
+- **Height is now preserved above the FLOOR, not above the mouth.** Each tube sits on its own
+  ground, so the floor at the transition plane is +7.34 m relative to the mouth in the stage tube
+  and -0.68 m in the calibration one. Carrying the car's raw local y across would drop it through
+  the floor at one end and strand it in mid-air at the other.
+- **THE SEGMENT REFACTOR SILENTLY DELETED EVERY COLLIDER IN THE TUNNEL.** Each segment was given its
+  own `Node3D` to carry its rotation, and the `CollisionShape3D`s went under that — but Godot only
+  registers shapes that are DIRECT children of the `CollisionObject3D`. The car fell straight
+  through the floor and was **15.46 m below it** by the time it reached the transition plane, which
+  presented as a broken swap because the swap faithfully carried that height across. The swap
+  arithmetic was correct the whole time. Shapes are now parented to the body with a full transform.
+  After: the car arrives **0.62 m above the destination floor** — a ride height.
+
+**Worth noting how it presented.** Three of this phase's bugs in a row have shown up as a wrong
+NUMBER somewhere else: a constant 3.12 m gap that was a swap about the wrong origin, and now a
+15.46 m one that was missing collision. In both cases the arithmetic under suspicion was right, and
+the fault was a layer down. The trace that settled it printed the intermediate values rather than
+the outcome — height above floor before and after — which showed the correction preserving its input
+exactly and moved the search upstream in one step.
+
+---
+
 ## 2026-08-31 — D5: the two worlds are joined by a tunnel. And four green probes were hiding a car being flung into open air
 
 **PHASE D5 BUILT AND PROBE-VERIFIED — AWAITING DRIVE VERDICT.** `scripts/area_manager.gd` owns which

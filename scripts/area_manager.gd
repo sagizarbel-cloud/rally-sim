@@ -36,6 +36,8 @@ var car: Node3D
 var tube_w := 11.0
 var tube_h := 6.0
 var tube_len := 110.0
+var tube_segments := 22            ## the tube follows the ground in this many steps
+var floor_lift := 0.12             ## floor clearance over the ground, so the terrain collider never wins
 
 var _portals: Array = []                  ## [{frame, name}] index matches Area
 var _current := Area.CALIBRATION
@@ -46,8 +48,10 @@ var _transitions := 0
 
 func build() -> void:
 	_portals.resize(Area.size())
-	_portals[Area.CALIBRATION] = _make_portal(_calibration_mouth(), "PortalCalibration")
-	_portals[Area.STAGE] = _make_portal(_stage_mouth(), "PortalStage")
+	_portals[Area.CALIBRATION] = _make_portal(_calibration_mouth(), "PortalCalibration",
+			Callable(stage, "_height"))
+	_portals[Area.STAGE] = _make_portal(_stage_mouth(), "PortalStage",
+			Callable(stage_area, "height_at"))
 	# The tunnel floor is a SURFACE, so it goes through the ground map like everything else rather
 	# than being a special case in the car. D1's layer stack takes an area with in_area/on_road; the
 	# optional surface_at() below is what lets this one say ASPHALT instead of the DIRT a generated
@@ -70,33 +74,38 @@ func _stage_mouth() -> Transform3D:
 			Callable(stage_area, "height_at"))
 
 func _frame_at(mouth: Vector3, inward: Vector3, height_fn: Callable) -> Transform3D:
-	## A portal frame: origin at the mouth on the floor, -Z pointing INWARD. Driving "forward" in
+	## A portal frame: origin at the mouth ON THE GROUND, -Z pointing INWARD. Driving "forward" in
 	## this frame is driving into the tunnel, which is what makes the swap a plain transform.
 	##
-	## THE FLOOR SITS ABOVE THE GROUND IT CROSSES, and that is not cosmetic. The first version put
-	## the mouth at the local terrain height and let the tube burrow in, so for most of its length
-	## the tube was INSIDE the hill: the car was wedged between the tunnel floor and the terrain
-	## collider and stopped dead after one transition. Neither terrain may be carved to fix it - the
-	## calibration bed is untouchable by §1.1, and the stage is the road the user has just verified -
-	## so the tube is raised to clear the highest ground along its own length instead, and an
-	## approach ramp lifts the road up to the mouth.
-	## Sampled ACROSS the tube as well as along it. Sampling only the centre line left the ground at
-	## the tube's edges above the floor on sloping terrain, so a hill poked up through the roadway
-	## and the car drove on that instead - measured as a car sitting a constant 3.12 m above the
-	## floor it was supposed to be on. The tube is 11 m wide; the ground it must clear is the highest
-	## point anywhere under it, not the highest point down its middle.
-	var flat := Vector3(mouth.x, 0.0, mouth.z)
-	var side := Vector3(-inward.z, 0.0, inward.x).normalized()
-	var top := -1e9
-	for i in range(25):
-		var q: Vector3 = flat + inward * (tube_len * float(i) / 24.0)
+	## THE TUBE FOLLOWS THE TERRAIN; it is not a flat box laid over it. Two earlier versions got this
+	## wrong in opposite directions. Burrowing at constant height wedged the car between the tunnel
+	## floor and the hillside. Raising the whole tube to clear the highest ground beneath it then
+	## produced the opposite failure and it is the one the driver hit - the stage portal bores into
+	## rising ground (terrain -6.77 m at the mouth, +1.14 m some 64 m in), so clearing the peak left
+	## the MOUTH 8.15 m in the air behind a ledge no car can climb. A tunnel through hilly ground has
+	## to be built the way a real one is: along the ground, at whatever height the ground is.
+	var g: float = float(height_fn.call(mouth.x, mouth.z))
+	var o := Vector3(mouth.x, g + floor_lift, mouth.z)
+	return Transform3D(Basis(), o).looking_at(o + inward, Vector3.UP)
+
+func _profile(frame: Transform3D, height_fn: Callable) -> PackedFloat32Array:
+	## Floor height at each segment joint, in the frame's LOCAL y. The tube is built to this, and the
+	## swap reads it too - see _swap, which has to preserve the car's height above the FLOOR rather
+	## than above the mouth, because two tubes on different ground have different floors.
+	var inward: Vector3 = -frame.basis.z
+	var side: Vector3 = frame.basis.x
+	var out := PackedFloat32Array()
+	for i in range(tube_segments + 1):
+		var q: Vector3 = frame.origin + inward * (tube_len * float(i) / float(tube_segments))
+		# highest point ACROSS the tube at this station, so the floor never dips under the ground
+		var top := -1e9
 		for j in range(-2, 3):
 			var r: Vector3 = q + side * (tube_w * 0.5 * float(j) / 2.0)
 			top = maxf(top, float(height_fn.call(r.x, r.z)))
-	var t := Transform3D(Basis(), Vector3(mouth.x, top + 0.25, mouth.z))
-	return t.looking_at(Vector3(mouth.x, top + 0.25, mouth.z) + inward, Vector3.UP)
+		out.append(top + floor_lift - frame.origin.y)
+	return out
 
-func _make_portal(frame: Transform3D, pname: String) -> Dictionary:
+func _make_portal(frame: Transform3D, pname: String, height_fn: Callable) -> Dictionary:
 	var body := StaticBody3D.new()
 	body.name = pname
 	body.collision_layer = 1
@@ -109,54 +118,45 @@ func _make_portal(frame: Transform3D, pname: String) -> Dictionary:
 	var floor_mat := StandardMaterial3D.new()
 	floor_mat.albedo_color = Color(0.22, 0.22, 0.23)
 	floor_mat.roughness = 1.0
-	# floor, ceiling, two walls - a straight box tube running from the mouth (z = 0) inward (-z)
+	var prof := _profile(frame, height_fn)
+	var seg: float = tube_len / float(tube_segments)
 	var half_w := tube_w * 0.5
-	_slab(body, Vector3(tube_w, 0.4, tube_len), Vector3(0.0, -0.2, -tube_len * 0.5), floor_mat)
-	_slab(body, Vector3(tube_w, 0.4, tube_len), Vector3(0.0, tube_h, -tube_len * 0.5), mat)
-	_slab(body, Vector3(0.5, tube_h, tube_len), Vector3(-half_w, tube_h * 0.5, -tube_len * 0.5), mat)
-	_slab(body, Vector3(0.5, tube_h, tube_len), Vector3(half_w, tube_h * 0.5, -tube_len * 0.5), mat)
+	for i in range(tube_segments):
+		var y0: float = prof[i]
+		var y1: float = prof[i + 1]
+		var mid := Vector3(0.0, (y0 + y1) * 0.5, -(float(i) + 0.5) * seg)
+		var dir := Vector3(0.0, y1 - y0, -seg).normalized()
+		var sx := Transform3D(Basis(), mid).looking_at(mid + dir, Vector3.UP)
+		var hyp: float = sqrt(seg * seg + (y1 - y0) * (y1 - y0)) + 0.05
+		_slab(body, Vector3(tube_w, 0.4, hyp), sx * Transform3D(Basis(), Vector3(0.0, -0.2, 0.0)), floor_mat)
+		_slab(body, Vector3(tube_w, 0.4, hyp), sx * Transform3D(Basis(), Vector3(0.0, tube_h, 0.0)), mat)
+		_slab(body, Vector3(0.5, tube_h, hyp), sx * Transform3D(Basis(), Vector3(-half_w, tube_h * 0.5, 0.0)), mat)
+		_slab(body, Vector3(0.5, tube_h, hyp), sx * Transform3D(Basis(), Vector3(half_w, tube_h * 0.5, 0.0)), mat)
 	# a rim around the mouth so it reads as a portal from outside rather than a hole
-	_slab(body, Vector3(tube_w + 3.0, 1.2, 1.0), Vector3(0.0, tube_h + 0.6, -0.5), mat)
-	# APPROACH RAMP: the mouth is above the natural ground (see _frame_at), so the road has to climb
-	# to it. Length is derived from the lift and a grade the car can take loaded - 12%, the same
-	# max_grade the stage generator builds roads to - so this is a road, not a kerb to bump over.
-	var lift: float = maxf(frame.origin.y - _ground_under(pname, frame), 0.05)
-	var ramp_len: float = maxf(lift / 0.12, 8.0)
-	# ONE ROTATED SLAB, not a flight of steps. The first version laid the ramp as twelve stacked
-	# boxes, which is a STAIRCASE: the car hit it at speed, launched, crossed the transition plane
-	# airborne and arrived at the far portal metres above its floor - and the damage model, quite
-	# correctly, read the landings as crashes and pegged damage at 1.0. A continuous incline is the
-	# only thing a car can drive up without being thrown.
-	var slope: float = atan2(lift, ramp_len)
-	var ramp_hyp: float = sqrt(ramp_len * ramp_len + lift * lift)
-	var ramp := StaticBody3D.new()
-	ramp.name = "Ramp"
-	ramp.collision_layer = 1
-	ramp.collision_mask = 0
-	ramp.transform = Transform3D(Basis(Vector3.RIGHT, -slope), Vector3(0.0, -lift * 0.5, ramp_len * 0.5))
-	body.add_child(ramp)
-	_slab(ramp, Vector3(tube_w, 0.4, ramp_hyp), Vector3(0.0, -0.2, 0.0), floor_mat)
-	return {"frame": frame, "name": pname, "body": body}
+	_slab(body, Vector3(tube_w + 3.0, 1.2, 1.0), Transform3D(Basis(), Vector3(0.0, tube_h + 0.6, -0.5)), mat)
+	return {"frame": frame, "name": pname, "body": body, "prof": prof,
+		"gate_floor": float(prof[tube_segments / 2])}
 
-func _ground_under(pname: String, frame: Transform3D) -> float:
-	if pname == "PortalCalibration":
-		return float(stage._height(frame.origin.x, frame.origin.z))
-	return float(stage_area.height_at(frame.origin.x, frame.origin.z))
-
-func _slab(parent: Node3D, size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> void:
+func _slab(body: StaticBody3D, size: Vector3, xform: Transform3D, mat: StandardMaterial3D) -> void:
+	## The CollisionShape3D goes DIRECTLY on the StaticBody3D, never under an intermediate node.
+	## Godot only registers shapes that are direct children of the CollisionObject3D, and when the
+	## tube was refactored into ground-following segments each segment got its own Node3D - which
+	## silently removed every collider in the tunnel. The car then fell straight through the floor:
+	## measured 15.46 m BELOW it by the time it reached the transition plane, which read as a broken
+	## swap because the swap faithfully carried that height across.
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
 	bm.size = size
 	mi.mesh = bm
 	mi.material_override = mat
-	mi.position = pos
-	parent.add_child(mi)
+	mi.transform = xform
+	body.add_child(mi)
 	var cs := CollisionShape3D.new()
 	var bs := BoxShape3D.new()
 	bs.size = size
 	cs.shape = bs
-	cs.position = pos
-	parent.add_child(cs)
+	cs.transform = xform
+	body.add_child(cs)
 
 # ---------------------------------------------------------------- the swap
 
@@ -196,6 +196,11 @@ func _swap() -> void:
 	var f_out := g_to * Transform3D(Basis(Vector3.UP, PI), Vector3.ZERO)
 	var rel: Transform3D = g_from.affine_inverse() * car.global_transform
 	var dst: Transform3D = f_out * rel
+	# HEIGHT IS PRESERVED ABOVE THE FLOOR, NOT ABOVE THE MOUTH. Now that each tube follows its own
+	# ground, the floor at the transition plane sits at a different local height in each one - the
+	# stage tube climbs 8 m from its mouth, the calibration tube falls. Carrying the car's raw local
+	# y across would drop it through the floor at one end and leave it in mid-air at the other.
+	dst.origin.y += float(_portals[to]["gate_floor"]) - float(_portals[from]["gate_floor"])
 	var v_local: Vector3 = g_from.basis.inverse() * car.linear_velocity
 	var w_local: Vector3 = g_from.basis.inverse() * car.angular_velocity
 	# STATE IS PRESERVED, DELIBERATELY (§5 D5 probe 4). Damage, tyre temperature and wear are things
