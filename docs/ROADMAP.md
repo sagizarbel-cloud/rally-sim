@@ -113,6 +113,51 @@ Two controls identify it. **It is not aerodynamic:** with `drag_k` set to 0.0 th
 
 ---
 
+## Arc E (sketch) — the world you SEE, and vehicle identity
+
+Sequenced by the user 2026-08-30: **finish Arc D and Arc C's open items, then a bug-cleaning run,
+then plan this.** Not a plan yet - a captured intent, so it is not lost in chat. Six items, and they
+are NOT one arc's worth of the same kind of work:
+
+**E-a. Procedural ground texturing.** The chunk mesh already carries a per-vertex EDGE DISTANCE for
+exactly this reason (`StageArea.sample_at()` returns it so the road edge can be thresholded per
+PIXEL rather than per vertex). **Order matters: this comes AFTER D6.** D6 changes what the ground
+IS - mixed gravel/tarmac - and texturing before it means texturing it twice.
+
+**E-b. Trees and foliage along the road.** The placement rule is already available: a pure function
+of the ground map (`surface == GRASS`) plus the centreline (`lateral > x`), which is D1 and D2
+paying off a third time. Two hard constraints inherited from Arc D: it must be a **pure function of
+position and seed** (§0's repeatability rule - foliage that moves between visits breaks a learnable
+stage), and it must **stream with the chunks** rather than existing as one scene.
+
+**E-c. Clouds and a real skybox.** Standalone, cheap, no dependencies. The time-of-day system
+(`[L]`, four presets in `world.gd`) is the hook.
+
+**E-d. A real car MODEL replacing the primitive-built body.** Correctly identified by the user as a
+different tool's job (Blender or a bought asset), not this repo's. **The rule when it lands: the
+physics must not move.** Wheel mounts, CoM height, wheelbase and track are drive-verified
+calibration; swapping the visual body is a "nothing moves" refactor of exactly the kind D1 and D2
+already have a proven pattern and probe shape for.
+
+**E-e. CAR PROFILES — and this one is NOT art, it is physics, and it is unblocked today.** A `CarDef`
+in the same spirit as `StageDef`: mass, wheelbase, CoM, power curve, gear ratios, drive mode, tyre
+parameters. It needs no 3D model to be worth having - the existing primitive body can wear any
+profile. `docs/ROADMAP.md` M7 already brushes against it (peak_torque ~250-300 is the honest
+"205 GTI" spec against the 500 N*m WRC default), and every export the car has is already a
+drive-verified value, which is exactly what a profile is a named set of.
+
+**The split that matters:** E-e is ordinary work for this repo and can start whenever. E-d depends
+on external tooling. Bundling them would let the modelling block the physics.
+
+**What changes about how work is verified in this arc:** everything so far has been verified by
+headless probe (compiles, numbers) plus the user's drive (feel). Visual work is verified by EYE, and
+Arc D proved the instrument the hard way - D3's "jagged edges" survived several rounds of correct
+height-field measurement because the defect was in the MESH, and a screenshot found it in one look.
+**Expect screenshots to be the primary probe for Arc E**, and expect the first real GPU budget in a
+project whose budgets have so far all been physics ms/tick.
+
+---
+
 ## Prepared decision questions (for the next session)
 
 1. **Direction:** rally depth first (Tier 1) or game-loop/immersion (Tier 2)? _Recommendation: M6 surface degradation — signature feature, revives the flagship terrain._
