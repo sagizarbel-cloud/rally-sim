@@ -20,6 +20,74 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-31 — D5: the two worlds are joined by a tunnel. And four green probes were hiding a car being flung into open air
+
+**PHASE D5 BUILT AND PROBE-VERIFIED — AWAITING DRIVE VERDICT.** `scripts/area_manager.gd` owns which
+area the car is in and the tunnel that joins them. Drive into a portal beside the asphalt ring, drive
+out of a portal on SHAKEDOWN's start line.
+
+**TWO DESIGN FORKS, BOTH DECIDED BY THE USER, and both worth not re-litigating:**
+
+1. **The calibration bed is NEVER unloaded.** A cold rebuild of it measures **494 ms — 468 ms of
+   that in `_build()` alone**, i.e. 95% in the terrain mesh loop, so making it resumable would have
+   meant restructuring the build path every baseline in this project rests on. Holding it costs
+   ~20 MB. It is now built once and never torn down, which makes §1.1's "the calibration map stays
+   untouched" **structural** rather than something a probe must re-prove after every transition.
+   The generated stage needs no unload either: D4's streamer already drops its chunks to zero when
+   the car is elsewhere (measured: 0 resident after a round trip).
+2. **The connector is a TUNNEL used as a PORTAL, not a road.** Measured first: the stage's start
+   line is **4149 m** from the calibration map (its finish end 2122 m), because StageGen lays its
+   spine from one corner of a 4 km box and the start IS that corner. A continuous road link would
+   be as long as the stage itself, and the stage cannot simply be moved closer — its elevation is
+   sampled at ABSOLUTE world coordinates, so relocating the area changes the road. A tunnel dissolves
+   that: **its two mouths do not have to be geometrically adjacent.**
+
+**THE BUG THAT MATTERS, AND IT PASSED EVERY PROBE.** The swap took its 180 degree yaw about the
+tunnel MOUTH. Both tubes are entered from their mouths, so a car crossing 55 m *inside* tube A
+mapped to 55 m **OUTSIDE** tube B — the tunnel was flinging the car into open air beyond the far
+portal, and it only looked like it worked because the car landed and drove on. All four probes
+reported PASS throughout, because none of them could see WHERE the car was: probe 3 only asserted
+that *some* ground existed beneath it, and open terrain satisfies that perfectly.
+
+What caught it was refusing a number that made no physical sense — a car resting a **constant**
+3.12 m above the floor it should have been on. Two plausible explanations were tested and refuted
+first (terrain poking up through the floor; the approach ramp launching the car), and only the third
+attempt stopped guessing and printed the car's actual local coordinates: `z = +55` where it should
+have read `-55`. The yaw is now taken about the TRANSITION PLANE. Ray gap **3.12 m -> 0.63 m**,
+which is a car's ride height on the tunnel floor.
+
+**GREEN PROBES MEAN "NOTHING I THOUGHT TO ASSERT HAS BROKEN", NOT "IT WORKS."** That is the entry
+to grep. In this phase THREE defects were cancelling each other into four passes: the swap threw the
+car outside the far tube, which happened to satisfy the manager's re-arm rule, which was the only
+reason the probe could complete more than one trip — so fixing the swap *broke* the probe, twice.
+
+**Two more real geometry bugs, both found by driving the probe rather than reading the code:**
+- **The tube was buried in the hillside.** The first version put the mouth at local terrain height
+  and let the tube burrow in, so the car was wedged between the tunnel floor and the terrain
+  collider and stopped dead. Neither terrain may be carved to fix it — the calibration bed is
+  untouchable and the stage is the road the user has just verified — so the tube is raised to clear
+  the highest ground anywhere UNDER it (sampled across its width, not just down its centre line)
+  and an approach ramp lifts the road to the mouth.
+- **The approach ramp was a staircase.** Twelve stacked boxes; the car hit them at 22 m/s, launched,
+  crossed the transition plane ballistic and slammed into walls — and the damage model, quite
+  correctly, read the landings as crashes and pegged damage at **1.0**. It is now one rotated slab
+  at 12%, the same max grade the stage generator builds roads to.
+
+**Probe results, all four passing over 10 round trips:**
+- **1. Calibration bed bit-identical:** lattice `3dea9c62879b62c6…` before and after. Identical.
+- **2. Memory across transitions:** **+0 nodes, +0 colliders**, 0 stage chunks resident once the
+  streamer settles. (Counting before it settles reads streaming residue as a leak — it is not.)
+- **3. Ground present at every emergence:** 0 of 10 emerged over nothing; worst gap 0.641 m.
+- **4. State survives the swap:** **0 of 10** swaps altered damage, tyre wear or temperature.
+  DECIDED: state is PRESERVED — a tunnel is a road, not a service park. It still drifts while
+  DRIVING, which is the tyre model working.
+
+**One small extension to the ground map:** a layer may now name its own surface via `surface_at()`.
+That is how the tunnel reads as ASPHALT without grip, audio, dust and roughness each having to learn
+what a tunnel is — and it is the same hook D6 wants for mixed surfaces.
+
+---
+
 ## 2026-08-30 (D4 drive verdict) — "felt good", and the stair-stepped edges are back. Half of them were never geometry at all
 
 **DRIVE VERDICT on the streamed 4.9 km stage: "i test drove the stage and it felt good".** Three

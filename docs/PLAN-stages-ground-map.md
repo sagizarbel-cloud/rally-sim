@@ -911,7 +911,29 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   This is `Centreline` (D2/C1.0) code and it affects `wear`, `roughness` and D5's connecting tunnel,
   not just D4.
   Feel cannot be verified here: **awaiting the user drive checklist below.**
-- [ ] D5 — The area manager and the connecting tunnel
+- [ ] D5 — The area manager and the connecting tunnel — **BUILT AND PROBE-VERIFIED 2026-08-31,
+  AWAITING DRIVE VERDICT.** `scripts/area_manager.gd`. Drive into a portal beside the asphalt ring,
+  drive out of one on SHAKEDOWN's start line.
+  **TWO USER DECISIONS, not to be re-litigated.** (a) The calibration bed is NEVER unloaded: a cold
+  rebuild measures 494 ms, 468 of it in `_build()`, so making it resumable would restructure the
+  build path every baseline rests on. §1.1 becomes structural rather than re-proved per transition,
+  and D4's streamer already zeroes the stage's chunks when the car is away. (b) The connector is a
+  tunnel used as a PORTAL: the stage START is **4149 m** from the calibration map (finish end
+  2122 m) because StageGen puts the start in the far corner of a 4 km box, and the stage cannot be
+  moved closer because its elevation samples ABSOLUTE world coordinates. A tunnel's two mouths need
+  not be adjacent, which dissolves the problem instead of paying 4 km of road for it.
+  **All four probes pass over 10 round trips:** calibration lattice bit-identical; +0 nodes and
+  +0 colliders with 0 chunks resident once the streamer settles; ground present at every emergence
+  (worst gap 0.641 m); and 0/10 swaps altered damage, tyre wear or temperature — state is PRESERVED
+  by decision, because a tunnel is a road and not a service park.
+  **THE ENTRY WORTH READING BEFORE TRUSTING A PROBE AGAIN:** all four probes passed while the swap
+  was flinging the car 55 m into open air BEYOND the far portal — the yaw was taken about the tunnel
+  MOUTH instead of the transition PLANE, and probe 3 only asserted that *some* ground existed under
+  the car, which open terrain satisfies. Three defects were cancelling into four passes, so fixing
+  the swap broke the probe twice. Found by refusing a constant 3.12 m gap that made no physical
+  sense; fixed to 0.63 m, a car's ride height. Full account in `CHANGELOG.md` 2026-08-31.
+  Also fixed there: the tube was buried in the hillside (car wedged between floor and terrain), and
+  the approach ramp was a staircase that launched the car and pegged damage at 1.0.
 - [ ] D6 — Mixed-surface transitions
 - [ ] D7 — Deformable ruts along the corridor (optional)
 - [ ] D8 — Bake defaults, prune, end-to-end verification

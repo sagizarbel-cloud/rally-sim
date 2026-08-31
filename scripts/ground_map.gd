@@ -62,6 +62,11 @@ func _classify(x: float, z: float) -> int:
 	for a in areas:
 		if not a.in_area(x, z):
 			continue
+		# D5: a layer may NAME its own surface. Generated stages are gravel roads on grass, which is
+		# the default below; a tunnel is paved, and saying so here is what stops every consumer -
+		# grip, audio, dust, roughness - having to learn what a tunnel is.
+		if a.has_method("surface_at"):
+			return int(a.surface_at(x, z))
 		return Surface.DIRT if a.on_road(x, z) else Surface.GRASS
 
 	# 1. Asphalt ring corridor.

@@ -42,6 +42,7 @@ const TOD := [
 
 var _circuit_cls: Array = []                  # D2/D3: one Centreline per timed circuit + the stage
 var _stage_area: StageArea = null            # D3: the generated SHAKEDOWN stage
+var _area_manager: AreaManager = null        # D5: areas + the connecting tunnel
 
 func _ready() -> void:
 	Engine.max_fps = 144
@@ -76,6 +77,7 @@ func _ready() -> void:
 	_build_tuning(car)
 	_build_rearview(car)
 	_build_reactive_patch(car, stage)
+	_build_area_manager(car, stage)               # D5: the tunnel between the two areas
 	_build_sound(car, stage)
 
 func _physics_process(delta: float) -> void:
@@ -90,6 +92,19 @@ func _physics_process(delta: float) -> void:
 
 	# M11: dust / smoke / skid marks moved to scripts/effects.gd, where they are driven by
 	# contact-patch slip velocity and tyre temperature instead of a flat "is it spinning" test.
+
+func _build_area_manager(car: Node3D, stage) -> AreaManager:
+	## D5: owns which area the car is in and the tunnel that joins them. Built AFTER the stage area,
+	## because its stage-side portal sits on that stage's start line.
+	var am := AreaManager.new()
+	am.name = "AreaManager"
+	am.stage = stage
+	am.stage_area = _stage_area
+	am.car = car
+	add_child(am)
+	am.build()
+	_area_manager = am
+	return am
 
 func _build_effects(car: Node3D, stage) -> void:
 	var fx: Node3D = load("res://scripts/effects.gd").new()
