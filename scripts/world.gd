@@ -101,6 +101,7 @@ func _build_area_manager(car: Node3D, stage) -> AreaManager:
 	am.stage = stage
 	am.stage_area = _stage_area
 	am.car = car
+	am.chase_camera = _chase_cam       # carried across the swap; it lerps and would otherwise sail
 	add_child(am)
 	am.build()
 	_area_manager = am

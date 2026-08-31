@@ -85,6 +85,64 @@ damage model, not a bigger threshold — see `docs/ROADMAP.md`.
 
 ---
 
+## 2026-09-01 — the tunnel, rebuilt to the driver's design: a pad at the map edge and a tunnel that owes the terrain nothing
+
+**Drive report:** *"teleport is way too obvious and makes the camera move - tunnel is too short - i
+think it should be at least 800m each side and 300 meters should be reserved just for the
+straightening ... handle the tunnel transition and connection like the drag strip - make the ground
+flatten around the area of connection and make it more gradual - make the tunnel only start at the
+edges of the maps and make them independent of the curve that way - so only the transition pad gets
+affected."*
+
+**This design is better than what it replaced, and it made the code SIMPLER.** Because a transition
+pad guarantees a known flat height at the mouth, the tunnel no longer has to chase the ground: it is
+straight and flat, **four boxes instead of 22 rotated segments**, and it runs outward from the map
+edge into empty space where there is no terrain to argue with. Every previous tunnel bug - buried in
+a hillside, an 8.15 m ledge, colliders lost to an intermediate node - came from trying to make a
+tube follow terrain. It should never have had to.
+
+**THE TELEPORT NO LONGER MOVES THE CAMERA, and the fix is geometric rather than cosmetic.** The
+calibration tunnel is now aligned so its INWARD direction equals the stage tunnel's OUTWARD
+direction, which makes the handoff a **pure translation**: measured **heading change 0.000 deg**, so
+the car's world orientation is identical either side and a chase camera has nothing to swing around.
+The camera is also carried by the same delta, because `chase_camera.gd` lerps its position at
+`smooth = 6.0` and was otherwise sailing three kilometres across the world after every transition.
+
+**Sizes are the driver's:** 800 m each side, gate at 400 m, and the first 300 m reserved for
+straightening - the gate is never inside it.
+
+**The pad took three measured corrections, each one visible only because it was measured:**
+1. Sizing it from the highest ground within 200 m made it a **12 m embankment**. A connection pad is
+   a junction, not a runway - `pad_len` is 60 m.
+2. Taking the maximum across its full 70 m WIDTH let the valley walls set the height where the stage
+   road sits in a cut. The flat core is now only as wide as the road needs (`pad_core_w`), and the
+   pad blends up or down to natural ground outside it - which is what a cutting looks like.
+3. Holding the core flat left a shelf over the hollow between the area edge and the run-up, so the
+   core now RAMPS to a target height where the tunnel has to meet a road at a known level.
+
+**The stage mouth moved to the AREA EDGE** (-1998, -4233) rather than sitting on the start line.
+On the start line the pad - which must grade out into terrain - sat on the road and raised the first
+100 m of an already drive-verified stage. At the edge it bridges the gap to the run-up instead, and
+nothing of the stage proper is touched. Measured approach, by raycast onto the surface a car
+actually rests on: calibration 0.55 m of fill at the mouth, max grade 11.2%, natural ground by 100 m;
+stage 2.62 m ramping down through -0.43, -2.69, -4.96 to meet the road at -6.72, max grade 8.8%.
+
+**PHOTOGRAPHED, and the pictures found two things no number did:**
+- **The pad rendered nearly BLACK.** Its mesh had no normals - `ARRAY_NORMAL` was never set - so it
+  was unlit. Central differences across the grid, as the chunk builder does.
+- **The tunnel was pitch dark inside**: 800 m of unlit tube with a pinhole of daylight 400 m away.
+  That is a cave, not a road. Emissive ceiling panels plus omnis every 60 m (shadows off - thirteen
+  shadow-casting omnis per tunnel is not free).
+Also caught: the pad mesh ran 40 m INTO the tube and laid a second, lighter surface over the tunnel
+floor, photographed as a bright wedge on a dark roadway. It now starts just under the mouth.
+
+**A harness note that cost a run.** The first approach probe printed `pad_y` - a constant - and so
+could not see the ramp it was meant to be checking; and the first camera was placed at pad height
+plus 2.2 m, which put it 1.1 m UNDERGROUND and returned a dark picture of the underside of a hill.
+Raycast the surface a car would rest on, and put cameras above the ground at their own position.
+
+---
+
 ## 2026-08-31 (later) — "tried entering the tunnel but the ledge is too high". It was 8.15 m
 
 **Symptom in driving words: you cannot get into the tunnel — there is a step at the mouth.**
