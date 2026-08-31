@@ -28,6 +28,35 @@ Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt**, built pro
 
 ---
 
+## After-arc fix list (Arc D follow-ups)
+
+Things found while driving that are REAL but deliberately not fixed mid-arc, so a phase does not
+sprawl. Each names why it was deferred, because "later" without a reason becomes never.
+
+- **The engine takes far too much damage from jumps** (user, 2026-08-31, D4 drive). Landing a jump
+  should punish the suspension and maybe the tyres; it should not cook the engine. The damage model
+  is currently ONE scalar driven by a horizontal-deceleration spike (`impact_threshold`, M8), so it
+  cannot tell a landing from a head-on hit, and the component HUD then shows the engine taking it.
+  **Needs a per-component damage model** — chassis / suspension / engine as separate pools with
+  their own triggers — not a bigger threshold. Deferred because it is a vehicle-model rework and
+  Arc D is a terrain arc.
+- **Berm scalloping at the road edge** (D4 drive). The colour sawtooth was fixed per-pixel, but the
+  berm ridge is genuinely under-resolved: `berm_width` 1.6 m on a 1.41 m lattice is about one vertex
+  across. A denser corridor chunk is 4x the vertices and vertices are 96% of chunk cost, so the
+  principled fix is a **road-aligned ribbon mesh** for the carriageway and shoulders, resolving the
+  cross-section ACROSS the road (12-16 vertices) instead of by a square lattice that happens to pass
+  through it. Belongs with D6/D7, which already touch the corridor.
+- **Stages are not relocatable.** Elevation is sampled at ABSOLUTE world coordinates, so moving an
+  area changes its road. This is what forced D5's portal design (the stage start is 4149 m from the
+  calibration map and could not simply be moved closer). Fixable by sampling in area-LOCAL
+  coordinates, anchored so the current stage is preserved exactly — but it is generator work and it
+  would have invalidated a drive verdict mid-test.
+- **Corner rhythm and hairpin tightness** (D3 drive). "Corners do have rhythm but we might improve
+  it in the future"; "the hairpin is tight - can be tighter in future seeds, meaning this should not
+  be the limit". The lever named in D3 is a design speed that VARIES along the stage.
+
+---
+
 ## Milestones (prioritized)
 
 ### Tier 1 — Rally depth (highest payoff; reuses tech already built)

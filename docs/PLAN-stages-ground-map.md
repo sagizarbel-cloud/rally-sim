@@ -910,6 +910,15 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   equivalent, 0 mismatches in 3220 tests on each of the four centrelines**, 478 ms -> 0.289 ms.
   This is `Centreline` (D2/C1.0) code and it affects `wear`, `roughness` and D5's connecting tunnel,
   not just D4.
+  **DRIVE VERDICT 2026-08-31 — ACCEPTED with one open item.** Ghost-per-seed works, Reset restores
+  the seed, the FINISH call is on the gate, and *"stair-stepping are improved by much and rendering
+  looks better now"*. STILL OPEN: *"the feel is that the game has hiccups sometimes"*, with no fps
+  drop. Investigated and the streaming budget is EXONERATED — the same driven 60 s at 0.25 / 1.00 /
+  3.00 ms per tick gives 19.94% / 19.18% / 19.41% of ticks over 12 ms, i.e. unchanged, with the mean
+  tick at exactly 8.33 ms. That 19% band is 120 Hz physics beating against the 144 fps render cap,
+  not work. The remaining hypothesis is GPU upload of newly created chunk meshes (30.6/s measured),
+  which headless cannot confirm; retired chunks are now cached, and the discriminating test is on
+  the checklist — drive a stretch, turn round, drive it again. See `CHANGELOG.md` 2026-08-31.
   Feel cannot be verified here: **awaiting the user drive checklist below.**
 - [ ] D5 — The area manager and the connecting tunnel — **BUILT AND PROBE-VERIFIED 2026-08-31,
   AWAITING DRIVE VERDICT.** `scripts/area_manager.gd`. Drive into a portal beside the asphalt ring,

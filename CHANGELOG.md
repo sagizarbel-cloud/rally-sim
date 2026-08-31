@@ -20,6 +20,71 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-08-31 (D4 drive verdict) — the fixes hold; the hiccups do not
+
+**D4's reported defects are all confirmed FIXED by the driver:**
+- *"shakedown - ghost is working and changing seeds"* — the road-fingerprint ghost cache holds.
+- *"resets restores the seed"* — the seed slider could not express its own default before; Reset now
+  brings the original stage back, which is what the panel had always promised.
+- *"finish line is okay"* — the FINISH call is on the gate, not 80 m past it in the runoff.
+- *"stair-stepping are improved by much and rendering looks better now"* — the per-pixel edge
+  distance field. The remaining berm scalloping is on the after-arc list, named as geometry.
+
+**STILL OPEN, and it is the one that matters:** *"stage streaming budget sometimes has stutters but
+i didnt catch any fps drops ... the feel is that the game has hiccups sometimes."*
+
+This is a fair hit on the previous entry. D4 measured the spikes (worst physics frame 23.73 ms
+against an 8.333 ms tick, 359 of 33109 frames over budget) and then **explained them away** on the
+grounds that the legacy rally loop measures worse (62.10 ms, 2.0%). That comparison is true and it
+is not the point: the driver feels hiccups on the stage, so the spikes are a defect regardless of
+what another map does. "Not a regression" is not the same as "fine".
+
+Note the shape of the report — **hiccups WITHOUT fps drops**. That points at the PHYSICS step
+rather than the renderer: a 23 ms physics frame at 120 Hz makes the simulation fall behind and catch
+up across several steps, which reads as a judder in the car rather than a stutter in the picture.
+
+**INVESTIGATED, and the streaming budget is EXONERATED by A/B.** The same driven 60 s of stage, at
+three budgets a factor of twelve apart:
+
+| streaming budget | ticks over 12 ms | mean tick |
+|---|---|---|
+| 0.25 ms/tick | 19.94% | 8.33 ms |
+| 1.00 ms/tick | 19.18% | 8.33 ms |
+| 3.00 ms/tick | 19.41% | 8.33 ms |
+
+Unchanged. And the mean tick is **exactly 8.33 ms** - the simulation keeps real time. The
+distribution is bimodal (79% at or under 9 ms, 19% between 12 and 20 ms), which is **120 Hz physics
+beating against the 144 fps render cap**: one render frame is 6.94 ms and two are 13.9 ms, and they
+average to 8.33. That is scheduling cadence, not work, and no amount of streaming budget moves it.
+
+**A measurement lesson, since it wasted a run.** The first attribution pass reported "74% of frames
+over budget" with twelve identical worst frames of 38.26 ms at the identical position. That is
+`Performance.TIME_PHYSICS_PROCESS` being updated once per RENDER frame, so every physics step inside
+one frame reads the same number. It is the right monitor for render-frame cost and the wrong one for
+per-tick cost; wall time between consecutive ticks, from a node that runs first in the tree, is the
+one that answers "is the simulation keeping up".
+
+**What is left, and it is a hypothesis rather than a finding: chunk MESH CREATION.** Measured
+**30.6 new ArrayMeshes per second** while driving. Each one must be uploaded to the GPU on its first
+draw, which is invisible both to physics timing and to average fps - the exact shape of "hiccups but
+i didnt catch any fps drops". **This cannot be confirmed headless**, because headless has no GPU.
+
+Retired chunks are now CACHED rather than destroyed (bounded LRU, hidden MeshInstance3D, collider
+freed since a shape is cheap to rebuild). That took creation to 26.6/s - only 13%, and the reason is
+worth recording: most creations are not re-entries but the **LOD ladder**, each chunk being rebuilt
+as it steps 4 -> 2 -> 1 on approach, so it is never the same chunk twice at the same detail. The
+cache pays off on ground you RE-DRIVE, which is what makes it a test rather than just an
+optimisation: **drive a stretch, turn round, drive it again.** If the second pass is smooth, the
+hiccup is chunk creation and the fix is fewer LOD levels; if it hiccups identically, it is not, and
+the search moves elsewhere. Deliberately not guessing further without that answer.
+
+**New for the after-arc list, from the same drive:** *"when doing jumps the engine takes too much
+damage - we need to rework the model"*. The damage model is one scalar driven by a horizontal
+deceleration spike, so it cannot tell a landing from a head-on impact. That is a per-component
+damage model, not a bigger threshold — see `docs/ROADMAP.md`.
+
+---
+
 ## 2026-08-31 — D5: the two worlds are joined by a tunnel. And four green probes were hiding a car being flung into open air
 
 **PHASE D5 BUILT AND PROBE-VERIFIED — AWAITING DRIVE VERDICT.** `scripts/area_manager.gd` owns which
