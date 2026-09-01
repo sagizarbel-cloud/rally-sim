@@ -85,6 +85,43 @@ damage model, not a bigger threshold — see `docs/ROADMAP.md`.
 
 ---
 
+## 2026-09-01 (later) — six tunnel defects from the drive, and the one that mattered was mine to begin with
+
+**"when coming back from the shakedown the car just teleports below the tunnel and drops to the
+void"** — and it was a leftover, not a new bug. The swap carried a height correction
+(`pad_y[to] - pad_y[from]`) that belonged to the version whose tubes FOLLOWED the terrain and so had
+different floor heights at the gate. After the rebuild both tubes are flat and each frame origin IS
+its own floor, so the car's local y is already measured from the floor it stands on: the correction
+became a DOUBLE correction and put the car **1.72 m below the calibration tunnel's floor** on the
+way back. Removed. Four crossings measured, both directions, arriving at **+0.61 m every time**.
+
+**That also explains "the tunnel only works once per side."** There was no third crossing because
+the second dropped you through the world. The re-arm rule was innocent.
+
+**"the R spawn doesn't change when passing it"** — true, and now wired: `area_changed` re-points
+`car.spawn_transform` at the area you are actually in.
+
+**"the graded pad is blocking the asphalt circuit ... should be 20-60 m, not 200m which clip into a
+big section of track"** — the apron was derived from the drop it had to cover with a 200 m ceiling,
+which on the calibration side reached back over the ring. The calibration pad is now 20 m with the
+apron capped at 25 m; photographed from above, it sits clear of the ring with room to spare. The
+stage pad keeps its longer, derived length because it has a job: bridging the area edge to the
+run-up.
+
+**"the graded pad/environment clip the returning tunnel at 100m"** — the mouth was placed at a fixed
+RADIUS from the map centre, but the calibration map is a SQUARE and `road_dir` is whatever heading
+the stage happens to start on. On a diagonal that left the mouth well inside the map and the tube ran
+~100 m through terrain before clearing it. The mouth is now walked out to the square's actual
+boundary: measured at (354, 199) against a 360 m half-extent, so the tunnel leaves the map at once
+whatever direction it points.
+
+**"i don't like the teleporting jump/fall - i want the transition to feel seamless"** — the FALL was
+the double correction above and is gone. What remains is an instantaneous change of position, which
+is what a portal is; it is already a pure translation with the camera carried, so there is nothing
+left to smooth without changing the approach entirely. That judgement is the driver's.
+
+---
+
 ## 2026-09-01 — the tunnel, rebuilt to the driver's design: a pad at the map edge and a tunnel that owes the terrain nothing
 
 **Drive report:** *"teleport is way too obvious and makes the camera move - tunnel is too short - i

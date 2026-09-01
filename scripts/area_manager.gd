@@ -66,6 +66,7 @@ var pad_cell := 4.0
 # on the car itself without paying for one every few metres.
 var light_spacing := 60.0
 var light_range := 46.0
+var pad_apron_max := 200.0         ## cap on the graded apron, per portal
 var pad_target_y := 1e9            ## if set, the pad RAMPS to this height at pad_target_u
 var pad_target_u := 0.0
 var pad_core_w := 20.0                    ## the FLAT part. Only as wide as the road needs: taking
@@ -115,9 +116,27 @@ func build() -> void:
 	pad_target_y = 1e9
 	# CALIBRATION: on the map edge, pointed so that driving IN goes the same way in world space as
 	# driving OUT of the stage portal. That is what makes the swap a pure translation.
-	var edge: float = float(stage.size) * 0.5 - 20.0
-	_portals[Area.CALIBRATION] = _make_portal(road_dir * edge, road_dir, "PortalCalibration",
+	# ON THE SQUARE'S EDGE, not at a fixed radius. The map is a square and `road_dir` is whatever
+	# heading the stage happens to start on, so a fixed radius left the mouth well inside the map on
+	# a diagonal - and the tube then ran ~100 m through terrain before clearing it, which is the
+	# reported "environment clips the returning tunnel at 100m". Walking out to the boundary makes
+	# the tunnel leave the map immediately whatever direction it points.
+	var half: float = float(stage.size) * 0.5
+	var d := 0.0
+	var mouth_c := Vector3.ZERO
+	while d < half * 2.0:
+		var q: Vector3 = road_dir * d
+		if absf(q.x) > half - 6.0 or absf(q.z) > half - 6.0:
+			break
+		mouth_c = q
+		d += 2.0
+	# --- #1/#5: a SHORT pad here. 200 m of graded apron reached back over the asphalt ring and
+	# blocked it. The driver asked for 20-60 m, just enough to be flat for the mouth.
+	pad_len = 20.0
+	pad_apron_max = 25.0
+	_portals[Area.CALIBRATION] = _make_portal(mouth_c, road_dir, "PortalCalibration",
 			Callable(stage, "_height"))
+	pad_apron_max = 200.0
 	stage.ground_map.areas.append(self)
 
 func _make_portal(mouth_xz: Vector3, inward: Vector3, pname: String, height_fn: Callable) -> Dictionary:
@@ -208,7 +227,7 @@ func _build_pad(body: StaticBody3D, origin: Vector3, inward: Vector3, height_fn:
 		var w0: Vector3 = origin + back * u0
 		lo = minf(lo, float(height_fn.call(w0.x, w0.z)))
 		u0 += pad_cell
-	var apron: float = clampf((origin.y - lo) / pad_grade, 20.0, 200.0)
+	var apron: float = clampf((origin.y - lo) / pad_grade, 15.0, pad_apron_max)
 
 	var inv: Transform3D = body.transform.affine_inverse()
 	# The pad MESH starts just under the mouth. Running it 40 m into the tube laid a second, lighter
@@ -327,8 +346,12 @@ func _swap() -> void:
 	var f_out := g_to * Transform3D(Basis(Vector3.UP, PI), Vector3.ZERO)
 	var rel: Transform3D = g_from.affine_inverse() * car.global_transform
 	var dst: Transform3D = f_out * rel
-	# Both tubes are flat at their own pad height, so carry the car's height above the FLOOR.
-	dst.origin.y += float(_portals[to]["pad_y"]) - float(_portals[from]["pad_y"])
+	# NO height correction. Each tube is FLAT and its frame origin IS its floor, so the car's local y
+	# is already measured from the floor it is standing on - carrying it across is all that is needed.
+	# The old correction dated from the version whose tubes followed the terrain and had different
+	# floor heights at the gate; left in after the rebuild it double-corrected, and coming back from
+	# the stage put the car 1.72 m BELOW the calibration tunnel's floor, which is the reported
+	# "teleports below the tunnel and drops to the void".
 	var v_local: Vector3 = g_from.basis.inverse() * car.linear_velocity
 	var w_local: Vector3 = g_from.basis.inverse() * car.angular_velocity
 	# STATE IS PRESERVED, DELIBERATELY (§5 D5 probe 4). Damage, tyre temperature and wear are things

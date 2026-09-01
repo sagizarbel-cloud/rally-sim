@@ -104,6 +104,13 @@ func _build_area_manager(car: Node3D, stage) -> AreaManager:
 	am.chase_camera = _chase_cam       # carried across the swap; it lerps and would otherwise sail
 	add_child(am)
 	am.build()
+	# R is RESET, and after crossing it must put you back in the area you are actually in - not in
+	# the one you started the session in. Reported as "the R spawn doesn't change when passing it".
+	am.area_changed.connect(func(which: int):
+		if which == AreaManager.Area.STAGE:
+			car.spawn_transform = _stage_area.spawn_transform()
+		else:
+			car.spawn_transform = stage.get_spawn())
 	_area_manager = am
 	return am
 
