@@ -41,6 +41,7 @@ const TOD := [
 ]
 
 var _circuit_cls: Array = []                  # D2/D3: one Centreline per timed circuit + the stage
+var _time_trial
 var _stage_area: StageArea = null            # D3: the generated SHAKEDOWN stage
 var _area_manager: AreaManager = null        # D5: areas + the connecting tunnel
 
@@ -73,6 +74,7 @@ func _ready() -> void:
 	_build_status_hud(car)
 	_build_pacenotes(car, stage)
 	var tt := _build_timetrial(car, stage)
+	_time_trial = tt
 	hud.time_trial = tt                          # HUD shows the active circuit's lap/last/best
 	_build_tuning(car)
 	_build_rearview(car)

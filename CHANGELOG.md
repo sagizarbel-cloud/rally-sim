@@ -122,6 +122,57 @@ left to smooth without changing the approach entirely. That judgement is the dri
 
 ---
 
+## 2026-09-01 (later) — three portals, a directed graph, and a transition you cannot see
+
+**Driver, after the rebuild: *"other then that it works great"*, with three asks. All three done.**
+
+**1. "the tunnel should always work - regardless of were i started from."** It did not, and the
+reason was a stored belief. The manager tracked which area it THOUGHT the car was in and tested that
+tunnel's tube - a belief only ever updated by a tunnel transition. So arriving on SHAKEDOWN with
+`[B]` left it testing the CALIBRATION tube while the car sat in the stage one, and the stage tunnel
+simply did nothing. It now asks **which tube the car is actually inside** and sends it wherever that
+tube points. `[B]`, a tunnel, a respawn or anything added later all behave alike, because none of
+them are consulted. Verified: `[B]` to SHAKEDOWN, then straight through the stage tunnel, arrives on
+the calibration map.
+
+**2. A third portal at the end of SHAKEDOWN.** Portals are now a DIRECTED GRAPH rather than a
+two-state toggle:
+
+| portal | at | goes to |
+|---|---|---|
+| 0 CALIBRATION | map edge (296, 167) | 1 stage start |
+| 1 STAGE START | area edge (-1998, -4233) | 0 calibration |
+| 2 STAGE FINISH | road end (-1966, -1784) | 1 stage start |
+
+The driver was unsure whether the finish tunnel should return to the stage start or to the
+calibration map. **It returns to the stage start**, because a rally stage is a thing you re-run and
+the calibration map is still one tunnel away from where that puts you - whereas sending it to
+calibration would make re-running the stage the long way round. It is one number to flip, which is
+the point of making destinations data. The finish mouth sits at the very END of the road, past the
+finish line and the runoff, carrying on in the direction you were already travelling, so you drive
+into it rather than turning into it.
+
+**3. "can we make the lights sync? so the transition is truly seamless and indistinguishable."**
+Two parts, and the second is the more general fix:
+- **Lamps are now anchored on the GATE, not the mouth.** Both tubes are entered from their mouths
+  but travelled through in OPPOSITE senses, so mouth-anchored lighting put the next lamp 24 m ahead
+  on one side of the transition and 36 m ahead on the other - a visible jump in rhythm at exactly
+  the moment of the swap. Measured after: every tunnel's lamps sit at **340 / 400 / 460 m** about
+  the gate, identical, so the rhythm carries through unbroken.
+- **The camera is carried through the SAME RIGID MOTION as the car**, rather than just its position
+  delta. Preserving their relative pose makes the view continuous, and it is what frees a portal to
+  point wherever its road wants - without it, only pairs whose directions happen to agree could be
+  seamless, and the finish tunnel has to leave along the road's finishing heading. Measured across
+  all three transitions: the camera moves **0.0012-0.0041 m and 0.0000-0.0396 deg** relative to the
+  car. The residual is the chase camera's own lerp inside the frame.
+
+**A gotcha that cost a run, and it is already in CLAUDE.md:** `:=` cannot infer from a call on an
+untyped variable, and `./check.sh` cannot catch it in a probe, because the gate only verifies
+scripts the running game actually LOADS and an env-gated probe is not one of them. Check a
+not-yet-wired script directly with `--check-only --script`.
+
+---
+
 ## 2026-09-01 — the tunnel, rebuilt to the driver's design: a pad at the map edge and a tunnel that owes the terrain nothing
 
 **Drive report:** *"teleport is way too obvious and makes the camera move - tunnel is too short - i

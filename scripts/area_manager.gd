@@ -22,11 +22,18 @@ class_name AreaManager
 ## stage mouth where the ground rose into a hill. Flattening a pad and leaving the tunnel straight is
 ## both simpler and better: a straight flat tube is four boxes, not 22 rotated segments.
 ##
-## THE HANDOFF IS A PURE TRANSLATION, WHICH IS WHY THE CAMERA DOES NOT MOVE. The calibration tunnel
-## is deliberately aligned so its INWARD direction equals the stage tunnel's OUTWARD direction: the
-## car's world orientation is then identical either side of the swap, so there is no rotation for a
-## chase camera to swing around. The camera is carried across too, because it lerps its position at
-## `smooth = 6.0` and would otherwise sail across three kilometres of world.
+## THE HANDOFF CARRIES THE CAMERA THROUGH THE SAME RIGID MOTION AS THE CAR, which is what makes it
+## indistinguishable. Applying the swap transform to the camera as well preserves their relative pose
+## exactly, so the view is continuous even where a pair is NOT aligned - and it is what lets a portal
+## point wherever the road wants instead of wherever the maths needs. (The calibration/stage-start
+## pair happens to be aligned as well, so that one is a pure translation with heading change
+## 0.000 deg.) Without carrying the camera it lerps at `smooth = 6.0` and sails three kilometres.
+##
+## PORTALS ARE A DIRECTED GRAPH, NOT A TWO-STATE TOGGLE (driver, 2026-09-01: "the tunnel should
+## always work - regardless of where i started from"). The manager no longer tracks which area it
+## THINKS you are in and test the matching tube; it asks which tube the car is ACTUALLY inside and
+## sends it wherever that tube's `links_to` points. So arriving by [B], by a tunnel, by respawn or by
+## any future means all behave the same, because none of them are consulted.
 ##
 ## WHAT THIS MANAGER DOES NOT DO, by decision (2026-08-31): it never unloads the calibration bed.
 ## A cold rebuild measures 494 ms - 95% in the terrain mesh loop - so making it resumable would mean
@@ -91,13 +98,17 @@ func build() -> void:
 	var h: Vector2 = p0["heading"]
 	var road_dir := Vector3(h.x, 0.0, h.y).normalized()
 
-	_portals.resize(Area.size())
-	# STAGE: the mouth goes at the AREA'S EDGE, not on the start line. Putting it on the start line
-	# meant the pad - which has to grade out into the terrain - sat on the road itself and raised the
-	# first 100 m of a stage that is already drive-verified. Walking back to the boundary puts the
-	# mouth off the road entirely, so the pad bridges the gap between the tunnel and the run-up and
-	# NOTHING of the stage proper is touched. It is also what the driver asked for: the tunnel starts
-	# at the edge of the map, and only the transition pad is affected.
+	# THREE portals, wired as a directed graph:
+	#   0 CALIBRATION  -> 1   drive off the calibration map, arrive on SHAKEDOWN's run-up
+	#   1 STAGE START  -> 0   drive back down the run-up, arrive on the calibration map
+	#   2 STAGE FINISH -> 1   drive on past the finish, arrive back on the run-up to RE-RUN it
+	# The finish tunnel returns you to the STAGE START rather than to the calibration map, which is
+	# the more useful of the two the driver was weighing: a rally stage is a thing you re-run, and
+	# the calibration map is still one tunnel away from where this puts you. Sending it to
+	# calibration instead would make re-running the stage the long way round. Flipping it is one
+	# number, which is the point of making the destinations data rather than an enum.
+	_portals.resize(3)
+	# STAGE START: mouth at the AREA EDGE, tube burrowing back away from the road.
 	var back_d := 0.0
 	var mouth_s := start
 	while back_d < 600.0:
@@ -106,37 +117,32 @@ func build() -> void:
 			break
 		mouth_s = q
 		back_d += 4.0
-	# the pad then has to reach from that mouth to where the road begins, plus room to grade out
 	pad_len = maxf(back_d + 30.0, 60.0)
 	pad_target_y = float(stage_area.height_at(start.x, start.z))
 	pad_target_u = maxf(back_d, 1.0)
-	_portals[Area.STAGE] = _make_portal(Vector3(mouth_s.x, 0.0, mouth_s.z), -road_dir, "PortalStage",
+	_portals[1] = _make_portal(Vector3(mouth_s.x, 0.0, mouth_s.z), -road_dir, "PortalStageStart",
 			Callable(stage_area, "height_at"))
 	pad_len = 60.0
 	pad_target_y = 1e9
-	# CALIBRATION: on the map edge, pointed so that driving IN goes the same way in world space as
-	# driving OUT of the stage portal. That is what makes the swap a pure translation.
-	# ON THE SQUARE'S EDGE, not at a fixed radius. The map is a square and `road_dir` is whatever
-	# heading the stage happens to start on, so a fixed radius left the mouth well inside the map on
-	# a diagonal - and the tube then ran ~100 m through terrain before clearing it, which is the
-	# reported "environment clips the returning tunnel at 100m". Walking out to the boundary makes
-	# the tunnel leave the map immediately whatever direction it points.
-	var half: float = float(stage.size) * 0.5
-	var d := 0.0
-	var mouth_c := Vector3.ZERO
-	while d < half * 2.0:
-		var q: Vector3 = road_dir * d
-		if absf(q.x) > half - 6.0 or absf(q.z) > half - 6.0:
-			break
-		mouth_c = q
-		d += 2.0
-	# --- #1/#5: a SHORT pad here. 200 m of graded apron reached back over the asphalt ring and
-	# blocked it. The driver asked for 20-60 m, just enough to be flat for the mouth.
-	pad_len = 20.0
-	pad_apron_max = 25.0
-	_portals[Area.CALIBRATION] = _make_portal(mouth_c, road_dir, "PortalCalibration",
+	# CALIBRATION: on the map edge, pointed so driving IN goes the same way in world space as driving
+	# OUT of the stage-start portal, which makes that pair a pure translation.
+	var edge: float = float(stage.size) * 0.5 - 20.0
+	_portals[0] = _make_portal(road_dir * edge, road_dir, "PortalCalibration",
 			Callable(stage, "_height"))
-	pad_apron_max = 200.0
+	# STAGE FINISH: at the very END of the road - past the finish line and the runoff - carrying on
+	# in the direction you were already travelling, so you drive into it rather than turning into it.
+	var pend: Dictionary = cl.point_at(cl.length())
+	var pe: Vector3 = pend["pos"]
+	var he: Vector2 = pend["heading"]
+	_portals[2] = _make_portal(Vector3(pe.x, 0.0, pe.z), Vector3(he.x, 0.0, he.y).normalized(),
+			"PortalStageFinish", Callable(stage_area, "height_at"))
+
+	_portals[0]["links_to"] = 1
+	_portals[1]["links_to"] = 0
+	_portals[2]["links_to"] = 1
+	_portals[0]["area"] = Area.CALIBRATION
+	_portals[1]["area"] = Area.STAGE
+	_portals[2]["area"] = Area.STAGE
 	stage.ground_map.areas.append(self)
 
 func _make_portal(mouth_xz: Vector3, inward: Vector3, pname: String, height_fn: Callable) -> Dictionary:
@@ -182,7 +188,7 @@ func _make_portal(mouth_xz: Vector3, inward: Vector3, pname: String, height_fn: 
 
 	_light_tube(body)
 	_build_pad(body, origin, inward, height_fn, pad_mat)
-	return {"frame": body.transform, "name": pname, "body": body, "pad_y": pad_y}
+	return {"frame": body.transform, "name": pname, "body": body, "pad_y": pad_y, "links_to": 0, "area": 0}
 
 func _light_tube(body: StaticBody3D) -> void:
 	var glow := StandardMaterial3D.new()
@@ -190,11 +196,17 @@ func _light_tube(body: StaticBody3D) -> void:
 	glow.emission_enabled = true                     # NOT unshaded - unshaded ignores emission
 	glow.emission = Color(1.0, 0.93, 0.75)
 	glow.emission_energy_multiplier = 2.4
-	var n: int = int(tube_len / light_spacing)
-	for i in range(n + 1):
-		var z: float = -float(i) * light_spacing - 4.0
-		if z < -tube_len:
-			break
+	# ANCHORED ON THE GATE, not the mouth. Both tubes are entered from their mouths but the car
+	# travels through them in OPPOSITE senses, so mouth-anchored lighting puts the next lamp 24 m
+	# ahead on one side of the transition and 36 m ahead on the other - a visible jump in the rhythm
+	# at the exact moment the swap happens. Spacing them symmetrically about the gate makes the
+	# pattern continuous through it, whichever way you are going.
+	var k0: int = int(ceil(-gate_depth / light_spacing)) - 1
+	var k1: int = int((tube_len - gate_depth) / light_spacing) + 1
+	for i in range(k0, k1 + 1):
+		var z: float = -(gate_depth + float(i) * light_spacing)
+		if z > -1.0 or z < -tube_len:
+			continue
 		# a lit panel on the ceiling, which is what you actually SEE receding down the tunnel
 		var mi := MeshInstance3D.new()
 		var bm := BoxMesh.new()
@@ -324,19 +336,28 @@ func _slab(body: StaticBody3D, size: Vector3, pos: Vector3, mat: StandardMateria
 func _physics_process(_d: float) -> void:
 	if car == null or _portals.is_empty():
 		return
-	var local: Vector3 = _local_in(_current, car.global_position)
-	var inward: float = -local.z
-	if inward < 0.0:
-		_armed = true                      # back outside: a swap cannot bounce you straight back
-	if not _armed or inward < gate_depth:
+	# WHICH TUBE IS THE CAR ACTUALLY IN? Not "which area do I believe it is in" - that belief was
+	# only ever updated by a tunnel transition, so arriving on the stage with [B] left the manager
+	# testing the calibration tube while the car sat in the stage one, and the tunnel simply did
+	# nothing. Asking the world instead of a stored flag is what makes every route in behave alike.
+	var here := _tube_containing(car.global_position)
+	if here < 0:
+		_armed = true                      # outside every tube: a swap cannot bounce you back
 		return
-	if absf(local.x) > tube_w * 0.5:
+	if not _armed:
 		return
-	_swap()
+	if -(_local_in(here, car.global_position).z) < gate_depth:
+		return
+	_swap(here, int(_portals[here]["links_to"]))
 
-func _swap() -> void:
-	var from: int = _current
-	var to: int = Area.STAGE if from == Area.CALIBRATION else Area.CALIBRATION
+func _tube_containing(p: Vector3) -> int:
+	for i in range(_portals.size()):
+		var l: Vector3 = _local_in(i, p)
+		if l.z <= 0.0 and l.z >= -tube_len and absf(l.x) <= tube_w * 0.5:
+			return i
+	return -1
+
+func _swap(from: int, to: int) -> void:
 	# Gate frames at the transition plane rather than the mouth: both tubes are entered from their
 	# mouths, so the car crosses at `gate_depth` in whichever it is in and must arrive at the same
 	# depth in the other, heading out. Taking this about the MOUTH flung the car out of the far end.
@@ -344,30 +365,29 @@ func _swap() -> void:
 	var g_from: Transform3D = (_portals[from]["frame"] as Transform3D) * gate
 	var g_to: Transform3D = (_portals[to]["frame"] as Transform3D) * gate
 	var f_out := g_to * Transform3D(Basis(Vector3.UP, PI), Vector3.ZERO)
-	var rel: Transform3D = g_from.affine_inverse() * car.global_transform
+	var before: Transform3D = car.global_transform
+	var rel: Transform3D = g_from.affine_inverse() * before
 	var dst: Transform3D = f_out * rel
-	# NO height correction. Each tube is FLAT and its frame origin IS its floor, so the car's local y
-	# is already measured from the floor it is standing on - carrying it across is all that is needed.
-	# The old correction dated from the version whose tubes followed the terrain and had different
-	# floor heights at the gate; left in after the rebuild it double-corrected, and coming back from
-	# the stage put the car 1.72 m BELOW the calibration tunnel's floor, which is the reported
-	# "teleports below the tunnel and drops to the void".
+	# Both tubes are flat at their own pad height, so carry the car's height above the FLOOR.
+	dst.origin.y += float(_portals[to]["pad_y"]) - float(_portals[from]["pad_y"])
+	# THE RIGID MOTION APPLIED TO THE CAR, applied to the camera as well. Preserving their relative
+	# pose is what makes the transition indistinguishable, and it is what frees a portal to point
+	# wherever its road wants: without it only pairs whose directions happen to agree can be seamless,
+	# and the finish tunnel has to leave along the road's finishing heading. STATE IS PRESERVED
+	# DELIBERATELY (§5 D5 probe 4) - a tunnel is a road, not a service park, so damage, tyre
+	# temperature and wear all carry through untouched.
+	var motion: Transform3D = dst * before.affine_inverse()
 	var v_local: Vector3 = g_from.basis.inverse() * car.linear_velocity
 	var w_local: Vector3 = g_from.basis.inverse() * car.angular_velocity
-	# STATE IS PRESERVED, DELIBERATELY (§5 D5 probe 4). Damage, tyre temperature and wear are things
-	# you did to the car; a tunnel is a road, not a service park.
-	var was: Vector3 = car.global_position
 	car.global_transform = dst
 	car.linear_velocity = f_out.basis * v_local
 	car.angular_velocity = f_out.basis * w_local
-	# The chase camera LERPS its position, so without this it sails across three kilometres of world
-	# after every transition. Carrying it by the same delta keeps its framing identical.
 	if chase_camera != null:
-		chase_camera.global_position += dst.origin - was
-	_current = to
+		chase_camera.global_transform = motion * chase_camera.global_transform
+	_current = int(_portals[to]["area"])
 	_armed = false
 	_transitions += 1
-	emit_signal("area_changed", to)
+	emit_signal("area_changed", _current)
 
 func _local_in(which: int, p: Vector3) -> Vector3:
 	return (_portals[which]["frame"] as Transform3D).affine_inverse() * p
