@@ -122,6 +122,42 @@ left to smooth without changing the approach entirely. That judgement is the dri
 
 ---
 
+## 2026-09-01 (later still) — I re-introduced the void drop, and the git history is what caught it
+
+**The driver rewound the conversation past the void-drop fix and asked whether it still existed.**
+It did - as commit `cd07f82`, sitting directly beneath the portal-graph work. But checking turned up
+something worse than a lost conversation: **the fix was no longer in the code.**
+
+Rewriting `_swap()` wholesale for the portal graph, I rebuilt it from an older copy rather than
+editing the current one, and restored the line `cd07f82` had deliberately deleted:
+
+    dst.origin.y += float(_portals[to]["pad_y"]) - float(_portals[from]["pad_y"])
+
+Each tube is flat and its frame origin IS its floor, so the car's local y is already measured from
+the floor it is standing on. That correction dated from the version whose tubes FOLLOWED the
+terrain; kept after the rebuild it double-corrects, and coming back from the stage put the car
+1.72 m below the calibration floor - "teleports below the tunnel and drops to the void". Restored,
+with a note in the code saying how it came back, because it can come back the same way again.
+
+**A second regression from the same rewrite:** the calibration mouth went back to a fixed radius
+(`road_dir * (size/2 - 20)`) instead of walking out to the square's boundary. The map is a SQUARE
+and `road_dir` is whatever heading the stage starts on, so on a diagonal a fixed radius leaves the
+mouth well inside the map - the tube then runs ~100 m through terrain before clearing it, which was
+the reported "environment clips the returning tunnel at 100m". Restored, along with the short 20 m
+pad and 25 m apron cap that stop the apron reaching back over the asphalt ring.
+
+**Verified after restoring, four crossings covering every portal and both directions: 0.61 m above
+the tunnel floor every time**, and the calibration mouth is on the map edge at (354, 199).
+
+**The lesson is about method, not about tunnels.** A wholesale rewrite of a function silently
+discards every fix made to it since the copy you are working from. Both regressions were mine, both
+were invisible to `./check.sh`, and neither would have been found by testing the feature I was
+actually building - the portal graph worked perfectly while the car dropped through the world on the
+way back. When rewriting a function that has been debugged, diff the result against what it replaced
+before committing.
+
+---
+
 ## 2026-09-01 (later) — three portals, a directed graph, and a transition you cannot see
 
 **Driver, after the rebuild: *"other then that it works great"*, with three asks. All three done.**

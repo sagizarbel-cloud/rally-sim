@@ -124,11 +124,31 @@ func build() -> void:
 			Callable(stage_area, "height_at"))
 	pad_len = 60.0
 	pad_target_y = 1e9
-	# CALIBRATION: on the map edge, pointed so driving IN goes the same way in world space as driving
-	# OUT of the stage-start portal, which makes that pair a pure translation.
-	var edge: float = float(stage.size) * 0.5 - 20.0
-	_portals[0] = _make_portal(road_dir * edge, road_dir, "PortalCalibration",
+	# CALIBRATION: pointed so driving IN goes the same way in world space as driving OUT of the
+	# stage-start portal, which makes that pair a pure translation.
+	#
+	# ON THE SQUARE'S EDGE, not at a fixed radius. The map is a square and `road_dir` is whatever
+	# heading the stage happens to start on, so a fixed radius left the mouth well inside the map on
+	# a diagonal - and the tube then ran ~100 m through terrain before clearing it, which is the
+	# reported "environment clips the returning tunnel at 100m". Walking out to the boundary makes
+	# the tunnel leave the map immediately whatever direction it points.
+	var half: float = float(stage.size) * 0.5
+	var d := 0.0
+	var mouth_c := Vector3.ZERO
+	while d < half * 2.0:
+		var q: Vector3 = road_dir * d
+		if absf(q.x) > half - 6.0 or absf(q.z) > half - 6.0:
+			break
+		mouth_c = q
+		d += 2.0
+	# A SHORT pad here: 200 m of graded apron reached back over the asphalt ring and blocked it. The
+	# driver asked for 20-60 m, just enough to be flat for the mouth.
+	pad_len = 20.0
+	pad_apron_max = 25.0
+	_portals[0] = _make_portal(mouth_c, road_dir, "PortalCalibration",
 			Callable(stage, "_height"))
+	pad_len = 60.0
+	pad_apron_max = 200.0
 	# STAGE FINISH: at the very END of the road - past the finish line and the runoff - carrying on
 	# in the direction you were already travelling, so you drive into it rather than turning into it.
 	var pend: Dictionary = cl.point_at(cl.length())
@@ -368,8 +388,15 @@ func _swap(from: int, to: int) -> void:
 	var before: Transform3D = car.global_transform
 	var rel: Transform3D = g_from.affine_inverse() * before
 	var dst: Transform3D = f_out * rel
-	# Both tubes are flat at their own pad height, so carry the car's height above the FLOOR.
-	dst.origin.y += float(_portals[to]["pad_y"]) - float(_portals[from]["pad_y"])
+	# NO height correction. Each tube is FLAT and its frame origin IS its floor, so the car's local y
+	# is already measured from the floor it is standing on - carrying it across is all that is needed.
+	# The old correction dated from the version whose tubes followed the terrain and had different
+	# floor heights at the gate; left in after the rebuild it double-corrected, and coming back from
+	# the stage put the car 1.72 m BELOW the calibration tunnel's floor, which is the reported
+	# "teleports below the tunnel and drops to the void".
+	#
+	# RE-INTRODUCED ONCE, 2026-09-01, by rewriting _swap() wholesale for the portal graph from an
+	# older copy instead of editing the current one. If this line ever comes back, that is how.
 	# THE RIGID MOTION APPLIED TO THE CAR, applied to the camera as well. Preserving their relative
 	# pose is what makes the transition indistinguishable, and it is what frees a portal to point
 	# wherever its road wants: without it only pairs whose directions happen to agree can be seamless,
