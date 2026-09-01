@@ -122,6 +122,38 @@ left to smooth without changing the approach entirely. That judgement is the dri
 
 ---
 
+## 2026-09-01 (last) — "100+ meters of the tunnel just on the middle of the shakedown tracks"
+
+**It was not the tunnel, it was the PADS**, and measuring said so immediately: the tubes cross the
+road nowhere at all. Walking the centreline against each portal's footprint:
+
+| pad | road it covered | now |
+|---|---|---|
+| stage START | **245 m**, s=0..240 - the whole run-up AND the first 200 m of TIMED stage | 35 m, s=0..30 |
+| stage FINISH | **305 m**, s=4625..4925 | 35 m, s=4895..4925 |
+
+Both are now confined to the run-up (45 m) and the runoff (80 m), so no part of the timed stage is
+touched. Three causes, all mine:
+
+1. **The aprons were capped at 200 m.** That cap belongs to the calibration side, where the pad has a
+   hillside to grade out into; on the stage it laid a flat rectangle back along the road. Capped at
+   20 m for both stage portals, which is enough because the pad already RAMPS to the road's own
+   height (`pad_target_y`) and is therefore level with it by the time the apron starts.
+2. **The pads were 70 m wide.** 44 m on the stage side.
+3. **The FINISH mouth was 34 m INSIDE the box**, on the road end, breaking the driver's own rule
+   that tunnels start at the edge of the map. It now walks on past the end of the road in the
+   direction you were already travelling until it leaves the box - the same construction the start
+   portal uses - so only the pad between the road and the edge is affected.
+
+**A probe lied again, in the now-familiar way.** After the fix the overlap still read 245 m and
+305 m, because the probe tested a hardcoded 300 x 70 m footprint rather than each portal's actual
+pad. The portal record now carries its real `pad_reach` and `pad_half_w`, measured at build time, so
+nothing downstream has to guess. That is the third time this session a probe has measured something
+adjacent to the claim and been believed; the pattern is always the same - it asserts a stand-in for
+the thing, and the stand-in stays true after the thing has changed.
+
+---
+
 ## 2026-09-01 (later still) — I re-introduced the void drop, and the git history is what caught it
 
 **The driver rewound the conversation past the void-drop fix and asked whether it still existed.**

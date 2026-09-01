@@ -117,12 +117,21 @@ func build() -> void:
 			break
 		mouth_s = q
 		back_d += 4.0
-	pad_len = maxf(back_d + 30.0, 60.0)
+	# The pad reaches the road start and STOPS. It used to run back_d + 30 m with an apron capped at
+	# 200, which laid 245 m of flat rectangle along the road - the run-up plus the first 200 m of the
+	# TIMED stage, reported as "leftovers of the tunnel ramp on the middle of the shakedown tracks".
+	# It ramps to the road's own height at back_d (pad_target_y), so by the time it gets there it is
+	# already at road level and needs only a short apron to disappear.
+	pad_len = maxf(back_d + 10.0, 30.0)
+	pad_apron_max = 20.0
+	pad_w = 44.0
 	pad_target_y = float(stage_area.height_at(start.x, start.z))
 	pad_target_u = maxf(back_d, 1.0)
 	_portals[1] = _make_portal(Vector3(mouth_s.x, 0.0, mouth_s.z), -road_dir, "PortalStageStart",
 			Callable(stage_area, "height_at"))
 	pad_len = 60.0
+	pad_apron_max = 200.0
+	pad_w = 70.0
 	pad_target_y = 1e9
 	# CALIBRATION: pointed so driving IN goes the same way in world space as driving OUT of the
 	# stage-start portal, which makes that pair a pure translation.
@@ -151,11 +160,33 @@ func build() -> void:
 	pad_apron_max = 200.0
 	# STAGE FINISH: at the very END of the road - past the finish line and the runoff - carrying on
 	# in the direction you were already travelling, so you drive into it rather than turning into it.
+	# STAGE FINISH: the mouth goes at the AREA EDGE too, walking on past the end of the road in the
+	# direction you were already travelling. Putting it ON the road end left it 34 m inside the box
+	# and its pad laid 305 m of flat rectangle back along the road. Same rule as every other portal:
+	# tunnels start at the edge of the map, so only the pad between the road and the edge is touched.
 	var pend: Dictionary = cl.point_at(cl.length())
 	var pe: Vector3 = pend["pos"]
 	var he: Vector2 = pend["heading"]
-	_portals[2] = _make_portal(Vector3(pe.x, 0.0, pe.z), Vector3(he.x, 0.0, he.y).normalized(),
+	var end_dir := Vector3(he.x, 0.0, he.y).normalized()
+	var fwd_d := 0.0
+	var mouth_f := pe
+	while fwd_d < 600.0:
+		var q: Vector3 = pe + end_dir * fwd_d
+		if not stage_area.in_area(q.x, q.z):
+			break
+		mouth_f = q
+		fwd_d += 4.0
+	pad_len = maxf(fwd_d + 10.0, 30.0)
+	pad_apron_max = 20.0
+	pad_w = 44.0
+	pad_target_y = float(stage_area.height_at(pe.x, pe.z))
+	pad_target_u = maxf(fwd_d, 1.0)
+	_portals[2] = _make_portal(Vector3(mouth_f.x, 0.0, mouth_f.z), end_dir,
 			"PortalStageFinish", Callable(stage_area, "height_at"))
+	pad_len = 60.0
+	pad_apron_max = 200.0
+	pad_w = 70.0
+	pad_target_y = 1e9
 
 	_portals[0]["links_to"] = 1
 	_portals[1]["links_to"] = 0
@@ -207,8 +238,11 @@ func _make_portal(mouth_xz: Vector3, inward: Vector3, pname: String, height_fn: 
 	_slab(body, Vector3(tube_w + 4.0, 1.4, 1.2), Vector3(0.0, tube_h + 0.7, -0.6), wall_mat)
 
 	_light_tube(body)
-	_build_pad(body, origin, inward, height_fn, pad_mat)
-	return {"frame": body.transform, "name": pname, "body": body, "pad_y": pad_y, "links_to": 0, "area": 0}
+	# The pad's REAL reach and width, recorded rather than left to be guessed. A probe that assumed a
+	# generic footprint reported 245 m of road buried under a pad that had already been shortened.
+	var reach: float = _build_pad(body, origin, inward, height_fn, pad_mat)
+	return {"frame": body.transform, "name": pname, "body": body, "pad_y": pad_y, "links_to": 0,
+		"area": 0, "pad_reach": reach, "pad_half_w": pad_w * 0.5}
 
 func _light_tube(body: StaticBody3D) -> void:
 	var glow := StandardMaterial3D.new()
@@ -244,7 +278,7 @@ func _light_tube(body: StaticBody3D) -> void:
 		body.add_child(lamp)
 
 func _build_pad(body: StaticBody3D, origin: Vector3, inward: Vector3, height_fn: Callable,
-		mat: StandardMaterial3D) -> void:
+		mat: StandardMaterial3D) -> float:
 	## A flat approach that grades out into the terrain - the drag strip's runoff pad, applied to a
 	## tunnel mouth. THIS is what lets the tunnel be straight and flat: the pad guarantees a known
 	## height at the mouth, so the tube never has to chase the ground. Built as its OWN mesh and
@@ -332,6 +366,7 @@ func _build_pad(body: StaticBody3D, origin: Vector3, inward: Vector3, height_fn:
 	shp.set_faces(faces)
 	cs.shape = shp
 	body.add_child(cs)
+	return pad_len + apron
 
 func _slab(body: StaticBody3D, size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> void:
 	## The CollisionShape3D goes DIRECTLY on the StaticBody3D, never under an intermediate node.
