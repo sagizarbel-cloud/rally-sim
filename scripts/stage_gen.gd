@@ -492,6 +492,8 @@ func _dist_to_edge(p: Vector2, dir: Vector2, half: float) -> float:
 		t = minf(t, ((def.origin.z + (half if dir.y > 0.0 else -half)) - p.y) / dir.y)
 	return maxf(t, 0.0) if t < 1e17 else 0.0
 
+var approach_grade := 0.20        ## the run-up/runoff ramp out of a cutting steeper than the road
+
 func _build_centreline(pts_in: PackedVector2Array) -> void:
 	var pts := _extend_ends(pts_in)
 	var n := pts.size()
@@ -521,7 +523,13 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 		var pe: Vector3 = world[0]
 		var target0: float = float(def.elevation_at(pe.x, pe.z))
 		var run_len: float = float(_pre_n) * _polyline_length(pts) / maxf(float(n - 1), 1.0)
-		var lift0: float = clampf(target0 - y0, -def.max_grade * run_len, def.max_grade * run_len)
+		# The APPROACH may be steeper than the road proper - a portal approach is a short engineered
+		# ramp, not a through route. NOTE this was NOT what limited the one seed in eighteen that
+		# still ends 0.67 m below ground: raising the allowance from 12% to 20% changed that seed by
+		# nothing, because the binding constraint is the VERTICAL-CURVE SMOOTHER that runs after this
+		# ramp and pulls the endpoint back down. 0.67 m over the pad's 20 m on-map blend is a 3.4%
+		# ramp, i.e. absorbed, so it is left alone rather than fought.
+		var lift0: float = clampf(target0 - y0, -approach_grade * run_len, approach_grade * run_len)
 		for k in range(_pre_n):
 			var f0: float = 1.0 - float(k) / float(_pre_n)      # 1 at the outer end, 0 at the gate
 			world[k] = Vector3(world[k].x, y0 + lift0 * f0 * f0 * (3.0 - 2.0 * f0), world[k].z)
@@ -530,7 +538,7 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 		var pf: Vector3 = world[n - 1]
 		var target1: float = float(def.elevation_at(pf.x, pf.z))
 		var off_len: float = float(_post_n) * _polyline_length(pts) / maxf(float(n - 1), 1.0)
-		var lift1: float = clampf(target1 - y1, -def.max_grade * off_len, def.max_grade * off_len)
+		var lift1: float = clampf(target1 - y1, -approach_grade * off_len, approach_grade * off_len)
 		for k in range(n - _post_n, n):
 			var f1: float = float(k - (n - _post_n)) / float(_post_n)
 			world[k] = Vector3(world[k].x, y1 + lift1 * f1 * f1 * (3.0 - 2.0 * f1), world[k].z)
