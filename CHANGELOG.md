@@ -20,6 +20,47 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-09-02 (later) — the tunnel never moved when the seed did
+
+**Driver: *"once again the path is not going to the edge of the map on all seeds ... the mouth and
+the transition pad both are on the wrong height on some of the seeds - why on some seeds it lines up
+perfectly ... and on others its messed up"*, with the suggestion that the tunnel height be tied to
+the seed.**
+
+**The suggestion was already the design; the bug was that it was only applied ONCE.** Every portal is
+placed FROM the road - its position is the road's end at the map edge, its height is the road's
+height there - but `world.gd`'s `regenerated` handler re-pointed the centrelines, the timing, the
+pace notes and the car's spawn, and left the portals alone. So the tunnel kept the geometry of
+whichever seed happened to be live at startup and was wrong on every other one. `AreaManager` gained
+a `rebuild()`, called from that handler.
+
+**Measured, by disabling the fix and re-running the same check:**
+
+| | with the fix | without it |
+|---|---|---|
+| seeds failing | **0 of 10** | **9 of 10** |
+| worst mouth height error | 0.00 m | **11.96 m** |
+| worst mouth offset from the road line | 0.01 m | 3.00 m |
+
+The single seed that passes without the fix is 20260828 - the one the session starts on. That is
+exactly "lines up perfectly on some and is messed up on others", and it is why it looked
+seed-dependent when it was really regeneration-dependent.
+
+**WHY FOUR ROUNDS OF PROBES MISSED IT, which is the part worth keeping.** Every earlier check built a
+fresh `StageGen` from a duplicated `StageDef` and measured THAT - the generator, in isolation. Not
+one of them touched the portals that actually exist in the running game. So they all reported the
+road reaching the boundary on 18 of 18 seeds, which was true, while the thing the driver was looking
+at had never been regenerated at all. **A check that constructs its own copy of the subject is not
+testing the system; it is testing the constructor.** The check now drives the real path -
+`area._regenerate(...)` exactly as the Tab panel does, letting the real handler run - and then
+measures the live portals.
+
+**And it was verified to FAIL before it was trusted to pass.** Disabling the fix and confirming 9 of
+10 seeds break is what makes the green result mean anything; a check written against already-working
+code proves only that it compiles.
+
+---
+
 ## 2026-09-02 — "the [tab] tuning panel has a weird stutter/jumping when hovering with the mouse"
 
 **It was the help banner resizing under the cursor, and it flipped EVERY FRAME.** Reported as a

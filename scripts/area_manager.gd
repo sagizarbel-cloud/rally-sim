@@ -100,6 +100,27 @@ var _transitions := 0
 # ---------------------------------------------------------------- build
 
 func build() -> void:
+	_build_portals()
+	stage.ground_map.areas.append(self)
+
+func rebuild() -> void:
+	## THE STAGE MOVED, SO THE PORTALS MUST MOVE. Every portal is placed FROM the road - its position
+	## is the road's end at the map edge and its height is the road's height there - so a new seed is
+	## a new road and the old portals are simply in the wrong place. They were not being rebuilt:
+	## world.gd's `regenerated` handler re-pointed the centrelines, the timing, the pace notes and the
+	## spawn, and left these alone. The result was a tunnel that lined up perfectly on whichever seed
+	## happened to be live at startup and was wrong on every other one - reported as "on some seeds it
+	## lines up perfectly ... and on others its messed up". The ground-map layer is NOT re-registered,
+	## because this node is already in that list and appending again would resolve it twice.
+	for prt in _portals:
+		var b: Node = prt["body"]
+		if is_instance_valid(b):
+			b.queue_free()
+	_portals.clear()
+	_armed = true
+	_build_portals()
+
+func _build_portals() -> void:
 	var cl: Centreline = stage_area.gen.centreline
 	var p0: Dictionary = cl.point_at(0.0)
 	var start: Vector3 = p0["pos"]

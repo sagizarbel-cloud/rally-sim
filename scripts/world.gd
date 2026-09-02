@@ -190,6 +190,11 @@ func _wire_stage_area_live(area: StageArea, car: Node3D, tt: Node) -> void:
 		if pn != null:
 			pn.centrelines = _circuit_cls
 			pn.rebuild_routes()
+		# D5: the portals are placed FROM the road - position AND height - so a new seed needs them
+		# placed again. Without this the tunnel keeps the geometry of whatever seed was live at
+		# startup, which is why it lined up on one seed and was wrong on all the others.
+		if _area_manager != null:
+			_area_manager.rebuild()
 		if tt._active == 3:
 			car.spawn_transform = area.spawn_transform()
 			car.respawn())
