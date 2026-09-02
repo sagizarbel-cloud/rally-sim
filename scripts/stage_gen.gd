@@ -451,8 +451,19 @@ func _extend_ends(pts: PackedVector2Array) -> PackedVector2Array:
 	var step := _polyline_length(pts) / maxf(float(n - 1), 1.0)
 	var head := (pts[0] - pts[1]).normalized()             # points BACK from the start
 	var tail := (pts[n - 1] - pts[n - 2]).normalized()     # points ON past the finish
-	var pre := int(ceil(def.start_runup_m / step))
-	var post := int(ceil(def.finish_runoff_m / step))
+	# THE RUN-UP AND RUNOFF REACH THE EDGE OF THE MAP (driver, 2026-09-01). The tunnel that joins the
+	# areas has to meet a ROAD, not a hillside: photographed on one seed, the mouth sat behind a rise
+	# with no way to it, because the road stopped ~70 m short of the boundary and a flat pad was
+	# expected to bridge terrain it could not cut. Carrying the road itself to the edge solves it at
+	# the root - the stage area's corridor blend already grades terrain down to its own road surface,
+	# so the approach becomes a proper cutting for free and the pad shrinks to a few metres.
+	#
+	# The spine is untouched, so the TIMED stage is identical; only the approach lengthens.
+	var half_a: float = def.area_size * 0.5
+	var run_m: float = maxf(def.start_runup_m, _dist_to_edge(pts[0], head, half_a) - 2.0)
+	var off_m: float = maxf(def.finish_runoff_m, _dist_to_edge(pts[n - 1], tail, half_a) - 2.0)
+	var pre := int(ceil(run_m / step))
+	var post := int(ceil(off_m / step))
 	var out := PackedVector2Array()
 	for i in range(pre, 0, -1):
 		out.append(pts[0] + head * (float(i) * step))
@@ -471,6 +482,15 @@ func _extend_ends(pts: PackedVector2Array) -> PackedVector2Array:
 	_pre_n = pre
 	_post_n = post
 	return out
+
+func _dist_to_edge(p: Vector2, dir: Vector2, half: float) -> float:
+	## How far from `p` along `dir` before leaving the area box. Solved, not walked.
+	var t := INF
+	if absf(dir.x) > 1e-6:
+		t = minf(t, ((def.origin.x + (half if dir.x > 0.0 else -half)) - p.x) / dir.x)
+	if absf(dir.y) > 1e-6:
+		t = minf(t, ((def.origin.z + (half if dir.y > 0.0 else -half)) - p.y) / dir.y)
+	return maxf(t, 0.0) if t < 1e17 else 0.0
 
 func _build_centreline(pts_in: PackedVector2Array) -> void:
 	var pts := _extend_ends(pts_in)
@@ -516,6 +536,17 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 		hw[i] = def.width_m * 0.5 * (1.0 - def.width_var * pinch) \
 				+ def.curve_widening_m(k) * 0.5              # half the total widening per side
 	world = _limit_grade(world)                              # cut and fill: the VERTICAL constraint
+	# AND THE APPROACH WIDENS toward the map edge. A funnel is what a real road does where it meets a
+	# junction or a tunnel portal, and it is what makes the mouth findable and enterable at speed
+	# rather than a slot you have to hit exactly. Applied after the curve widening and the pinch so
+	# neither overwrites it.
+	var flare: float = def.width_m * 0.5 + def.approach_flare_m
+	for k in range(_pre_n):
+		var u: float = 1.0 - float(k) / float(maxi(_pre_n, 1))     # 1 at the map edge, 0 at the road
+		hw[k] = maxf(hw[k], lerpf(hw[k], flare, u * u))
+	for k in range(n - _post_n, n):
+		var u2: float = float(k - (n - _post_n)) / float(maxi(_post_n, 1))
+		hw[k] = maxf(hw[k], lerpf(hw[k], flare, u2 * u2))
 	centreline = Centreline.from_points(world, hw, false)     # OPEN: a stage is a route, not a lap
 	_build_bank_curvature()
 

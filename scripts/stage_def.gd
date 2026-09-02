@@ -38,6 +38,9 @@ var width_m: float = 7.5                  ## nominal road width; width_profile v
 var start_runup_m: float = 45.0           ## road before the start line, to launch from
 var finish_runoff_m: float = 80.0         ## road past the finish line, to stop on
 
+var approach_flare_m: float = 9.0         ## how much wider than the road the run-up/runoff get by
+                                          ## the time they reach the map edge. The approach is a
+                                          ## funnel to the tunnel portal, not a slot.
 var width_var: float = 0.30               ## 0..1, how much the road pinches and opens along its length
 
 # --- the constraint set (§3.2) -----------------------------------------------------------------
@@ -180,6 +183,7 @@ func duplicate_def() -> StageDef:
 	d.length_m = length_m; d.sinuosity = sinuosity
 	d.elevation_character = elevation_character
 	d.width_m = width_m; d.width_var = width_var
+	d.approach_flare_m = approach_flare_m
 	d.start_runup_m = start_runup_m; d.finish_runoff_m = finish_runoff_m
 	d.design_speed_kmh = design_speed_kmh
 	d.superelevation = superelevation; d.side_friction = side_friction

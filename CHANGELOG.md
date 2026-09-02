@@ -122,6 +122,48 @@ left to smooth without changing the approach entirely. That judgement is the dri
 
 ---
 
+## 2026-09-01 (final) — the run-up now reaches the map edge, so the tunnel meets a ROAD
+
+**Driver, with a screenshot of a seed I had not tried: *"the tunnel here is almost completely
+covered by the surrounding terrain ... this is the exact problem i wanted to avoid."*** Three
+options were offered, and the third is the one taken because it fixes the cause rather than the
+symptom: *"make it so the start run-up path extends to the end of the map and widens - that way it
+almost completely negates the need for the transition pad, and the transition pad only gives a
+bridge between the start-up path and the tunnel."*
+
+**Why that is the right one.** A flat pad can FILL a hollow but it cannot CUT a hill - the terrain
+mesh is still there and pokes straight through it - so on any seed whose ground rose between the
+road and the boundary, the mouth ended up behind a rise with no way to reach it. But the stage area
+already cuts and fills terrain around its own road corridor; that is what `sample_at`'s corridor
+blend does. **Carry the ROAD to the edge and the cutting comes for free.**
+
+`StageGen._add_runup_runoff` now solves the distance from the spine's ends to the area boundary and
+extends the run-up and runoff to reach it, instead of using a fixed 45 m / 80 m. **The spine is
+untouched, so the TIMED stage is identical** - only the approach lengthens. The approach also FLARES
+to `approach_flare_m` wider by the time it reaches the edge, because a portal wants a funnel and not
+a slot.
+
+**Measured across six spread seeds** (not consecutive - nearby seeds are similar):
+
+| | before | after |
+|---|---|---|
+| road start from the map edge | ~70 m | **1-2 m** |
+| road finish from the map edge | ~34 m | **1-2 m** |
+| approach width at the edge | 7.5 m | **25.5 m** |
+| timed length | 4800 m | **4800 m** (unchanged) |
+
+And the tunnel now meets it: both stage portals sit **0 m from the road end**, with the pad down to a
+50 m bridge from the 245 m and 305 m of road it used to lie across. Photographed from above: the
+widened run-up cuts through the hillside to the boundary, the pad bridges the last few metres, and
+the tube leaves into empty space beyond the map.
+
+**The general lesson, and it is the driver's:** a connector should attach to the ROAD NETWORK, not
+to the terrain. Every tunnel bug in this phase - buried in a hillside, an 8.15 m ledge, a 12 m
+embankment, a pad lying across 300 m of stage - came from asking a piece of flat geometry to
+negotiate ground it had no authority over. The road already has that authority.
+
+---
+
 ## 2026-09-01 (last) — "100+ meters of the tunnel just on the middle of the shakedown tracks"
 
 **It was not the tunnel, it was the PADS**, and measuring said so immediately: the tubes cross the
