@@ -460,8 +460,8 @@ func _extend_ends(pts: PackedVector2Array) -> PackedVector2Array:
 	#
 	# The spine is untouched, so the TIMED stage is identical; only the approach lengthens.
 	var half_a: float = def.area_size * 0.5
-	var run_m: float = maxf(def.start_runup_m, _dist_to_edge(pts[0], head, half_a) - 2.0)
-	var off_m: float = maxf(def.finish_runoff_m, _dist_to_edge(pts[n - 1], tail, half_a) - 2.0)
+	var run_m: float = maxf(def.start_runup_m, _dist_to_edge(pts[0], head, half_a) + 1.0)
+	var off_m: float = maxf(def.finish_runoff_m, _dist_to_edge(pts[n - 1], tail, half_a) + 1.0)
 	var pre := int(ceil(run_m / step))
 	var post := int(ceil(off_m / step))
 	var out := PackedVector2Array()
@@ -505,14 +505,35 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 	# happens to follow the hillside. Holding them level at the elevation of the line they serve also
 	# keeps terrain roughness out of the two joins, which is where the vertical profile is most
 	# fragile. The grade and vertical-curve limiters below then smooth the join into the road.
+	#
+	# THE APPROACH CLIMBS TO DAYLIGHT. Holding it dead level was right when it was 45 m of launch
+	# pad, and wrong once D5 stretched it to the map edge: the road's ends sit in a CUTTING - 5 to
+	# 7 m deep on most seeds, measured - so a level approach carried that trench all the way to the
+	# boundary and the tunnel mouth ended up at the bottom of it. The driver saw exactly that:
+	# "the height of the tunnel is not even close to the map - so its completely under it".
+	# Ramping the approach out to the natural ground it meets at the edge is what a real road does
+	# where it leaves a cutting for a portal, and it puts the mouth at surface level, which is what
+	# lets the transition pad be level rather than a wall.
+	# Grade-limited, so it stays a road: over a 70 m approach at max_grade 12% this can lift ~8 m,
+	# which covers the cuttings the generator actually produces.
 	if _pre_n > 0 and n > _pre_n:
 		var y0: float = world[_pre_n].y
+		var pe: Vector3 = world[0]
+		var target0: float = float(def.elevation_at(pe.x, pe.z))
+		var run_len: float = float(_pre_n) * _polyline_length(pts) / maxf(float(n - 1), 1.0)
+		var lift0: float = clampf(target0 - y0, -def.max_grade * run_len, def.max_grade * run_len)
 		for k in range(_pre_n):
-			world[k] = Vector3(world[k].x, y0, world[k].z)
+			var f0: float = 1.0 - float(k) / float(_pre_n)      # 1 at the outer end, 0 at the gate
+			world[k] = Vector3(world[k].x, y0 + lift0 * f0 * f0 * (3.0 - 2.0 * f0), world[k].z)
 	if _post_n > 0 and n > _post_n:
 		var y1: float = world[n - 1 - _post_n].y
+		var pf: Vector3 = world[n - 1]
+		var target1: float = float(def.elevation_at(pf.x, pf.z))
+		var off_len: float = float(_post_n) * _polyline_length(pts) / maxf(float(n - 1), 1.0)
+		var lift1: float = clampf(target1 - y1, -def.max_grade * off_len, def.max_grade * off_len)
 		for k in range(n - _post_n, n):
-			world[k] = Vector3(world[k].x, y1, world[k].z)
+			var f1: float = float(k - (n - _post_n)) / float(_post_n)
+			world[k] = Vector3(world[k].x, y1 + lift1 * f1 * f1 * (3.0 - 2.0 * f1), world[k].z)
 	# CURVE WIDENING. Roads are built wider through tight bends because a long vehicle's rear wheels
 	# cut inside its front ones, so its swept path is wider than the vehicle: W = L^2/(2R). That is
 	# also exactly the runoff room a hairpin wants. Applied symmetrically, from the LOCAL curvature,

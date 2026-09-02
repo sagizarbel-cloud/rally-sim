@@ -176,6 +176,50 @@ left to smooth without changing the approach entirely. That judgement is the dri
 
 ---
 
+## 2026-09-02 (later) — the approach climbs out of its cutting, so the portal is at ground level
+
+**Driver, with two screenshots: a step at the pad/stage join *"that makes a cover blocking the entry
+to the shakedown from the transition pad"*, and a seed where *"the height of the tunnel is not even
+close to the map - so its completely under it and the transition pad doesn't (and can't) create the
+ramp to enter"*.** Plus the instruction: *"make the start-up path go right to the very very end of
+the map"*.
+
+**Measuring found the cause, and it was not a step at all - it was a TRENCH.** The generated road's
+ends sit in a deep cutting, on nearly every seed:
+
+| seed | road y | natural ground | cut |
+|---|---|---|---|
+| 20260828 | -6.77 | -0.80 | **-5.96 m** |
+| 20268545 | +0.89 | +8.08 | **-7.19 m** |
+| 20276262 | -3.90 | +2.27 | **-6.17 m** |
+| 20283979 | -2.52 | +2.17 | **-4.69 m** |
+
+The height model was self-consistent - pad and road agreed to the centimetre - which is why nothing
+in the numbers looked wrong. But putting the mouth at the road's height then put it at the bottom of
+a 6 m trench, with the surrounding land standing over it. That is the "completely under the map",
+and the walls of the cutting are the "cover blocking the entry".
+
+**The fix: the approach CLIMBS TO DAYLIGHT.** Holding the run-up dead level was right when it was
+45 m of launch pad and wrong once it was stretched to the map edge. It now ramps from the start
+gate's elevation to the NATURAL GROUND it meets at the boundary, grade-limited to `max_grade` so it
+stays a road - which is exactly what a real road does where it leaves a cutting for a portal. Over a
+70 m approach at 12% that lifts ~8 m, which covers every cutting the generator actually produces.
+
+**Measured after, across five seeds: cut/fill at the road end is 0.00 m on all of them** - the road
+meets natural ground exactly - and the mouth moved from -6.77 to -1.56, i.e. from the trench floor
+to the surface. The road now also runs 1.3-1.9 m PAST the boundary rather than stopping short of it,
+which is the driver's "very very end of the map".
+
+**Photographed from the driver's seat:** the run-up runs level to a portal standing at ground level,
+with no trench, no wall and nothing to climb.
+
+**Worth keeping as the general shape of this whole tunnel saga:** four times now the numbers have
+agreed with each other while the world was wrong, because the model was self-consistent and simply
+described something nobody wanted. A cutting is a perfectly good road feature; it is only a bug when
+you try to put a door at the bottom of it.
+
+---
+
 ## 2026-09-02 — the tunnel, redesigned from an interview: the mouth is off-map AND at the road's height
 
 **The previous attempt did not work, and the driver was asked what they actually wanted rather than
