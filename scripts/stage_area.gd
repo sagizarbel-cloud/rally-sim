@@ -231,8 +231,14 @@ func spawn_transform() -> Transform3D:
 	## `atan2(h.x, h.y)`, which spawned the car facing exactly BACKWARDS: a Y-rotation by theta puts
 	## forward at (-sin, 0, -cos), so matching a heading (h.x, h.y) needs atan2(-h.x, -h.y). Godot's
 	## forward is -Z and looking_at already knows that, so it cannot get the sign wrong.
+	## SPAWN 45 m BEFORE THE START LINE, not at s = 0. D5 extended the run-up to reach the map edge,
+	## so s = 0 is now the boundary - and the tunnel's transition pad sits on it. Spawning there put
+	## the car INSIDE the pad with no way out ("when spawning i spawned inside the transition pad and
+	## couldnt get out"). Measuring back from the START GATE instead keeps the launch exactly as it
+	## always was, however long the approach becomes.
 	var cl := gen.centreline
-	var p0: Dictionary = cl.point_at(0.0)
+	var s_spawn: float = clampf(gen.timed_start_s - 45.0, 0.0, cl.length())
+	var p0: Dictionary = cl.point_at(s_spawn)
 	var pos: Vector3 = p0["pos"]
 	var h: Vector2 = p0["heading"]
 	var origin := Vector3(pos.x, height_at(pos.x, pos.z) + 1.8, pos.z)

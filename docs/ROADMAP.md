@@ -40,6 +40,13 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   **Needs a per-component damage model** — chassis / suspension / engine as separate pools with
   their own triggers — not a bigger threshold. Deferred because it is a vehicle-model rework and
   Arc D is a terrain arc.
+- **Carve the terrain for the tunnel portal** (driver, 2026-09-02: *"2 is the solution i want
+  eventually ... the optimal solution but the hardest one to work around - maybe put it in the
+  future plan"*). Today the tunnel avoids terrain entirely: the mouth stands off the map so nothing
+  can bury it. The end state is a portal that genuinely BORES into a hillside, which needs the stage
+  area's height field to cut a trench and a portal face - i.e. `sample_at` gaining a tunnel-corridor
+  term the way it already has a road corridor. Deferred because it changes the stage's ground near
+  the mouth and wants its own drive verdict, not because it is unclear.
 - **Berm scalloping at the road edge** (D4 drive). The colour sawtooth was fixed per-pixel, but the
   berm ridge is genuinely under-resolved: `berm_width` 1.6 m on a 1.41 m lattice is about one vertex
   across. A denser corridor chunk is 4x the vertices and vertices are 96% of chunk cost, so the

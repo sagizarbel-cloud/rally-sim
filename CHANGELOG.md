@@ -20,6 +20,60 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-09-02 — "the [tab] tuning panel has a weird stutter/jumping when hovering with the mouse"
+
+**It was the help banner resizing under the cursor, and it flipped EVERY FRAME.** Reported as a
+stutter in the panel, so worth naming precisely: the panel does not stutter when you drive, only
+when the mouse is over it, and the picture jumps rather than the car.
+
+The banner that explains whatever you are pointing at sits ABOVE the list, so its height is the
+list's origin. It was reserved at a hand-set 76 px — which is only "fixed" for the explanations
+that happen to fit in 76 px. Measured at the banner's real width of 345 px: most texts wrap to
+76 px or less, but `tyre_audio_surface` needs 117 and `stage_chunk_budget_ms` needs **197**.
+
+That makes a two-state loop, and the probe caught it flipping on every single frame with the mouse
+held still:
+
+| | banner height | row under the cursor |
+|---|---|---|
+| long explanation shown | 197 px | y = 801 |
+| short explanation shown | 97 px | y = 701 |
+
+Hover a row with a long explanation → the banner grows → **every row below slides down 100–121 px**
+→ the row you were pointing at leaves the cursor → its `mouse_exited` clears the banner → the banner
+shrinks → the row comes back under the cursor → `mouse_entered` → repeat. A 1 px jiggle, which is
+all a hand resting on a mouse produces, was enough to sustain it indefinitely.
+
+**Fixed by DERIVING the reserved height** from the longest explanation in `HELP`, measured at the
+width the banner actually has, instead of hand-setting it (`tuning_panel.gd _fit_banner`, recomputed
+only when the width changes). Nothing a text can do moves anything now. Writing a longer HELP line
+re-reserves by itself, so the fix cannot rot the way the 76 did.
+
+**One measurement worth keeping, because it nearly left the bug half-fixed.** The first version
+derived the height from font metrics — `Font.get_multiline_string_size()` — and came out **27 px
+short on exactly one text** (170 vs 197): that call returns `lines x font_height` and ignores the
+theme's `line_spacing` of 3 px, so at 10 lines it is 30 px light. The sweep caught it as
+"103 texts at 170 px, one at 197" — one explanation still able to shove the whole list. The
+derivation now asks the **Label itself** (`get_minimum_size()` with the floor released, then
+restored), which wraps and spaces text with the same code that draws it and so cannot disagree with
+itself. Verified exact against all 102 texts: worst under-estimate 0.0 px.
+
+**After: all 104 texts (102 help lines, the idle text, and the default) produce ONE banner height of
+197 px and ONE first-row position. The 1 px jiggle holds one slider position, one banner height and
+one help text over 20 samples.** Before: four distinct heights and rows oscillating every frame.
+
+**Also checked and EXONERATED, so it is not re-suspected:** `_process` re-syncs all ~76 widgets from
+the vehicle every frame, which is exactly the shape of thing that jitters. Over 120 idle frames no
+widget changed on its own, and every vehicle value sits on its slider's step grid, so the panel is
+not snapping values behind your back either.
+
+**Cost of the fix, which you will see immediately:** the banner is now permanently 197 px instead of
+76 — about 120 px of the panel reserved even when nothing is hovered. That height is set by a single
+outlier: `stage_chunk_budget_ms` is 565 characters and the next longest is 299. Shortening that one
+line would take the reserve to ~117 px on its own.
+
+---
+
 ## 2026-08-31 (D4 drive verdict) — the fixes hold; the hiccups do not
 
 **D4's reported defects are all confirmed FIXED by the driver:**
@@ -119,6 +173,42 @@ whatever direction it points.
 the double correction above and is gone. What remains is an instantaneous change of position, which
 is what a portal is; it is already a pure translation with the camera carried, so there is nothing
 left to smooth without changing the approach entirely. That judgement is the driver's.
+
+---
+
+## 2026-09-02 — the tunnel, redesigned from an interview: the mouth is off-map AND at the road's height
+
+**The previous attempt did not work, and the driver was asked what they actually wanted rather than
+being handed another guess.** The answers changed the design, and one of them is the whole thing:
+
+> *"make the mouth of the tunnel off map but make it always at the hight of the start-up path's
+> hight, that way the transition pad only bridges the distance and not the hight"*
+
+**Those two properties together are the design.** OFF-MAP means no terrain can ever bury the mouth -
+the failure that recurred on every seed whose ground rose near the boundary, because a flat pad can
+fill a hollow but cannot cut a hill. AT THE APPROACH'S OWN HEIGHT means the pad is LEVEL, so there
+is nothing to climb - which removes the steepness problem instead of grading it. Chasing either one
+alone is what the last three attempts did.
+
+**Also reported, and fixed:**
+- *"when spawning i spawned inside the transition pad and couldnt get out"* - a real trap. Extending
+  the run-up to the map edge had put s = 0 at the boundary, where the pad now sits, and the spawn
+  was at s = 0. It now measures back 45 m from the START GATE, which keeps the launch exactly as it
+  always was however long the approach becomes. Verified: spawn at s = 72 m against a gate at 117 m,
+  and not inside any pad.
+- *"sometimes the transition pad being to steep to climb"* - gone by construction. Measured worst
+  grade along the pad: **0.7% on both stage portals**, 9.2% on the calibration one where it blends
+  into open terrain.
+- *"make the transition pad grip like asphalt"* - the pad was not in `in_area()`, so it graded and
+  drove as open ground. It is now, and `surface_at()` speaks for it: reads as tarmac.
+
+**Geometry, to the driver's caps:** mouth `portal_offmap_m` = 60 m beyond the boundary; pad 80 m
+total - 60 m off the map, **20 m onto it** (their stated maximum), inside the 100 m ceiling. All
+three mouths verified OFF their own map.
+
+**Deferred by the driver's own call:** carving the terrain so the portal bores into a hillside is
+the end state they want (*"the optimal solution but the hardest"*), and it is on the after-arc list
+rather than smuggled in here.
 
 ---
 
