@@ -20,6 +20,87 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-09-04 — the calibration map and the transition pad met in a two-metre step
+
+**Driver: *"there is an issue between the calibration pad and the transition pad that they dont
+align"*.** Symptom while driving: heading out of the calibration map toward the tunnel, the ground
+rises, ends, and **drops away to the pad in one step**; coming the other way it is a wall across the
+entry. Grep words: *cliff at the map edge*, *step onto the transition pad*, *wall blocking the
+tunnel*, *pad below the ground*.
+
+**Measured before touching anything, by raycasting the whole surface stack at 0.5 m along the
+driving line on ten seeds: a 1.79-1.94 m step, on 10/10 seeds**, with terrain standing up to
+**2.95 m** above the pad at its shoulder.
+
+**Cause: the pad blended over a fixed window in its own axis, and the map edge does not run that
+way.** The pad is 44-52 m wide and points wherever the stage road points, so a straight boundary
+crosses it at an ANGLE - measured, the edge entered the pad at u=39.5 on one shoulder and left it at
+u=66.5 on the other, a **27 m diagonal**. A constant-u blend therefore held the pad flat across
+several metres of living ground on one side and floated it over a hollow on the other. Two smaller
+faults compounded it: the mouth was anchored `half - 6.0` from the edge, i.e. **6-8 m inside the map**
+at a point the pad then had to drive over; and `_build_portals()` appended the tunnel to
+`ground_map.areas` even though `build()` already did, so startup registered it twice and every seed
+change added another - **measured climbing 4, 5, 6 ... 13 layers over ten seed changes.**
+
+**The first fix was not enough, and that is the useful part.** Driving the blend from distance inside
+the boundary put the crossing in exactly the right place - and moved the worst step to the shoulder
+and made it **2.29 m**. The mismatch is ACROSS the pad, not along it: a pad that is flat at the edge
+cannot meet a hillside that is not, and the terrain at the map edge varies by over two metres across
+the pad's width.
+
+**What it is now:** the pad lives **entirely off the map** - the driver's own first sentence for it,
+*"the transition pad would start at the very edge and continue to it"*. At the boundary it takes the
+**terrain's own profile, sampled per column**, so it is flush at any crossing angle; it then morphs
+over the 60 m gap into the flat plane the tube needs. The driving line costs nothing for this,
+because the mouth height IS the ground height at the boundary on the centreline - down the middle the
+pad is flat from mouth to edge and only the shoulders rise and fall, which is what a road cutting
+does. The last row of the mesh tucks 0.30 m under the map so the two surfaces can neither gap nor
+fight for depth, and the row before it sits **exactly on the boundary** - without that vertex the pad
+interpolated between "flush" and "0.30 m under" across the join and arrived 0.10 m low, which was the
+last 0.12-0.15 m of the original 1.9 m step. A join is a place, so it gets a vertex.
+
+Retired with it: `pad_into_map_m` (the pad reaches 0 m onto the map, so the driver's "at max 20 m"
+cap has nothing to enforce), `pad_core_w`, `pad_grade`, `pad_apron_max`, `pad_target_y/u` - the last
+four already dead. `in_area()` now asks the same boundary question the mesh was built from instead of
+approximating the footprint with a rectangle, which had been claiming asphalt grip over 27 m of the
+calibration map on one shoulder and 13 m on the other.
+
+**Measured after, same check, same ten seeds:**
+
+| | before | after |
+|---|---|---|
+| worst step on the driving surface | **1.94 m** | **0.06 m** |
+| terrain standing above the pad | **2.95 m** | 0.29 m (the designed 0.30 m tuck) |
+| ride-height swing crossing the join, vs open ground | **+1.06 to +1.91 m** | **+0.12 to +0.15 m** |
+| holes in the pad off-map | - | 0 |
+| ground-map layers after 10 seed changes | **13** | **2** |
+| pad -> tube floor join | 0.000 m | 0.002 m |
+
+**Five views, and three of them lied first - the recurring hazard in this project.** (1) the raycast
+stack, (2) `stage._height` as a second opinion on it, (3) the step between 0.5 m samples, (4) four
+lateral offsets, (5) a real RigidBody3D coasted across the seam - the only view that would catch a
+CollisionShape3D that failed to register, which has happened here. The lies: a top-down ray at the
+mouth hits the tunnel CROWN and read as a 7.90 m step; "terrain above pad" compared the hill to a
+constant `pad_y` and stayed at 2.29 m after the fix removed the wall entirely; the parked car from
+the previous seed's drive was raycast as an 0.87 m step in the middle of the surface; and the drive
+view first reported "0.90 m above the surface" on all ten seeds - the chassis ride height, a number
+with no seed in it at all, which is the tell. **A reading identical across every seed is measuring
+something that does not vary.**
+
+**The drive view was validated by reverting the fix and re-running it** (+1.06 to +1.91 m excess vs
++0.12 to +0.15 m), and its one outlier - a single seed at +0.20 - was pinned on the **run order, not
+the seed**, by reversing the seed list: 20260828 read +0.20 first and +0.14 last, 31337 the reverse.
+It is the car's first launch from a cold respawn.
+
+**To rebuild the check** (it was removed per the house rule, and this is the third junction probe
+deleted in a row): a Node3D wired at the end of `world.gd` `_ready()` behind an env var, driving
+`stage_area._regenerate([seed, sin, elev, ds])` so the real `regenerated` handler fires; then
+`intersect_ray` top-down through the stack with the car's RID excluded, from `+600` to `-600`, at
+0.5 m over u in [90, 1.5] at lat -24/-12/0/+12/+24. Thresholds that fail before they pass: step
+> 0.30 m, terrain-above-pad > 0.45 m, any hole, drive excess > 0.15 m.
+
+---
+
 ## 2026-09-02 (later) — the tunnel never moved when the seed did
 
 **Driver: *"once again the path is not going to the edge of the map on all seeds ... the mouth and

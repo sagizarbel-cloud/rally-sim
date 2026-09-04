@@ -11,8 +11,9 @@ class_name AreaManager
 ## that: **its two mouths do not have to be geometrically adjacent.**
 ##
 ## THE SHAPE OF IT IS THE DRIVER'S DESIGN (2026-08-31), and it is better than what it replaced:
-##   * a TRANSITION PAD flattens the ground at each connection and grades out into the terrain, the
-##     way the drag strip's runoff pad does;
+##   * a TRANSITION PAD bridges the gap between the map edge and the mouth. It lives ENTIRELY OFF
+##     the map, takes the terrain's own profile where it meets the boundary and morphs into the flat
+##     plane the tube needs - so it is flush at any crossing angle and lies across nothing;
 ##   * the tunnel then starts from that known flat height at the MAP EDGE and runs outward into
 ##     empty space, so it is INDEPENDENT of the terrain it leaves - no following the ground, no
 ##     weird shapes, and its geometry can be changed without touching either map;
@@ -57,14 +58,7 @@ var straighten_len := 300.0               ## reserved for lining up; the gate is
 var tube_w := 12.0
 var tube_h := 6.5
 # --- the transition pad --------------------------------------------------------------------------
-var pad_len := 60.0                       ## flat approach, measured back from the mouth. SHORT on
-                                          ## purpose: taking the highest ground over 200 m made the
-                                          ## pad a 12 m embankment at the stage mouth, because the
-                                          ## land climbs steeply behind it. A connection pad is a
-                                          ## junction, not a runway - it levels the last stretch and
-                                          ## the apron does the rest.
 var pad_w := 70.0
-var pad_grade := 0.10                     ## the apron grades out at this slope, so it stays drivable
 var pad_cell := 4.0
 # THE MOUTH IS OFF-MAP, AND AT THE HEIGHT OF THE ROAD THAT REACHES IT (driver, 2026-09-02). Those two
 # together are the whole design. Off-map, no terrain can ever bury it - that failure repeated on
@@ -73,7 +67,12 @@ var pad_cell := 4.0
 # "make the mouth of the tunnel off map but make it always at the hight of the start-up path's
 # hight, that way the transition pad only bridges the distance and not the hight".
 var portal_offmap_m := 60.0        ## how far beyond the map boundary the mouth stands
-var pad_into_map_m := 20.0         ## how far the pad may reach BACK onto the map. Driver's cap.
+# THE PAD DOES NOT REACH ONTO THE MAP AT ALL any more, which satisfies the driver's cap ("at max
+# extend 20m into the shakedown") with nothing to enforce, and retires the whole class of bug where
+# a pad lay across a road it was supposed to join. Only the tuck crosses the line, and it goes
+# DOWNWARDS, under the ground.
+var edge_tuck_m := 2.0             ## how far past the boundary the pad slides, beneath the terrain
+var edge_tuck_drop := 0.30         ## and how far below it, so the two surfaces never fight
 # --- lighting ------------------------------------------------------------------------------------
 # An 800 m unlit tube is not a road, it is a cave: photographed from inside, the first version was
 # pitch black with a pinhole of daylight 400 m away. Real road tunnels are lit, and this is the
@@ -81,16 +80,6 @@ var pad_into_map_m := 20.0         ## how far the pad may reach BACK onto the ma
 # on the car itself without paying for one every few metres.
 var light_spacing := 60.0
 var light_range := 46.0
-var pad_apron_max := 200.0         ## cap on the graded apron, per portal
-var pad_target_y := 1e9            ## if set, the pad RAMPS to this height at pad_target_u
-var pad_target_u := 0.0
-var pad_core_w := 20.0                    ## the FLAT part. Only as wide as the road needs: taking
-                                          ## the highest ground across the pad's full 70 m width set
-                                          ## the stage pad from the valley WALLS either side of a
-                                          ## road that sits in a cut, which is how a junction pad
-                                          ## became a 12 m embankment. Outside this the pad blends
-                                          ## up or down to meet the natural ground, which is what a
-                                          ## cutting looks like.
 
 var _portals: Array = []
 var _current := Area.CALIBRATION
@@ -123,7 +112,6 @@ func rebuild() -> void:
 func _build_portals() -> void:
 	var cl: Centreline = stage_area.gen.centreline
 	var p0: Dictionary = cl.point_at(0.0)
-	var start: Vector3 = p0["pos"]
 	var h: Vector2 = p0["heading"]
 	var road_dir := Vector3(h.x, 0.0, h.y).normalized()
 
@@ -139,30 +127,37 @@ func _build_portals() -> void:
 	_portals.resize(3)
 	# Where each approach CROSSES THE BOUNDARY, and how high it is there. D5's run-up extension
 	# already carries the stage road to within a metre or two of the edge, so these are simply the
-	# road's own ends - which is what makes the pad level.
+	# road's own ends - which is what keeps the DRIVING LINE level: the pad's centre is pinned to
+	# this height at both ends, and only its shoulders move to meet the ground.
 	var a0: Vector3 = cl.point_at(0.0)["pos"]
 	var a1: Vector3 = cl.point_at(cl.length())["pos"]
 	var he: Vector2 = cl.point_at(cl.length())["heading"]
 	var end_dir := Vector3(he.x, 0.0, he.y).normalized()
+	# EACH PORTAL CARRIES ITS OWN MAP BOUNDARY, as a signed distance INSIDE the area's square:
+	# positive on the map, negative off it, zero on the edge. The pad's blend is driven by THIS and
+	# not by distance along the pad, which is what was wrong - see _build_pad.
+	var ao: Vector3 = stage_area.def.origin
+	var ah: float = float(stage_area.def.area_size) * 0.5
+	var din_stage := func(x: float, z: float) -> float:
+		return ah - maxf(absf(x - ao.x), absf(z - ao.z))
+	var half: float = float(stage.size) * 0.5
+	var din_cal := func(x: float, z: float) -> float:
+		return half - maxf(absf(x), absf(z))
 	pad_w = 44.0
 	_portals[1] = _make_portal(Vector3(a0.x, 0.0, a0.z), -road_dir, "PortalStageStart",
-			Callable(stage_area, "height_at"), stage_area.height_at(a0.x, a0.z))
+			Callable(stage_area, "height_at"), stage_area.height_at(a0.x, a0.z), din_stage)
 	_portals[2] = _make_portal(Vector3(a1.x, 0.0, a1.z), end_dir, "PortalStageFinish",
-			Callable(stage_area, "height_at"), stage_area.height_at(a1.x, a1.z))
-	# CALIBRATION: walk out along road_dir to the square's edge. Aligned with the stage-start portal
-	# so that pair's swap is a pure translation.
-	var half: float = float(stage.size) * 0.5
-	var d := 0.0
-	var edge_c := Vector3.ZERO
-	while d < half * 2.0:
-		var q: Vector3 = road_dir * d
-		if absf(q.x) > half - 6.0 or absf(q.z) > half - 6.0:
-			break
-		edge_c = q
-		d += 2.0
+			Callable(stage_area, "height_at"), stage_area.height_at(a1.x, a1.z), din_stage)
+	# CALIBRATION: where the ray from the map centre along road_dir CROSSES the square's edge, solved
+	# rather than marched. The march stopped `half - 6.0` short, i.e. 6-8 m INSIDE the map, and took
+	# the mouth height from there - so the pad was pinned to the ground at a point the pad then had to
+	# drive over. Aligned with the stage-start portal so that pair's swap is a pure translation.
+	var tx: float = 1e18 if absf(road_dir.x) < 1e-6 else half * signf(road_dir.x) / road_dir.x
+	var tz: float = 1e18 if absf(road_dir.z) < 1e-6 else half * signf(road_dir.z) / road_dir.z
+	var edge_c: Vector3 = road_dir * minf(tx, tz)
 	pad_w = 52.0
 	_portals[0] = _make_portal(edge_c, road_dir, "PortalCalibration",
-			Callable(stage, "_height"), float(stage._height(edge_c.x, edge_c.z)))
+			Callable(stage, "_height"), float(stage._height(edge_c.x, edge_c.z)), din_cal)
 	pad_w = 70.0
 
 	_portals[0]["links_to"] = 1
@@ -171,10 +166,12 @@ func _build_portals() -> void:
 	_portals[0]["area"] = Area.CALIBRATION
 	_portals[1]["area"] = Area.STAGE
 	_portals[2]["area"] = Area.STAGE
-	stage.ground_map.areas.append(self)
+	# NO ground-map registration here. build() does it once. This line was also here, so startup
+	# registered the tunnel TWICE and every rebuild() added another - measured climbing 4, 5, 6 ...
+	# 13 layers over ten seed changes, each one a redundant in_area() test on every ground query.
 
 func _make_portal(edge_xz: Vector3, inward: Vector3, pname: String, height_fn: Callable,
-		mouth_y: float) -> Dictionary:
+		mouth_y: float, d_in: Callable) -> Dictionary:
 	## `edge_xz` is where the APPROACH crosses the map boundary; the mouth then stands
 	## `portal_offmap_m` further out, at `mouth_y` - the height of that approach. Nothing about the
 	## terrain under the tube is consulted any more, because there is none out there to consult.
@@ -187,8 +184,6 @@ func _make_portal(edge_xz: Vector3, inward: Vector3, pname: String, height_fn: C
 	body.collision_mask = 0
 	var origin := Vector3(mouth_xz.x, pad_y, mouth_xz.z)
 	body.transform = Transform3D(Basis(), origin).looking_at(origin + inward, Vector3.UP)
-	# The pad reaches from the mouth back across the gap and a little way onto the map.
-	pad_len = portal_offmap_m + pad_into_map_m
 	add_child(body)
 
 	var wall_mat := StandardMaterial3D.new()
@@ -213,9 +208,9 @@ func _make_portal(edge_xz: Vector3, inward: Vector3, pname: String, height_fn: C
 	_light_tube(body)
 	# The pad's REAL reach and width, recorded rather than left to be guessed. A probe that assumed a
 	# generic footprint reported 245 m of road buried under a pad that had already been shortened.
-	var reach: float = _build_pad(body, origin, inward, height_fn, pad_mat)
+	var reach: float = _build_pad(body, origin, inward, height_fn, d_in, pad_mat)
 	return {"frame": body.transform, "name": pname, "body": body, "pad_y": pad_y, "links_to": 0,
-		"area": 0, "pad_reach": reach, "pad_half_w": pad_w * 0.5}
+		"area": 0, "pad_reach": reach, "pad_half_w": pad_w * 0.5, "d_in": d_in}
 
 func _light_tube(body: StaticBody3D) -> void:
 	var glow := StandardMaterial3D.new()
@@ -251,52 +246,91 @@ func _light_tube(body: StaticBody3D) -> void:
 		body.add_child(lamp)
 
 func _build_pad(body: StaticBody3D, origin: Vector3, inward: Vector3, height_fn: Callable,
-		mat: StandardMaterial3D) -> float:
-	## A flat approach that grades out into the terrain - the drag strip's runoff pad, applied to a
-	## tunnel mouth. THIS is what lets the tunnel be straight and flat: the pad guarantees a known
-	## height at the mouth, so the tube never has to chase the ground. Built as its OWN mesh and
-	## collider, so neither `stage._height` nor the stage's height field is touched and the
-	## calibration bed stays bit-identical (§1.1).
+		d_in: Callable, mat: StandardMaterial3D) -> float:
+	## The bridge from the map edge to the tunnel mouth, and it lives ENTIRELY OFF THE MAP - which is
+	## the driver's original sentence for it: "the transition pad would start at the very edge and
+	## continue to it". Every version that put pad on the map had to answer "what height is the pad
+	## where it lies over living ground", and every version got a different wrong answer.
+	##
+	## HOW IT MEETS THE GROUND: at the boundary the pad takes THE TERRAIN'S OWN PROFILE, sampled per
+	## column, so it is flush across its whole width at whatever angle the edge crosses it. It then
+	## morphs over the `portal_offmap_m` gap into the flat plane the tube needs. The driving line
+	## costs nothing for this, because `origin.y` IS the terrain height at the boundary on the
+	## centreline - so down the middle the pad is flat from mouth to edge, and only the shoulders
+	## rise and fall to meet the hillside, which is what a road cutting does.
+	##
+	## WHAT WAS WRONG BEFORE, measured over ten seeds: the pad held ONE height across a 52 m width,
+	## and the terrain at the map edge varies by more than two metres across that width. So where the
+	## ground stopped, the surface dropped to the pad in a single step - 1.79-1.94 m, on every seed.
+	## Blending in from the edge instead of along the pad axis (the first fix here) put the crossing
+	## in the right place but could not help, because the mismatch is ACROSS the pad, not along it:
+	## it moved the worst step to the shoulder and made it 2.29 m. A pad that is flat at the edge
+	## cannot meet a hillside that is not. Taking the hillside's own profile there is the only shape
+	## that meets it at every point, and it costs nothing anywhere else.
 	var back := -inward
 	var side := Vector3(-inward.z, 0.0, inward.x).normalized()
-	# NO RAMP AND NO DERIVED APRON ANY MORE. The mouth stands at the height of the approach that
-	# reaches it, so the pad is LEVEL over its whole length - there is nothing to climb, which was
-	# half the driver's report ("sometimes the transition pad being to steep to climb"). Only the
-	# last stretch, where the pad meets the map, blends into the natural ground; and that stretch is
-	# capped at `pad_into_map_m` because the pad must not lie across the stage.
-	var apron: float = pad_into_map_m
 	var inv: Transform3D = body.transform.affine_inverse()
 	# The pad MESH starts just under the mouth. Running it 40 m into the tube laid a second, lighter
 	# surface on top of the tunnel floor - photographed as a bright wedge on a dark roadway.
 	var pad_start := -2.0
-	# The mesh ENDS where the blend ends. Running it a further `apron` past that just laid
-	# terrain-following surface nobody needs, and made in_area() claim 100 m of asphalt where the pad
-	# is really 80: portal_offmap_m off the map plus pad_into_map_m on it, which is the driver's cap.
-	var nu: int = int((pad_len - pad_start) / pad_cell) + 1
 	var nv: int = int(pad_w / pad_cell) + 1
+
+	# WHERE EACH COLUMN MEETS THE MAP, AND HOW HIGH THE GROUND IS THERE. Marched rather than solved,
+	# so a portal only has to be able to say how far inside its own area a point is - the calibration
+	# square and the stage box then need no special cases here.
+	var u_edge := PackedFloat32Array(); u_edge.resize(nv)
+	var y_edge := PackedFloat32Array(); y_edge.resize(nv)
+	var u_far := PackedFloat32Array(); u_far.resize(nv)
+	var far_max := pad_start + pad_cell
+	for iv in range(nv):
+		var vv: float = -pad_w * 0.5 + float(iv) * pad_cell
+		var ue: float = portal_offmap_m               # fallback: the nominal gap
+		var prev_d: float = -1e9
+		var u: float = pad_start
+		while u <= portal_offmap_m + 240.0:
+			var q: Vector3 = origin + back * u + side * vv
+			var dq: float = float(d_in.call(q.x, q.z))
+			if dq >= 0.0:
+				# linear interpolation between the bracketing samples: d_in is piecewise linear
+				# along a straight line, so one step of this is exact away from the corners
+				ue = u if prev_d < -1e8 else u - 1.0 * dq / maxf(dq - prev_d, 1e-6)
+				break
+			prev_d = dq
+			u += 1.0
+		var we: Vector3 = origin + back * ue + side * vv
+		u_edge[iv] = ue
+		y_edge[iv] = float(height_fn.call(we.x, we.z))
+		u_far[iv] = ue + edge_tuck_m
+		far_max = maxf(far_max, u_far[iv])
+	var nu: int = int((far_max - pad_start) / pad_cell) + 2
+
 	var verts := PackedVector3Array()
 	var idxs := PackedInt32Array()
+	# THE LAST ROW IS THE TUCK, AND THE ROW BEFORE IT SITS EXACTLY ON THE BOUNDARY. Spreading the
+	# rows evenly from the mouth to the tuck instead left no vertex on the edge itself, so the pad
+	# was interpolating between "flush with the ground" and "0.30 m under it" ACROSS the join and
+	# arrived there already 0.10 m low - measured as a 0.12-0.15 m step on every seed, the last of
+	# the original 1.9 m one. A join is a place, so it gets a vertex.
 	for iu in range(nu):
-		var uu: float = pad_start + float(iu) * pad_cell
+		var fu: float = float(iu) / float(nu - 2)
 		for iv in range(nv):
 			var vv: float = -pad_w * 0.5 + float(iv) * pad_cell
+			var uu: float = float(u_far[iv]) if iu == nu - 1 else lerpf(pad_start, float(u_edge[iv]), fu)
 			var w: Vector3 = origin + back * uu + side * vv
-			var nat: float = float(height_fn.call(w.x, w.z))
-			# The core is not necessarily FLAT. Where the tunnel has to meet a road at a known
-			# height - the stage's run-up sits 8 m below the area edge the mouth stands on - the pad
-			# RAMPS to it instead, which is what a road does. Holding it flat left a shelf over the
-			# hollow with a cliff at its end.
-			var core_y: float = origin.y
-			# blend to natural ground only over the final `apron` metres, i.e. the on-map end
-			var t_u: float = 1.0 - clampf((uu - (pad_len - apron)) / maxf(apron, 1.0), 0.0, 1.0)
-			var t_v: float = 1.0 - clampf((absf(vv) - pad_core_w * 0.5)
-					/ maxf(pad_w * 0.5 - pad_core_w * 0.5, 1.0), 0.0, 1.0)
-			var t: float = minf(t_u, t_v)
-			t = t * t * (3.0 - 2.0 * t)               # smoothstep: no kink where pad meets grass
+			var dd: float = float(d_in.call(w.x, w.z))
+			var y: float = 0.0
+			if dd <= 0.0:
+				# off the map: morph from the flat mouth plane to the ground's profile at the edge
+				var f: float = clampf(uu / maxf(float(u_edge[iv]), 0.001), 0.0, 1.0)
+				y = lerpf(origin.y, float(y_edge[iv]), smoothstep(0.0, 1.0, f))
+			else:
+				# the last couple of metres run UNDER the map, so the two surfaces cannot leave a
+				# hairline gap at the join and cannot fight for the same depth either
+				y = float(height_fn.call(w.x, w.z)) - edge_tuck_drop * smoothstep(0.0, edge_tuck_m, dd)
 			# Built in the BODY'S LOCAL space, not world with top_level: a CollisionShape3D is
 			# registered by its transform RELATIVE to the body, so top_level would have moved the
 			# mesh and left the collider behind the portal's own rotation.
-			verts.append(inv * Vector3(w.x, lerpf(nat, core_y, t), w.z))
+			verts.append(inv * Vector3(w.x, y, w.z))
 	for iu in range(nu - 1):
 		for iv in range(nv - 1):
 			var a: int = iu * nv + iv
@@ -306,18 +340,19 @@ func _build_pad(body: StaticBody3D, origin: Vector3, inward: Vector3, height_fn:
 			idxs.append_array([a, b, c, b, d, c])     # top is the front face - see CLAUDE.md
 	# NORMALS. Without them the pad renders unlit and comes out very nearly black against pale
 	# terrain - which is what the first photograph of it showed, and what no amount of height
-	# measurement would ever have revealed. Central differences across the grid, one-sided at the
-	# border, the same way the chunk builder does it.
+	# measurement would ever have revealed. Cross products of the actual neighbour spacing, not a
+	# fixed pitch: the columns no longer share one length, so the grid is skewed and a hard-coded
+	# `2 * pad_cell` denominator would tilt every normal by the skew.
 	var norms := PackedVector3Array(); norms.resize(verts.size())
 	for iu in range(nu):
 		for iv in range(nv):
-			var i0: int = maxi(iu - 1, 0) * nv + iv
-			var i1: int = mini(iu + 1, nu - 1) * nv + iv
-			var j0: int = iu * nv + maxi(iv - 1, 0)
-			var j1: int = iu * nv + mini(iv + 1, nv - 1)
-			var du: float = verts[i1].y - verts[i0].y
-			var dv: float = verts[j1].y - verts[j0].y
-			norms[iu * nv + iv] = Vector3(-dv, 2.0 * pad_cell, -du).normalized()
+			var du: Vector3 = verts[mini(iu + 1, nu - 1) * nv + iv] - verts[maxi(iu - 1, 0) * nv + iv]
+			var dv: Vector3 = verts[iu * nv + mini(iv + 1, nv - 1)] - verts[iu * nv + maxi(iv - 1, 0)]
+			var nm: Vector3 = du.cross(dv)
+			if nm.length_squared() < 1e-9:
+				nm = Vector3.UP
+			nm = nm.normalized()
+			norms[iu * nv + iv] = nm if nm.y >= 0.0 else -nm
 	var arr := []
 	arr.resize(Mesh.ARRAY_MAX)
 	arr[Mesh.ARRAY_VERTEX] = verts
@@ -338,7 +373,7 @@ func _build_pad(body: StaticBody3D, origin: Vector3, inward: Vector3, height_fn:
 	shp.set_faces(faces)
 	cs.shape = shp
 	body.add_child(cs)
-	return pad_len
+	return far_max
 
 func _slab(body: StaticBody3D, size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> void:
 	## The CollisionShape3D goes DIRECTLY on the StaticBody3D, never under an intermediate node.
@@ -436,8 +471,14 @@ func in_area(x: float, z: float) -> bool:
 		var l: Vector3 = (prt["frame"] as Transform3D).affine_inverse() * Vector3(x, 0.0, z)
 		if l.z <= 0.0 and l.z >= -tube_len and absf(l.x) <= tube_w * 0.5:
 			return true
-		if l.z >= -2.0 and l.z <= float(prt["pad_reach"]) and absf(l.x) <= float(prt["pad_half_w"]):
-			return true
+		if l.z >= -2.0 and absf(l.x) <= float(prt["pad_half_w"]):
+			# The pad ends AT the boundary, at every lateral offset - so the footprint is the same
+			# question the mesh was built from, not a rectangle that approximates it. The rectangle
+			# reached 27 m onto the calibration map at one shoulder and 13 m at the other, and
+			# claimed asphalt grip over the difference.
+			var din: Callable = prt["d_in"]
+			if float(din.call(x, z)) <= 0.0:
+				return true
 	return false
 
 func on_road(x: float, z: float) -> bool:
