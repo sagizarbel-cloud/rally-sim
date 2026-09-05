@@ -42,12 +42,31 @@ var road_class_source            # scripts/roughness.gd - owns the ISO 8608 coef
 const ROAD_CLASS_GRAVEL_FALLBACK := 128.0    # ISO 8608 Gd(n0) in 1e-6 m^3 units, as roughness.gd stores it
 const ROAD_CLASS_TARMAC_FALLBACK := 4.0
 
+# --- D6: the resolved MIX at the last queried position -------------------------------------------
+# A blend cannot be expressed in one enum, and it must not cost an allocation to express. These are
+# fields rather than an Array or Dictionary return because _resolve() runs once per wheel per
+# physics tick per consumer: D1 measured a per-call Dictionary on exactly this path at 0.487 ms/tick
+# against 0.153 for the same work returned by value, which is why the single-field accessors below
+# exist at all. Returning a 3-element Array here would put that cost straight back.
+var _ra := Surface.GRASS         ## the surface being blended FROM
+var _rb := Surface.GRASS         ## and TO
+var _rt := 0.0                   ## 0 = pure _ra, 1 = pure _rb
+
 func _init(stage_ref) -> void:
 	stage = stage_ref
 
 # ---------------------------------------------------------------- the layer stack
 
 func _classify(x: float, z: float) -> int:
+	_resolve(x, z)
+	return _rb if _rt >= 0.5 else _ra
+
+func _pure(s: int) -> void:
+	_ra = s
+	_rb = s
+	_rt = 0.0
+
+func _resolve(x: float, z: float) -> void:
 	# LAYER ORDER IS LOAD-BEARING AND IS grip_at's ORIGINAL ORDER, kept to the letter so D1 is a
 	# refactor and not a feel change. §5 describes the stack conceptually as "base terrain, then
 	# road corridors, then overrides"; the historical order tests the asphalt ring BEFORE the
@@ -66,17 +85,32 @@ func _classify(x: float, z: float) -> int:
 		# the default below; a tunnel is paved, and saying so here is what stops every consumer -
 		# grip, audio, dust, roughness - having to learn what a tunnel is.
 		if a.has_method("surface_at"):
-			return int(a.surface_at(x, z))
-		return Surface.DIRT if a.on_road(x, z) else Surface.GRASS
+			_pure(int(a.surface_at(x, z)))
+			return
+		if not a.on_road(x, z):
+			_pure(Surface.GRASS)
+			return
+		# D6: a generated stage's road is a MIX of gravel and seal, from one factor the area owns.
+		# §1.1 keeps this off the legacy map entirely - the calibration bed's edges stay hard, and its
+		# ground lattice stays bit-identical, because no layer below this one blends.
+		if a.has_method("road_mix_at"):
+			_ra = Surface.DIRT
+			_rb = Surface.ASPHALT
+			_rt = clampf(float(a.road_mix_at(x, z)), 0.0, 1.0)
+			return
+		_pure(Surface.DIRT)
+		return
 
 	# 1. Asphalt ring corridor.
 	var ad: float = stage._asphalt_dist(x, z)
 	if ad < float(stage.asphalt_width) * 0.5 + 1.0:
-		return Surface.ASPHALT
+		_pure(Surface.ASPHALT)
+		return
 
 	# 2. Drag strip + its runoff pad (an override on top of the base terrain).
 	if bool(stage._on_drag_strip(x, z)):
-		return Surface.ASPHALT
+		_pure(Surface.ASPHALT)
+		return
 
 	# 3. Centre reactive-dirt patch. NOTE the EUCLIDEAN radius test: this is grip_at's own test,
 	# and it is deliberately NOT the chebyshev one deformable_patch_factor uses. They disagree on
@@ -85,28 +119,38 @@ func _classify(x: float, z: float) -> int:
 	var dx: float = x - stage.road_center.x
 	var dz: float = z - stage.road_center.z
 	if sqrt(dx * dx + dz * dz) < float(stage.patch_radius):
-		return Surface.PATCH
+		_pure(Surface.PATCH)
+		return
 
 	# 4. Rally loop corridor.
 	if stage._road_t(x, z) > 0.4:
-		return Surface.DIRT
+		_pure(Surface.DIRT)
+		return
 
 	# 5. Base terrain.
-	return Surface.GRASS
+	_pure(Surface.GRASS)
 
 # ---------------------------------------------------------------- the sample
 
 func sample(x: float, z: float) -> Dictionary:
 	## The full authority: everything the ground is at one position. Consumers that need several
 	## fields at once should call this; the hot single-field paths below skip the allocation.
-	var s := _classify(x, z)
+	_resolve(x, z)
+	var s := _rb if _rt >= 0.5 else _ra
 	return {
 		"surface": s,
-		"road_class": _road_class_for(s),
+		"road_class": lerpf(_road_class_for(_ra), _road_class_for(_rb), _rt),
 		"deformable": patch_factor(x, z) < 1.0,
-		"grip": _grip_for(s),
+		"grip": lerpf(_grip_for(_ra), _grip_for(_rb), _rt),
 		"colour": colour_at(x, z),
 		"audio": SURFACE_NAMES[s],
+		# D6: how far through the blend, so a consumer that CAN crossfade is not forced to pick.
+		# The discrete fields above take the dominant surface, which changes at t = 0.5 - the point
+		# where grip is exactly halfway, so audio and dust switch when the ground has genuinely
+		# become the other thing rather than at the first hint of it.
+		"mix": _rt,
+		"mix_from": _ra,
+		"mix_to": _rb,
 	}
 
 # Single-field accessors. These exist because sample() is called per wheel per physics tick (4 x
@@ -115,7 +159,10 @@ func sample(x: float, z: float) -> Dictionary:
 # the SAME classifier, so they cannot drift from sample().
 
 func grip_at(x: float, z: float) -> float:
-	return _grip_for(_classify(x, z))
+	# D6: INTERPOLATED, not switched. A blend that stepped would be a grip change the tyre model
+	# reads as an impulse, which is the one thing a mixed surface must not be.
+	_resolve(x, z)
+	return lerpf(_grip_for(_ra), _grip_for(_rb), _rt) if _rt > 0.0 else _grip_for(_ra)
 
 func surface_at(x: float, z: float) -> int:
 	return _classify(x, z)
@@ -124,7 +171,10 @@ func is_tarmac_at(x: float, z: float) -> bool:
 	return _classify(x, z) == Surface.ASPHALT
 
 func road_class_at(x: float, z: float) -> float:
-	return _road_class_for(_classify(x, z))
+	# Interpolated with the same factor as grip, so the suspension's roughness and the tyre's grip
+	# can never describe different ground.
+	_resolve(x, z)
+	return lerpf(_road_class_for(_ra), _road_class_for(_rb), _rt) if _rt > 0.0 else _road_class_for(_ra)
 
 func audio_at(x: float, z: float) -> StringName:
 	return SURFACE_NAMES[_classify(x, z)]
@@ -167,6 +217,13 @@ func colour_at(x: float, z: float) -> Color:
 	# What the ground LOOKS like - the terrain mesh's vertex colour, and the colour effects.gd
 	# lifts its dust from. A blend, not a class: the whole point is that the patch edge and the
 	# road shoulder fade rather than step. Moved verbatim from stage._surface_color.
+	# D6: an area answers for its own ground first, exactly as it does for surface and grip - the
+	# generated stage's sealed stretches are a different colour, and dust lifted from the legacy
+	# map's palette three kilometres away would be the wrong one. §1.1: the legacy blend below is
+	# untouched, and no legacy layer blends, so the calibration bed's colours are unchanged.
+	for a in areas:
+		if a.in_area(x, z) and a.has_method("colour_at"):
+			return a.colour_at(x, z) as Color
 	var c: Color = Color(stage.grass_color).lerp(Color(stage.road_color), stage._road_t(x, z))
 	c = c.lerp(Color(stage.patch_color), 1.0 - patch_factor(x, z))
 	var ad: float = stage._asphalt_dist(x, z)

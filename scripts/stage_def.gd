@@ -90,9 +90,31 @@ var superelevation: float = 0.07          ## e, the banking the road is built wi
 var side_friction: float = 0.16           ## f, the side-friction factor a road is designed against
 
 # --- surface -----------------------------------------------------------------------------------
-# Single-surface in D3. Mixed-surface transitions are D6 (§1.2 answer 5), and this is the field that
-# will carry them - a profile along s rather than one class for the whole road.
-var surface: StringName = &"dirt"
+# D6 (§1.2 answer 5): the road is NOT one class. D3 left this as a single name with a note that a
+# PROFILE ALONG S would replace it, and that is what these are - the road's surface is now a
+# function of arc length, curvature and lateral position, so it is a pure function of the seed like
+# every other property of the stage.
+#
+# THREE MECHANISMS, EACH FOR A PHYSICAL REASON rather than for variety:
+#   * a gravel stage runs through SETTLEMENTS, and those stretches are sealed. Villages sit along a
+#     valley route at a spacing, so the count comes from the stage's own timed length;
+#   * cars DRAG GRAVEL out of the loose section onto the seal for tens of metres past the entry.
+#     That makes the two ends of a sealed section different, which is why this is not one blend
+#     width: the entry is a long dirty smear in the direction of travel, the exit is a clean edge;
+#   * they THROW IT TO THE OUTSIDE of every sealed bend, where the loose-over-hard patch is the
+#     classic way to lose a rally car - grip that changes under you mid-corner, on the line you are
+#     already committed to.
+var surface: StringName = &"dirt"         ## the surface the stage is cut in; sealed stretches are
+                                          ## the exception placed on top of it
+var sealed_spacing_m: float = 1600.0      ## timed road per settlement. 4.8 km of stage therefore
+                                          ## gets 2-3 sealed stretches, which is what a real stage
+                                          ## through a valley does - not one per corner.
+var sealed_len_min_m: float = 120.0       ## a village is a few hundred metres of road, not a sector
+var sealed_len_max_m: float = 340.0
+var sealed_blend_m: float = 12.0          ## the CLEAN edge, where the seal simply ends
+var gravel_drag_m: float = 45.0           ## how far cars carry gravel onto the seal past the entry
+var loose_outside_gain: float = 0.6       ## how much loose material collects on the outside of a
+                                          ## sealed bend, at the tightest curvature the road allows
 
 # --- authored control points (§1.2 answer 3) ---------------------------------------------------
 # HARD constraints the generated centreline must pass through: an override layer on top of the
@@ -226,6 +248,12 @@ func duplicate_def() -> StageDef:
 	d.max_grade = max_grade
 	d.vertical_comfort_accel = vertical_comfort_accel
 	d.surface = surface
+	d.sealed_spacing_m = sealed_spacing_m
+	d.sealed_len_min_m = sealed_len_min_m
+	d.sealed_len_max_m = sealed_len_max_m
+	d.sealed_blend_m = sealed_blend_m
+	d.gravel_drag_m = gravel_drag_m
+	d.loose_outside_gain = loose_outside_gain
 	d.control_points = control_points.duplicate()
 	d.control_tolerance_m = control_tolerance_m
 	d.origin = origin; d.area_size = area_size; d.cell_size_m = cell_size_m

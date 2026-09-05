@@ -952,7 +952,35 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   sense; fixed to 0.63 m, a car's ride height. Full account in `CHANGELOG.md` 2026-08-31.
   Also fixed there: the tube was buried in the hillside (car wedged between floor and terrain), and
   the approach ramp was a staircase that launched the car and pegged damage at 1.0.
-- [ ] D6 — Mixed-surface transitions
+- [ ] D6 — Mixed-surface transitions — **BUILT AND PROBE-VERIFIED 2026-09-05, AWAITING DRIVE
+  VERDICT.** The road's surface is a PROFILE ALONG S, exactly as D3's placeholder note said it would
+  become: `StageDef` gains the settlement parameters, `StageGen.surface_mix()` answers with ONE
+  factor per position, and everything the ground map exposes - grip, road class, colour, audio - is
+  interpolated from that single number, so nothing can disagree.
+  **THE PLAN'S FILE LIST IS WRONG, and in the direction D1 predicted.** It names `roughness.gd`,
+  `sound.gd` and `world.gd` (particles/marks) as needing changes. None of them did. They already
+  read through the ground map, so they got blended values for free - which is precisely the payoff
+  D1 was built for and said so at the time ("the moment D6 drags gravel onto tarmac it stops being
+  theoretical"). `tuning_panel.gd` sliders are still to add.
+  **Three mechanisms, each for a physical reason:** sealed stretches where the stage runs through
+  settlements (count from the stage's own timed length, not a constant); gravel DRAGGED onto the
+  seal for `gravel_drag_m` past the entry, which is why a section's two ends do not drive alike;
+  and loose-over-hard on the OUTSIDE of every sealed bend.
+  **Probes 1-3 pass on six seeds:** the blend spans 0.000 to 1.000 exactly, worst step per 0.5 m is
+  6% of the total swing in both grip and road class, zero field disagreements, and the same seed
+  regenerates identical sections. §1.1 re-proved: the calibration lattice is bit-identical.
+  **THE PROBE THAT WAS NOT IN THE PLAN IS THE ONE THAT FOUND THINGS.** "Which side is the outside of
+  a corner" is invisible to every check above - the blend is still continuous and the fields still
+  agree with the loose patch on the wrong side. Measured geometrically (step a point the way the
+  heading turns; that IS the centre of curvature), the inside is `lateral * curvature < 0` on
+  98-100% of ~4000 samples per seed. That **exposed a D3 bug**: `stage_area.sample_at()`'s corner
+  berm used `signed * k < 0` for "outside" and had therefore been piling material on the INSIDE of
+  every corner since D3, against its own comment. Fixed here.
+  **Drive checklist:**
+  - [ ] Hitting gravel-over-tarmac mid-corner is a handling event you feel before you see.
+  - [ ] Audio and dust change with the surface at the same moment the grip does.
+  - [ ] Tarmac sections mid-stage genuinely change how you drive that section.
+  - [ ] The corner berm is now on the OUTSIDE of corners — does the stage read better or worse?
 - [ ] D7 — Deformable ruts along the corridor (optional)
 - [ ] D8 — Bake defaults, prune, end-to-end verification
 _(the centreline abstraction that was D2 now lives in **C1.0** — see the drivetrain plan)_

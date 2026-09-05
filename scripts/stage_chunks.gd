@@ -41,6 +41,7 @@ var span := 45.0
 
 # --- budgets and derived radii -------------------------------------------------------------------
 var build_budget_ms := 1.0                ## main-thread build work allowed per physics tick
+var chunk_budget := 256.0                 ## how many chunks may be RESIDENT (drawn) at once
 var v_max := 66.0                         ## m/s the ground must stay ahead of (car's real top speed)
 var r_solid := 0.0                        ## full detail + COLLIDER out to here
 var r_detail := 0.0                       ## full detail, mesh only
@@ -81,17 +82,26 @@ shader_type spatial;
 // on the road), thresholded HERE - per pixel - instead of per vertex. Interpolating an already
 // thresholded colour puts the edge on the triangulation, which is the sawtooth D3 fixed once by
 // raising resolution and which came straight back at 1.41 m/cell. This costs no extra vertices.
+// D6 carries the SURFACE MIX in UV.y the same way - 0 gravel, 1 sealed - because it is the same
+// kind of quantity: a field that must be read per pixel, not a class decided per vertex. It costs
+// no extra attribute and no extra nearest_point search, since StageArea memoises that per position
+// and sample_at has already paid for it at this very vertex.
 uniform vec3 grass_col;
 uniform vec3 road_col;
+uniform vec3 seal_col;
 uniform float blend_m = 2.0;
 varying float edge_d;
+varying float mix_t;
 void vertex() {
 	edge_d = UV.x;
+	mix_t = UV.y;
 }
 void fragment() {
 	float t = 1.0 - smoothstep(0.0, blend_m, edge_d);
-	ALBEDO = mix(grass_col, road_col, t);
-	ROUGHNESS = 1.0;
+	vec3 surf = mix(road_col, seal_col, mix_t);
+	ALBEDO = mix(grass_col, surf, t);
+	// Sealed road is a smoother surface than gravel, and only where it IS road.
+	ROUGHNESS = mix(1.0, 0.62, mix_t * t);
 }
 """
 
@@ -102,6 +112,7 @@ func _ready() -> void:
 	_mat.shader = sh
 	_mat.set_shader_parameter("grass_col", Vector3(area.grass_color.r, area.grass_color.g, area.grass_color.b))
 	_mat.set_shader_parameter("road_col", Vector3(area.road_color.r, area.road_color.g, area.road_color.b))
+	_mat.set_shader_parameter("seal_col", Vector3(area.seal_color.r, area.seal_color.g, area.seal_color.b))
 
 # ---------------------------------------------------------------- derived sizes
 
@@ -134,9 +145,15 @@ func _derive() -> void:
 	# they are built one after another. A car crossing a chunk diagonally touches at most 3 new
 	# chunks per span, so 4 is the depth that covers the worst turn with a chunk in hand.
 	var queue_depth := 4.0
-	r_solid = span + v_max * t_chunk * queue_depth
+	# NOTHING can usefully reach past the area's own edge - there is no ground out there to build.
+	# Both radii are bounded by it BEFORE anything derives from them, because `_us_per_vertex` is
+	# measured and can spike: a spike inflates t_chunk, r_solid and r_detail together, and r_detail
+	# then leaked past this ceiling through the clampf below (see there). Measured escaping to
+	# 7893 m in a 4000 m area, which put 1543 chunks resident where the default holds ~340.
+	var r_max: float = area._size * 0.5
+	r_solid = minf(span + v_max * t_chunk * queue_depth, r_max)
 	# Beyond the solid shell the ground is scenery: no collider, and detail falls off in strides.
-	r_detail = r_solid * 2.0
+	r_detail = minf(r_solid * 2.0, r_max)
 	# r_view is a RENDERING budget, not a physical distance, so it is derived from what the static
 	# area it replaces already cost and the user already accepted: one 512x512-cell mesh over a
 	# 720 m square = 524288 triangles, and one draw call per chunk. Whichever budget binds first
@@ -153,8 +170,10 @@ func _derive() -> void:
 	var tri_mid: float = PI * (r_mid * r_mid - r_detail * r_detail) * tri_per_m2_full / 4.0
 	var left: float = maxf(tri_budget - tri_inner - tri_mid, 0.0)
 	var r_tri: float = sqrt(maxf(left * 16.0 / (PI * tri_per_m2_full) + r_mid * r_mid, 0.0))
-	# 256 draw calls is this subsystem's share; the static area it replaces used one mesh, but one
-	# mesh cannot stream.
+	# `chunk_budget` draw calls is this subsystem's share; the static area it replaces used one
+	# mesh, but one mesh cannot stream. It defaults to the 256 D4 was accepted at and is on the Tab
+	# panel so a performance run can sweep it - it is the ONE number that says how much ground is
+	# resident, and every far-field size below derives from it.
 	#
 	# Beyond r_detail the far field is CORRIDOR-ONLY, so the budget no longer buys a disc - it buys
 	# LENGTH OF ROAD, which is what you actually see when driving. A full disc out to R costs
@@ -167,12 +186,20 @@ func _derive() -> void:
 	# continuation arriving in front of you. Everything LEFT of the budget after that then goes into
 	# how WIDE the far field is, because a narrow band shows its own edge.
 	var disc_chunks: float = PI * (r_detail + span) * (r_detail + span) / (span * span)
-	r_view = clampf(v_max * 12.0, r_detail, area._size * 0.5)
+	# clampf(value, MIN, MAX) returns MIN when MIN > MAX - verified: clampf(791, 7893, 2000) = 7893.
+	# So writing the area's edge as the MAX here did not bound anything once r_detail passed it; the
+	# ceiling quietly stopped applying exactly when it was needed. r_detail is now bounded above, so
+	# min <= max holds by construction and this reads as intended.
+	r_view = clampf(v_max * 12.0, r_detail, r_max)
 	r_view = minf(r_view, r_tri)
 	# A winding road covers about 1.3 m of length per metre of radius, so this many chunks lie ALONG
 	# the far field; the remaining draw calls set how many lie ACROSS it.
 	var along: float = maxf(1.3 * (r_view - r_detail) / span, 1.0)
-	var across: float = maxf((256.0 - disc_chunks) / along, 3.0)
+	# What is LEFT of the budget after the solid disc has taken its share. The disc is derived from
+	# build_budget_ms and the car's top speed, so it is a FLOOR the count cannot go below: turning
+	# this slider down past it widens nothing further and the readout stops falling. That floor is
+	# the honest answer to "why did 64 not give me 64 chunks".
+	var across: float = maxf((chunk_budget - disc_chunks) / along, 3.0)
 	band_w = across * span * 0.5
 	_band_built = false          # the band depends on band_w, so it has to be re-marked
 	_derived_at_us = _us_per_vertex
@@ -448,7 +475,8 @@ func _start_job(k: Vector2i, lod: int) -> void:
 	var h := PackedFloat32Array(); h.resize(ax * ax)
 	var b := PackedFloat32Array(); b.resize(ax * ax)
 	var e := PackedFloat32Array(); e.resize(ax * ax)
-	_job = {"k": k, "lod": lod, "n": n, "ax": ax, "h": h, "b": b, "e": e, "i": 0, "us": 0}
+	var m := PackedFloat32Array(); m.resize(ax * ax)     # D6 surface mix, 0 gravel .. 1 sealed
+	_job = {"k": k, "lod": lod, "n": n, "ax": ax, "h": h, "b": b, "e": e, "m": m, "i": 0, "us": 0}
 
 func _build_chunk(k: Vector2i, lod: int) -> void:
 	## Synchronous, used ONLY by prime(). Everything after startup goes through the budgeted path.
@@ -465,6 +493,7 @@ func _step_job(budget_us: int = -1) -> void:
 	var h: PackedFloat32Array = _job["h"]
 	var b: PackedFloat32Array = _job["b"]
 	var e: PackedFloat32Array = _job["e"]
+	var m: PackedFloat32Array = _job["m"]
 	var i: int = _job["i"]
 	var total: int = ax * ax
 	var base_x: int = k.x * chunk_cells
@@ -479,6 +508,10 @@ func _step_job(budget_us: int = -1) -> void:
 		h[i] = s.x
 		b[i] = s.y
 		e[i] = s.z
+		# D6. FREE at this point and nowhere else: sample_at has just done this vertex's
+		# nearest_point search and StageArea memoises it per position, so asking for the surface mix
+		# here costs a float compare. Asking anywhere else would pay the 11.4 us search twice.
+		m[i] = area.road_mix_at(x, z)
 		i += 1
 		if (i & 63) == 0 and Time.get_ticks_usec() - t0 >= budget_us:
 			break
@@ -496,6 +529,7 @@ func _finalise() -> void:
 	var h: PackedFloat32Array = _job["h"]
 	var b: PackedFloat32Array = _job["b"]
 	var e: PackedFloat32Array = _job["e"]
+	var m: PackedFloat32Array = _job["m"]
 	var step: float = cell * float(lod)
 	var o := chunk_origin(k)
 	# Vertex positions come from the INTEGER lattice index, exactly as _step_job sampled them, not
@@ -521,7 +555,8 @@ func _finalise() -> void:
 			verts[idx] = Vector3(float(bx + i * lod) * cell, hh, float(bz + j * lod) * cell)
 			heights[idx] = hh
 			cols[idx] = area.grass_color.lerp(area.road_color, b[aj * ax + ai])
-			uvs[idx] = Vector2(e[aj * ax + ai], 0.0)     # the edge distance field, thresholded per pixel
+			# the edge distance field and the D6 surface mix, both thresholded per pixel
+			uvs[idx] = Vector2(e[aj * ax + ai], m[aj * ax + ai])
 			# TRUE central difference at every vertex INCLUDING the border, because the apron
 			# supplies the neighbour that lives in the next chunk. Without it the edge row falls
 			# back to a one-sided difference and every seam reads as a crease under a low sun -
@@ -637,7 +672,7 @@ func _add_skirt(verts: PackedVector3Array, norms: PackedVector3Array, cols: Pack
 		idxs.append_array([a, al, b, b, al, bl])
 
 func stats() -> Dictionary:
-	return {"live": _live.size(), "peak": _peak_chunks, "built": _built,
+	return {"live": _live.size(), "peak": _peak_chunks, "built": _built, "budget": chunk_budget,
 		"us_per_vertex": _us_per_vertex, "worst_finalise_ms": _worst_build_ms,
 		"r_solid": r_solid, "r_detail": r_detail, "r_view": r_view, "span": span,
 		"colliders": _collider_count(), "cached": _cache.size(), "cache_hits": _cache_hits}

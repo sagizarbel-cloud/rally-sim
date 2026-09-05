@@ -37,6 +37,7 @@ var def: StageDef
 @export var rut_width := 1.2             ## groove width (m)
 @export var grass_color := Color(0.40, 0.42, 0.25)
 @export var road_color := Color(0.58, 0.51, 0.39)
+@export var seal_color := Color(0.26, 0.26, 0.28)   ## D6: the sealed stretches through settlements
 
 # Coarse occupancy of the road corridor, built by walking the centreline once. Without it, building
 # the mesh asks nearest_point() about all 103k terrain vertices, and for a vertex 500 m from the road
@@ -49,6 +50,9 @@ var _n := 0
 var _size := 0.0
 var _origin := Vector3.ZERO
 var _gb := Rect2()                       # where the BUILT ground ends; see in_area()
+var _np_x := INF                         # one-entry nearest_point memo; see _nearest()
+var _np_z := INF
+var _np: Dictionary = {}
 
 var car                                  # set by world.gd: watched for live stage-parameter edits
 var chunks: StageChunks                  # D4: the streamed ground
@@ -96,6 +100,8 @@ func _regenerate(p: Array) -> void:
 	def.design_speed_kmh = float(p[3])
 	gen = StageGen.new(def)
 	gen.generate()
+	_np_x = INF                          # the memo answers for the OLD road until this is cleared
+	_np_z = INF
 	_corridor.clear()
 	for c in get_children():
 		c.queue_free()
@@ -170,7 +176,7 @@ func sample_at(x: float, z: float) -> Vector3:
 	var base: float = def.elevation_at(x, z)
 	if gen == null or gen.centreline == null or not near_road(x, z):
 		return Vector3(base, 0.0, 999.0)
-	var np := gen.centreline.nearest_point(x, z)
+	var np := _nearest(x, z)
 	var lat: float = absf(float(np["lateral"]))
 	var half: float = float(np["width"]) * 0.5
 	var blend: float = 1.0 - smoothstep(half, half + 2.0, lat)
@@ -198,7 +204,15 @@ func sample_at(x: float, z: float) -> Vector3:
 
 	# BERM: material pushed out of the corners piles just past the road edge, and piles MORE on the
 	# outside of a corner than the inside - which is the side that gets pushed.
-	var outside: float = 1.0 if signed * k < 0.0 else 0.0
+	#
+	# THIS TEST WAS INVERTED, and had been since D3. `signed * k < 0` is the INSIDE, measured by D6's
+	# sign probe: step a point the way the heading turns - that is the centre of curvature - and ask
+	# nearest_point which sign of `lateral` it lands on. 98-100% of ~4000 samples across six seeds
+	# say the inside is `lateral * curvature < 0`, and bank_curvature_at agrees in sign with
+	# nearest_point's curvature on the same samples. So the extra corner berm has been piling on the
+	# INSIDE of every corner, against what this comment says it is for. Nothing else could see it:
+	# the berm was there, it was the right height, and it was on the wrong side.
+	var outside: float = 1.0 if signed * k > 0.0 else 0.0
 	var bh: float = berm_height * (1.0 + berm_corner_gain * outside * clampf(absf(k) / maxf(def.max_curvature(), 1e-5), 0.0, 1.0))
 	var bd: float = lat - half - berm_pos
 	h += bh * exp(-(bd * bd) / maxf(berm_width * berm_width, 0.01))
@@ -212,11 +226,50 @@ func sample_at(x: float, z: float) -> Vector3:
 	h -= rut_depth * exp(-(rd * rd) / maxf(rut_width * rut_width, 0.01)) * t
 	return Vector3(h, blend, lat - half)
 
+func colour_at(x: float, z: float) -> Color:
+	## D6: what the ground LOOKS like here, from the SAME blend factor that set its grip. effects.gd
+	## lifts dust colour from this, so a car on a sealed stretch must not throw gravel-coloured dust.
+	## The chunk shader draws the same three colours from the same two fields (see EDGE_SHADER); this
+	## is the value-level answer for consumers that cannot read a mesh.
+	if gen == null or gen.centreline == null or not near_road(x, z):
+		return grass_color
+	var np := _nearest(x, z)
+	var lat: float = absf(float(np["lateral"]))
+	var half: float = float(np["width"]) * 0.5
+	var t: float = 1.0 - smoothstep(half, half + 2.0, lat)
+	var surf: Color = Color(road_color).lerp(Color(seal_color), road_mix_at(x, z))
+	return Color(grass_color).lerp(surf, t)
+
 func on_road(x: float, z: float) -> bool:
 	if gen == null or gen.centreline == null or not near_road(x, z):
 		return false
-	var np := gen.centreline.nearest_point(x, z)
+	var np := _nearest(x, z)
 	return absf(float(np["lateral"])) < float(np["width"]) * 0.5 + 1.0
+
+func _nearest(x: float, z: float) -> Dictionary:
+	## ONE nearest_point per position, however many consumers ask for it. The ground map calls
+	## on_road() and then road_mix_at() for the same point, and grip, surface, road class and audio
+	## may each ask again for the same wheel in the same tick - every one of them otherwise paying
+	## the 11.4 us search D4 measured as 96% of what a chunk vertex costs. A one-entry memo is enough
+	## because the repeats are always immediate; a bigger cache would only add bookkeeping.
+	## INVALIDATED IN _regenerate(), because `gen` is replaced there and a stale entry would answer
+	## with the previous seed's road.
+	if x == _np_x and z == _np_z:
+		return _np
+	_np = gen.centreline.nearest_point(x, z)
+	_np_x = x
+	_np_z = z
+	return _np
+
+func road_mix_at(x: float, z: float) -> float:
+	## D6: 0 = the stage's own gravel, 1 = sealed. The ground map interpolates grip, road class,
+	## colour and audio from this ONE number, which is what makes it impossible for the tyre to grip
+	## one surface while the audio plays another. Off the road there is nothing to mix.
+	if gen == null or gen.centreline == null or not near_road(x, z):
+		return 0.0
+	var np := _nearest(x, z)
+	return gen.surface_mix(float(np["s"]), float(np["lateral"]), float(np["curvature"]),
+			float(np["width"]))
 
 func in_area(x: float, z: float) -> bool:
 	## Cheap bounding test. The ground map calls this FIRST on every classification query, so that
@@ -304,6 +357,13 @@ func _physics_process(_d: float) -> void:
 	if not is_equal_approx(b, chunks.build_budget_ms):
 		chunks.build_budget_ms = b
 		chunks._derive()                     # the lead distance is derived FROM the budget
+	# ...and the same for the RESIDENT chunk budget, which sizes the far field. Both are pushed
+	# every tick rather than debounced: unlike the seed they change no geometry, so re-deriving is
+	# cheap and the readout tracks the slider while you are still moving it.
+	var n: float = float(car.stage_max_chunks)
+	if not is_equal_approx(n, chunks.chunk_budget):
+		chunks.chunk_budget = n
+		chunks._derive()                     # band_w derives from it, and _derive re-marks the band
 	chunks.update(car.global_position)
 
 

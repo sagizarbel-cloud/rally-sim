@@ -20,6 +20,113 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-09-05 (D6) — the road stops being one surface, and the berm was on the wrong side of every corner
+
+**Phase D6 built and probe-verified; awaiting a drive verdict.** The stage's surface is now a
+**profile along s**, which is exactly what D3 left a note promising. One factor per position -
+`StageGen.surface_mix()` - and grip, road class, colour and audio are all interpolated from it, so
+the tyre cannot grip one surface while the audio plays another. Grep words: *tarmac section
+mid-stage*, *gravel over tarmac*, *loose on the outside of the corner*, *sealed stretch*.
+
+**Three mechanisms, each for a physical reason rather than for variety:** a gravel stage runs
+through SETTLEMENTS and those stretches are sealed (count derived from the stage's own timed length,
+so a longer stage gets more villages rather than longer ones); cars DRAG GRAVEL onto the seal for
+`gravel_drag_m` past the entry, which is why a section's two ends do not look or drive alike - the
+entry is a long dirty smear in the direction of travel, the exit is a clean edge; and they throw it
+to the OUTSIDE of every sealed bend, which is the classic way to lose a rally car.
+
+**THE PLAN'S FILE LIST WAS WRONG, in the direction D1 predicted.** §5 D6 names `roughness.gd`,
+`sound.gd` and `world.gd` as needing changes. **None of them did.** They read through the ground map,
+so they got blended values for free - which is the payoff D1 was built for, and it said so at the
+time: *"the moment D6 drags gravel onto tarmac it stops being theoretical, because the tyre would
+grip one surface while the audio and particles played another."*
+
+**Measured, six seeds:** the blend spans 0.000 to 1.000 exactly; worst step per 0.5 m is 6% of the
+total swing in grip and in road class; **zero** field disagreements between `sample()` and every
+single-field accessor; identical sections on regeneration. §1.1 re-proved - the calibration lattice
+is bit-identical, because no legacy layer blends and D6 lives entirely in the generated area.
+
+**THE PROBE THAT WAS NOT IN THE PLAN IS THE ONE THAT FOUND THINGS.** "Which side is the outside of a
+corner" is invisible to all three probes the plan lists: the blend is still continuous, the fields
+still agree, the sections still repeat - with the loose patch on the wrong side of the road.
+Measured geometrically instead of derived - step a probe point the way the heading turns, because
+that IS the centre of curvature, then ask `nearest_point` which sign of `lateral` it landed on -
+**98-100% of ~4000 samples per seed say the inside is `lateral * curvature < 0`.**
+
+**That exposed a D3 bug: the corner berm has been on the INSIDE of every corner since D3.**
+`stage_area.sample_at()` used `signed * k < 0.0` for "outside", directly under a comment reading
+*"piles MORE on the outside of a corner than the inside - which is the side that gets pushed"*.
+`bank_curvature_at` agrees in sign with `nearest_point`'s curvature on the same samples, so the test
+was simply inverted. Nothing else could have seen it - the berm was there, it was the right height,
+and it was on the wrong side. **This changes how corners feel and wants a verdict of its own.**
+
+**Two things the probe got wrong first, both the same failure as always.** The blend read
+`0.000 .. 0.000` on every seed - a road that was 100% gravel end to end - because the gravel-drag
+term was maxed across ALL sections, and a section that has not started yet is entirely "upstream of
+its own smear", so drag was 1.0 everywhere before the last entry. Caught only because the probe
+asserts the blend reaches **both** surfaces exactly; "continuous, and consumers agree" is true of a
+road with no seal on it at all. Then the cost gate compared `road_mix_at` against `sample_at` as a
+ratio and failed a build that was fine: a ratio cannot tell a second `nearest_point` search from
+GDScript call overhead. Rewritten as warm-versus-cold - **the memo saves 71-83%**, so the residual
+~15% is interpreter overhead, not a repeated search.
+
+**One-entry `nearest_point` memo on `StageArea`**, because the ground map asks `on_road()` and then
+`road_mix_at()` for the same position, and grip, surface, road class and audio may each ask again
+for the same wheel in the same tick - every one otherwise paying the 11.4 us search D4 measured as
+96% of a chunk vertex. It is what makes the chunk shader's per-pixel surface mix free: `sample_at`
+has already done that vertex's search. **Invalidated in `_regenerate()`** - `gen` is replaced there
+and a stale entry answers with the previous seed's road.
+
+---
+
+## 2026-09-05 (last) — a resident-chunk slider for performance runs, and a ceiling that had quietly stopped applying
+
+**New Tab slider "Stage chunks resident"** (`stage_max_chunks`, default 256 — the value D4 was
+accepted at, so nothing about the stage moves until you touch it). It replaces the hardcoded 256
+draw-call share in `StageChunks._derive()`, which was the one number saying how much ground exists
+around you; the far field's width derives from it exactly as before. The `[J]` performance overlay
+now reports the streamer alongside draw calls and primitives — `chunks n/N resident`, collidable
+count, peak, cached, and the three radii — because **what you asked for and what you got are not the
+same number** and a sweep is unreadable without seeing both.
+
+**Measured on the default stage, car parked on the start line:**
+
+| budget | resident chunks |
+|---|---|
+| 32 | 126 |
+| 128 | 162 |
+| 256 | 338 (default) |
+| 512 | 538 |
+| 1024 | 593 |
+
+It **saturates at both ends, and both ends are structural**. Under ~150 the collidable shell — derived
+from the streaming BUDGET (ms) and the car's top speed, not from this slider — already fills the
+budget, so the far field sits at its 3-chunk minimum width and the count stops falling. Past ~600
+the 12-second view horizon binds instead (r_view 791 m), so widening the band adds chunks that are
+outside the horizon anyway. The useful sweep is therefore **~150 to ~600 resident chunks**.
+
+**A REAL BUG found on the way, and it is the kind that only shows up under measurement.**
+`r_view = clampf(v_max * 12.0, r_detail, area._size * 0.5)` — the area's own edge as the ceiling.
+But **`clampf(value, MIN, MAX)` returns MIN when MIN > MAX**: verified directly,
+`clampf(791, 7893, 2000) = 7893`. `_us_per_vertex` is MEASURED and can spike; a spike inflates
+`t_chunk`, `r_solid` and `r_detail` together, and the moment `r_detail` passed the area half-size
+the ceiling stopped applying — so the view radius escaped the map. Caught in a headless sweep where
+it reached **7893 m in a 4000 m area, holding 1543 chunks resident where the default holds ~340**.
+`r_solid` and `r_detail` are now bounded by the area edge before anything derives from them, so
+`min <= max` holds by construction. At default settings the radii are 80–230 m against a 2000 m
+ceiling, so this changes nothing you can see — it stops a measured spike from turning into a
+kilometre of resident ground, which matters now that the slider exists to be swept.
+
+**A measurement lesson, since the first sweep was wrong and looked plausible.** Run headless, the
+sweep reported ~1500 chunks resident at EVERY budget and a far-field width that never moved — a
+slider that did nothing. Run windowed, the same sweep separates cleanly (126 → 593). The headless
+run was the anomaly: with no renderer the measured vertex cost swung between 4.6 and 22.5 us and
+took the derived radii with it, which is exactly what tripped the clampf bug. **Streaming numbers
+are only meaningful in the configuration that renders**; the headless run is still worth keeping,
+because it found the bug the windowed one hides.
+
+---
+
 ## 2026-09-05 (later) — D5 drive verdict: the tunnel junction holds
 
 **Driver: *"good - it seems to hold up as far as my testing went"*, on the ground-bounds fix above.**

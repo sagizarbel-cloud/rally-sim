@@ -585,6 +585,98 @@ func _build_centreline(pts_in: PackedVector2Array) -> void:
 		hw[k] = maxf(hw[k], lerpf(hw[k], flare, u2 * u2))
 	centreline = Centreline.from_points(world, hw, false)     # OPEN: a stage is a route, not a lap
 	_build_bank_curvature()
+	_plan_surfaces()
+
+# ---------------------------------------------------------------- D6: the surface profile
+
+var _srng := RandomNumberGenerator.new()  ## SEPARATE from _rng on purpose: drawing the surface plan
+                                          ## from the route solver's stream would change the ROAD,
+                                          ## and D6 must not move a single corner of a seed that
+                                          ## has already been driven.
+var _sealed: Array = []                   ## [{s0, s1}] sealed stretches, in stage arc length
+
+func sealed_sections() -> Array:
+	return _sealed
+
+func _plan_surfaces() -> void:
+	## WHERE THE SEALED STRETCHES ARE. Settlements sit along a route at a spacing, so the count comes
+	## from the stage's own TIMED length rather than being a number - a longer stage gets more
+	## villages, not longer ones. They are placed in the timed portion only: a sealed run-up would
+	## put the surface change where nobody is racing, and the start and finish gates want the same
+	## surface every time so a split is comparable between seeds.
+	_sealed.clear()
+	_srng.seed = def.seed + 5171
+	var s0: float = timed_start_s
+	var s1: float = timed_end_s
+	var timed: float = s1 - s0
+	var n: int = int(floor(timed / maxf(def.sealed_spacing_m, 1.0)))
+	if n <= 0 or timed <= 0.0:
+		return
+	# One per band, jittered inside it, so two villages can never overlap or crowd the gates however
+	# the RNG falls - the spacing is the point, and rejection sampling would make it seed-dependent
+	# whether a stage got its full count.
+	var band: float = timed / float(n)
+	var margin: float = def.sealed_len_max_m * 0.5 + def.gravel_drag_m + def.sealed_blend_m
+	for i in range(n):
+		var seg_len: float = _srng.randf_range(def.sealed_len_min_m, def.sealed_len_max_m)
+		var lo: float = s0 + float(i) * band + margin
+		var hi: float = s0 + float(i + 1) * band - margin
+		if hi <= lo:
+			continue
+		var mid: float = _srng.randf_range(lo, hi)
+		_sealed.append({"s0": mid - seg_len * 0.5, "s1": mid + seg_len * 0.5})
+	# Most of a stage is NOT sealed - three stretches of ~250 m in 4800 - and surface_mix runs at
+	# every chunk vertex on the corridor. `plateau` is exactly zero outside (s0, s1), so a pair of
+	# comparisons per section skips the smoothsteps, and an all-zero result skips the loose-material
+	# term as well.
+	#
+	# WHAT IT COSTS, measured on six seeds (headless debug, so read the RATIOS not the microseconds):
+	# a corridor vertex is ~55 us of sample_at, and the surface mix adds 6.6-11.3 us on top - about
+	# 15%. Asking for it WITHOUT the memo warm costs 36-41 us, i.e. the memo saves 71-83% and the
+	# remainder is GDScript call overhead rather than a second nearest_point search. Off the corridor
+	# both sides early-out on near_road, so the whole-chunk figure is well under that 15%.
+
+func surface_mix(s: float, lateral: float, curvature: float, width: float) -> float:
+	## 0 = the stage's own gravel, 1 = sealed. ONE number, because everything the ground map exposes
+	## - grip, road class, colour, audio - is interpolated from it, and a single factor is what makes
+	## it impossible for the tyre to grip one surface while the audio plays another.
+	if _sealed.is_empty():
+		return 0.0
+	var seal := 0.0
+	var b: float = maxf(def.sealed_blend_m, 0.1)
+	for sec in _sealed:
+		var a0: float = float(sec["s0"])
+		var a1: float = float(sec["s1"])
+		if s <= a0 or s >= a1:
+			continue                          # plateau is exactly zero here; see _plan_surfaces
+		# a plateau: up over the blend at the entry, down over it at the exit
+		var plateau: float = minf(smoothstep(a0, a0 + b, s), 1.0 - smoothstep(a1 - b, a1, s))
+		# GRAVEL CARRIED IN. The stage is driven start to finish, so the smear runs DOWNSTREAM of the
+		# entry edge and there is no matching one at the exit - which is why the two ends of a sealed
+		# section do not look or drive the same.
+		#
+		# PAIRED WITH ITS OWN SECTION, not maxed across all of them. Taking the maximum drag over
+		# every section made the term 1.0 everywhere BEFORE the last section's entry - because a
+		# section that has not started yet is entirely "upstream of its own smear" - so the road came
+		# out 100% gravel end to end. The probe caught it only because it asserts the blend reaches
+		# BOTH surfaces exactly; "continuous, and consumers agree" was true of a road with no sealed
+		# stretch on it at all.
+		var drag: float = 1.0 - smoothstep(a0, a0 + maxf(def.gravel_drag_m, 0.1), s)
+		seal = maxf(seal, plateau * (1.0 - drag))
+	# LOOSE OVER HARD ON THE OUTSIDE OF THE BEND. The outside is the side away from the centre of
+	# curvature, and which sign of `lateral` that is was MEASURED, not derived: step a probe point
+	# the way the heading turns (that IS the centre of curvature) and ask nearest_point what it
+	# lands on. Over ~4000 samples on six seeds, 98-100% agree that the INSIDE is
+	# `lateral * curvature < 0`, so the outside is `> 0`. Getting this backwards would put the loose
+	# patch on the racing line's inside, which drives like a different road and would look correct
+	# in every other check.
+	if seal <= 0.0:
+		return 0.0                            # nothing to take loose material off
+	var half_w: float = maxf(width * 0.5, 0.5)
+	var tight: float = clampf(absf(curvature) / maxf(def.max_curvature(), 1e-5), 0.0, 1.0)
+	var out_f: float = clampf(lateral * signf(curvature) / half_w, 0.0, 1.0)
+	var loose: float = def.loose_outside_gain * tight * out_f * out_f
+	return clampf(seal * (1.0 - clampf(loose, 0.0, 1.0)), 0.0, 1.0)
 
 func _limit_grade(world: PackedVector3Array) -> PackedVector3Array:
 	## The vertical constraint, and the reason a generated road looks BUILT rather than painted on.
