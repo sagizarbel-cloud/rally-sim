@@ -136,10 +136,12 @@ func _build_portals() -> void:
 	# EACH PORTAL CARRIES ITS OWN MAP BOUNDARY, as a signed distance INSIDE the area's square:
 	# positive on the map, negative off it, zero on the edge. The pad's blend is driven by THIS and
 	# not by distance along the pad, which is what was wrong - see _build_pad.
-	var ao: Vector3 = stage_area.def.origin
-	var ah: float = float(stage_area.def.area_size) * 0.5
+	# The stage's edge is where its GROUND ends, which the streamer puts up to a chunk past the
+	# nominal box - measured at 25 m, and the pad went flat 25 m early because of it, leaving a bank
+	# of uncarved hillside standing over the mouth. def.ground_bounds() is the one authority.
+	var gb: Rect2 = stage_area.def.ground_bounds()
 	var din_stage := func(x: float, z: float) -> float:
-		return ah - maxf(absf(x - ao.x), absf(z - ao.z))
+		return StageDef.depth_in(gb, x, z)
 	var half: float = float(stage.size) * 0.5
 	var din_cal := func(x: float, z: float) -> float:
 		return half - maxf(absf(x), absf(z))

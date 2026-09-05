@@ -459,9 +459,14 @@ func _extend_ends(pts: PackedVector2Array) -> PackedVector2Array:
 	# so the approach becomes a proper cutting for free and the pad shrinks to a few metres.
 	#
 	# The spine is untouched, so the TIMED stage is identical; only the approach lengthens.
-	var half_a: float = def.area_size * 0.5
-	var run_m: float = maxf(def.start_runup_m, _dist_to_edge(pts[0], head, half_a) + 1.0)
-	var off_m: float = maxf(def.finish_runoff_m, _dist_to_edge(pts[n - 1], tail, half_a) + 1.0)
+	# TO THE EDGE OF THE GROUND, NOT THE EDGE OF THE BOX. Those are not the same place: the streamer
+	# builds whole chunks off a global lattice wherever they overlap the area, so the ground runs up
+	# to a chunk past `area_size` - measured at 25 m on the seeds tested. Aiming at the nominal box
+	# left the road stopping 25 m short of the ground it was supposed to reach, and the tunnel's pad
+	# then had 25 m of uncarved hillside standing over it. def.ground_bounds() is the one authority.
+	var gb: Rect2 = def.ground_bounds()
+	var run_m: float = maxf(def.start_runup_m, _dist_to_edge(pts[0], head, gb) + 1.0)
+	var off_m: float = maxf(def.finish_runoff_m, _dist_to_edge(pts[n - 1], tail, gb) + 1.0)
 	var pre := int(ceil(run_m / step))
 	var post := int(ceil(off_m / step))
 	var out := PackedVector2Array()
@@ -483,13 +488,15 @@ func _extend_ends(pts: PackedVector2Array) -> PackedVector2Array:
 	_post_n = post
 	return out
 
-func _dist_to_edge(p: Vector2, dir: Vector2, half: float) -> float:
-	## How far from `p` along `dir` before leaving the area box. Solved, not walked.
+func _dist_to_edge(p: Vector2, dir: Vector2, b: Rect2) -> float:
+	## How far from `p` along `dir` before leaving `b`. Solved, not walked. The rect's y axis is
+	## world Z. Takes a rect rather than a half-width because the ground's bounds are not centred on
+	## the area origin - the chunk lattice overhangs each side by a different amount.
 	var t := INF
 	if absf(dir.x) > 1e-6:
-		t = minf(t, ((def.origin.x + (half if dir.x > 0.0 else -half)) - p.x) / dir.x)
+		t = minf(t, ((b.end.x if dir.x > 0.0 else b.position.x) - p.x) / dir.x)
 	if absf(dir.y) > 1e-6:
-		t = minf(t, ((def.origin.z + (half if dir.y > 0.0 else -half)) - p.y) / dir.y)
+		t = minf(t, ((b.end.y if dir.y > 0.0 else b.position.y) - p.y) / dir.y)
 	return maxf(t, 0.0) if t < 1e17 else 0.0
 
 var approach_grade := 0.20        ## the run-up/runoff ramp out of a cutting steeper than the road

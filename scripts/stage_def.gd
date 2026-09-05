@@ -129,6 +129,40 @@ var area_cells: int:                      ## derived: how many cells the box is 
 	get:
 		return maxi(int(round(area_size / maxf(cell_size_m, 0.01))), 1)
 
+var chunk_cells: int = 32                 ## cells per streamed chunk. It lives HERE, not in
+                                          ## stage_chunks.gd, because it is not only a streaming
+                                          ## detail: chunks sit on a GLOBAL lattice and are built
+                                          ## whole whenever they overlap the area, so this is what
+                                          ## decides where the built ground actually ends - see
+                                          ## ground_bounds(). Two places owning that number is how
+                                          ## the road and the ground came to disagree by 25 m.
+
+func ground_bounds() -> Rect2:
+	## WHERE THE GROUND REALLY ENDS, which is NOT `origin +- area_size/2`. Chunks are `span` metres
+	## square on a lattice anchored at the world origin, and stage_chunks._in_area() builds any chunk
+	## that OVERLAPS the area - so the built ground runs out to the enclosing chunk lines, up to a
+	## full chunk beyond the nominal box, by a different amount on each side and on each axis.
+	##
+	## Measured 2026-09-05, 12 seeds: the road stopped 1.0-1.6 m past the nominal box exactly as
+	## intended, and the ground carried on for another **25 m** past that - uncarved hillside, since
+	## the road corridor had ended. The tunnel's transition pad was told the map ended at the nominal
+	## box, went flat there, and that 25 m of hillside stood over it and walled off the road. The
+	## driver: "the terrain takes over after the driving path ends and envelops the transition pad -
+	## causing a blockage of the path". Everything that needs to know where the map ends asks HERE.
+	var span: float = float(chunk_cells) * (area_size / float(area_cells))
+	var h: float = area_size * 0.5
+	var x0: float = floorf((origin.x - h) / span) * span
+	var x1: float = ceilf((origin.x + h) / span) * span
+	var z0: float = floorf((origin.z - h) / span) * span
+	var z1: float = ceilf((origin.z + h) / span) * span
+	return Rect2(x0, z0, x1 - x0, z1 - z0)
+
+static func depth_in(b: Rect2, x: float, z: float) -> float:
+	## Signed distance INSIDE a bounds rect: positive on the ground, negative off it, zero on the
+	## edge. Static and taking the rect, so a caller that queries it per ground lookup can hoist
+	## ground_bounds() out of its hot path.
+	return minf(minf(x - b.position.x, b.end.x - x), minf(z - b.position.y, b.end.y - z))
+
 # --- THE HEIGHTMAP-IMPORT SEAM (§5 D3: "Design it; do not build it") ---------------------------
 # Elevation must be reachable through ONE function so that swapping the procedural source for an
 # imported DEM is a one-place change. stage_gen.gd calls elevation_at() and nothing else, so an
@@ -195,5 +229,6 @@ func duplicate_def() -> StageDef:
 	d.control_points = control_points.duplicate()
 	d.control_tolerance_m = control_tolerance_m
 	d.origin = origin; d.area_size = area_size; d.cell_size_m = cell_size_m
+	d.chunk_cells = chunk_cells
 	d.elevation_source = elevation_source
 	return d

@@ -48,6 +48,7 @@ var _cs := 0.0
 var _n := 0
 var _size := 0.0
 var _origin := Vector3.ZERO
+var _gb := Rect2()                       # where the BUILT ground ends; see in_area()
 
 var car                                  # set by world.gd: watched for live stage-parameter edits
 var chunks: StageChunks                  # D4: the streamed ground
@@ -112,6 +113,7 @@ func _ready() -> void:
 	_n = def.area_cells + 1
 	_cs = _size / float(def.area_cells)
 	_origin = def.origin
+	_gb = def.ground_bounds()
 	_mark_corridor()
 	_build()
 	_build_markers()
@@ -218,9 +220,14 @@ func on_road(x: float, z: float) -> bool:
 
 func in_area(x: float, z: float) -> bool:
 	## Cheap bounding test. The ground map calls this FIRST on every classification query, so that
-	## driving on the legacy map costs one box test rather than a centreline lookup.
-	var half := _size * 0.5
-	return absf(x - _origin.x) <= half and absf(z - _origin.z) <= half
+	## driving on the legacy map costs one box test rather than a centreline lookup - which is why
+	## the bounds are cached rather than re-derived here.
+	##
+	## THE BOUNDS ARE THE GROUND'S, NOT THE NOMINAL BOX'S (see StageDef.ground_bounds). The streamer
+	## builds whole chunks off a global lattice, so there is real, drivable stage ground for up to a
+	## chunk past `area_size` - measured at 25 m. Testing the nominal box left that ring of ground
+	## unclaimed by this layer, so the ground map fell through to the legacy map's answers for it.
+	return StageDef.depth_in(_gb, x, z) >= 0.0
 
 func spawn_transform() -> Transform3D:
 	## At the BEGINNING of the run-up, facing down the road - so you launch, cross the start line,

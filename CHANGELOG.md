@@ -20,6 +20,67 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-09-05 — the ground ran 25 m past the edge of the map, and only the road stopped
+
+**Driver, with a screenshot: *"on some seeds it works well but others - the terrain takes over after
+the driving path ends and envelops the transition pad - causing a blockage of the path ... the most
+concrete solution in my opinion is making the driving path always generate from the edge of the map
+and end on the edge of the map exactly - no less"*.** Grep words: *terrain envelops the pad*, *bank
+over the tunnel mouth*, *road stops short of the edge*, *blockage at the stage portal*.
+
+**The driver's fix was already implemented, and measuring said so: the road ends 1.0-1.6 m PAST the
+area box on 12/12 seeds.** It was never stopping short. **The map was carrying on without it.**
+
+**`stage_chunks._in_area()` builds any chunk that OVERLAPS the area, and chunks are ~45 m square on
+a lattice anchored at the WORLD origin, not at the area.** So the built ground runs out to the
+enclosing chunk lines - past `area_size`, by a different amount on each side, and by a different
+amount for every seed depending on where the road happens to leave. **Measured: the ground carried on
+25 m past the road's end.** That ring is *uncarved* hillside, because the road corridor had already
+finished, and the transition pad had been told the map ended at the nominal box - so the pad went
+flat 25 m early and 25 m of raw terrain stood over it and walled off the road. Exactly the
+screenshot.
+
+**Measured on the stage side, 12 seeds, raycasting the built ground with D4's streamer primed:**
+
+| | before | after |
+|---|---|---|
+| worst step on the driving surface | **6.99 m** | **0.30 m** |
+| seeds failing | **9 / 12** | **0 / 12** |
+| road's end, relative to the ground's real edge | **25 m short** | 1.5 m past it |
+| holes on the driving line | 0 | 0 |
+
+The 0.30 m residual is the road's own **berm** (`berm_height` 0.28 m) on the shoulder at lat +8, not
+the join - the junction is now smoother than the road's own designed features.
+
+**`StageDef.ground_bounds()` is the single authority for where the map ends**, and `chunk_cells`
+moved onto the def with it, because it is not only a streaming detail - together with `cell` it is
+what *decides* the ground's extent. Three consumers now ask it instead of each assuming
+`origin +- area_size/2`: `stage_gen._extend_ends()` (so the run-up and runoff reach the ground's real
+edge), `area_manager` (so the pad's boundary is where the ground actually stops), and
+`stage_area.in_area()` - that last one a bug in its own right, since the ground map was falling
+through to the LEGACY map's answers for the 25 m ring of real, drivable stage ground outside the
+nominal box.
+
+**§1.1 re-proved, not assumed:** `probe_ground_lattice.gd` over the calibration bed is **bit-identical
+before and after** - 6612 samples, same SHA-256. The stage's new bounds reach z -5040..-990 and
+x -2025..+2025, still clear of the legacy map (+-360 m) and the drag strip (x 285..4285, z ~0).
+
+**Why the previous day's fix did not catch this:** that probe raycast the CALIBRATION portal only and
+reasoned about the stage side analytically - and the analytic view asked `stage_area.height_at()`,
+which is a function of position and answers everywhere, including 25 m outside the map where no
+ground is built. **A height function cannot tell you where the ground ENDS.** Only a ray into the
+built world can, which is why this probe parks the car at the mouth, waits 150 ticks for the streamer
+to build, and then measures.
+
+**To rebuild the check:** a Node3D wired at the end of `world.gd` `_ready()` behind an env var;
+per seed, `stage_area._regenerate([...])`, park the car at `centreline.point_at(30.0)`, wait 150
+physics ticks, then `intersect_ray` top-down through the stack (car's RID excluded) along the
+portal's axis at lat -16/-8/0/+8/+16, 0.5 m steps. Report the signed distance of `point_at(0)` and
+`point_at(length)` inside `def.ground_bounds()`, the worst step, and holes. Thresholds that fail
+before they pass: step > 0.35 m, any hole, either road end more than 0.5 m inside the bounds.
+
+---
+
 ## 2026-09-04 — the calibration map and the transition pad met in a two-metre step
 
 **Driver: *"there is an issue between the calibration pad and the transition pad that they dont

@@ -107,6 +107,10 @@ func _ready() -> void:
 
 func configure() -> void:
 	cell = area._cs
+	# The quantum lives on the DEF (see StageDef.ground_bounds): the road's ends and the tunnel's
+	# transition pad both have to know where the built ground stops, and that is set by this number
+	# together with `cell`. Keeping a second copy here is what let them disagree by 25 m.
+	chunk_cells = area.def.chunk_cells
 	span = float(chunk_cells) * cell
 	_tick = 1.0 / maxf(float(Engine.physics_ticks_per_second), 1.0)
 	if car != null and car.has_method("top_speed_kmh"):
