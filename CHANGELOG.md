@@ -20,6 +20,26 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-09-05 (later) — D5 drive verdict: the tunnel junction holds
+
+**Driver: *"good - it seems to hold up as far as my testing went"*, on the ground-bounds fix above.**
+That closes the sequence that ran from 2026-08-31 to today: mouth eight metres in the air, tube
+buried in the hillside, staircase ramp, void drop on the return leg, pads lying across 245-305 m of
+stage, mouth in a cutting, portals never rebuilt on a seed change, the pad blending along its own
+axis instead of the map edge, and finally the ground overrunning the road by 25 m. **D5 is drive-
+verified and ticked.**
+
+**D4 is NOT, and it is one item: the hiccups.** *"stage streaming budget sometimes has stutters but i
+didnt catch any fps drops ... the feel is that the game has hiccups sometimes"* (2026-08-31). The
+standing hypothesis is chunk MESH CREATION - 26.6 new ArrayMeshes per second while driving, each
+uploaded to the GPU on first draw, which is invisible to both physics timing and average fps and is
+exactly that shape. **It cannot be confirmed headless, because headless has no GPU.** The test is
+still the one written that day and it takes a minute: **drive a stretch, turn round, drive it again.**
+The LRU cache means the second pass creates almost nothing, so if it is smooth the hiccup is chunk
+creation and the fix is fewer LOD levels; if it hiccups identically, it is not, and the search moves.
+
+---
+
 ## 2026-09-05 — the ground ran 25 m past the edge of the map, and only the road stopped
 
 **Driver, with a screenshot: *"on some seeds it works well but others - the terrain takes over after

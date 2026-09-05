@@ -857,8 +857,13 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   **Open for a later phase:** corner severity clusters at the constraint boundary (2 bands, not a
   road book's 1-6). The lever is a design speed that VARIES along the stage, which is what real
   roads have. Full numbers in `CHANGELOG.md` 2026-08-28.
-- [ ] D4 — Chunked terrain, streaming and LOD — **BUILT AND PROBE-VERIFIED 2026-08-30, AWAITING
-  DRIVE VERDICT.** `scripts/stage_chunks.gd` replaces `StageArea._build()`. The stage is now
+- [ ] D4 — Chunked terrain, streaming and LOD — **BUILT AND PROBE-VERIFIED 2026-08-30. ONE ITEM
+  OPEN: the hiccups.** Everything else in the D4 checklist passed the drive on 2026-08-31. The open
+  item is *"the feel is that the game has hiccups sometimes"* with no fps drop; the hypothesis is
+  chunk mesh creation (26.6 ArrayMeshes/s, GPU upload on first draw) and it **cannot be settled
+  headless — headless has no GPU**. The test is a minute of driving: go down a stretch, turn round,
+  come back. The LRU cache makes the second pass create almost nothing, so smooth means it IS chunk
+  creation (fix: fewer LOD levels) and identical means it is not. `scripts/stage_chunks.gd` replaces `StageArea._build()`. The stage is now
   **4779 m timed / 4905 m of road** in a 4 km box, inside §1.2's 4–6 km target.
   **THIS PHASE'S PLAN TEXT IS WRONG ON ITS CENTRAL POINT, and it was measured before any code was
   written.** §3.4 and the D4 prompt say collider cooking is the spike to design around. Building one
@@ -920,8 +925,12 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   which headless cannot confirm; retired chunks are now cached, and the discriminating test is on
   the checklist — drive a stretch, turn round, drive it again. See `CHANGELOG.md` 2026-08-31.
   Feel cannot be verified here: **awaiting the user drive checklist below.**
-- [ ] D5 — The area manager and the connecting tunnel — **BUILT AND PROBE-VERIFIED 2026-08-31,
-  AWAITING DRIVE VERDICT.** `scripts/area_manager.gd`. Drive into a portal beside the asphalt ring,
+- [x] D5 — The area manager and the connecting tunnel — **DRIVE-VERIFIED 2026-09-05** (*"it seems
+  to hold up as far as my testing went"*), after nine reported defects between 2026-08-31 and then;
+  the last two were the pad blending along its own axis instead of the map edge, and the streamed
+  ground overrunning the road by 25 m because chunks are built whole off a global lattice.
+  `StageDef.ground_bounds()` is now the one authority for where a map ends. Built and probe-verified
+  2026-08-31. `scripts/area_manager.gd`. Drive into a portal beside the asphalt ring,
   drive out of one on SHAKEDOWN's start line.
   **TWO USER DECISIONS, not to be re-litigated.** (a) The calibration bed is NEVER unloaded: a cold
   rebuild measures 494 ms, 468 of it in `_build()`, so making it resumable would restructure the
