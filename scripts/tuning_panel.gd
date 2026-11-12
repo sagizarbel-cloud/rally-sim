@@ -8,6 +8,7 @@ var _panel: PanelContainer
 var _defaults := {}
 var _ctls: Array = []      # cached slider/checkbox controls (built once in _ready)
 var _help_lbl: Label       # banner under the title: explains whatever is under the cursor
+var _banner_w := 0.0       # width the banner height was last derived for (see _fit_banner)
 
 # What each control actually DOES, in one line, shown in the banner on hover (and as the native
 # tooltip). Every line starts with the system it belongs to, because the panel is sorted A-Z and
@@ -74,6 +75,7 @@ const HELP := {
 	"stage_sinuosity": "STAGE - how much of its turn budget the SHAKEDOWN road spends. 0 runs almost straight across the area, 1 is as twisty as the design speed allows. It cannot ask for a corner tighter than the minimum radius.",
 	"stage_elevation": "STAGE - SHAKEDOWN's elevation character. 0 keeps the road on the valley floor, 1 sends it climbing over ridges. Raising it also makes the road lean harder around high ground rather than climbing it.",
 	"stage_chunk_budget_ms": "STAGE - how much of each physics tick (8.33 ms at 120 Hz) SHAKEDOWN's ground may spend building itself. The stage is streamed in chunks now, and a chunk's cost is almost entirely working out where the road is at each vertex - so a chunk is built a slice at a time rather than all at once, and THIS is the size of the slice. Everything else derives from it: raise it and the ground is solid further ahead of you but the worst frame grows; lower it and frames are calmer while the ground is built closer. If you ever feel ground appear late at high speed, raise this.",
+	"stage_max_chunks": "STAGE, PERFORMANCE - how many ground chunks SHAKEDOWN keeps RESIDENT around you. It is the streamer's draw-call budget: the collidable shell near the car derives from the streaming BUDGET (ms) and cannot shrink, so this spends what is left on how WIDE the far field runs along the road. Measured on the default stage: 128 -> 162 chunks, 256 -> 338, 512 -> 538, 1024 -> 593. It saturates at both ends - under ~150 the shell alone fills it, and past ~600 the 12-second view horizon binds instead. [J] shows what you actually got.",
 	"stage_design_speed": "STAGE - the speed SHAKEDOWN is DESIGNED for, in km/h, which fixes its tightest corner via R = V^2/(127(e+f)). RAISING THIS MAKES THE STAGE STRAIGHTER AND SHORTER, not faster - a rally stage is a road driven far beyond its design speed, and that mismatch is the point.",
 	"tyre_audio_surface": "AUDIO - where the tyre sound gets its SURFACE. ON asks the ground map (gravel sounds like gravel). OFF is the old grip threshold, which read the rally loop as 40% asphalt - a tarmac squeal under every gravel slide and the gravel rumble cut 28%. Use Tyre gain if the corrected rumble is now too loud.",
 	"damper_reads_road": "SUSPENSION - whether the damper feels the ROAD's own vertical speed, not just the body's. ON is the physical answer and is what makes surface texture reach you; OFF reverts to roughness pushing through the spring alone (the original C1 behaviour, which could not be felt).",
@@ -212,6 +214,7 @@ var _specs := [
 	["Stage elevation (M2)", "stage_elevation",    0.0,      1.0,  0.05,  func(v): return "%.2f" % v],
 	["Stage design speed (M2)","stage_design_speed", 20.0,   80.0,   5.0,  func(v): return "%.0f km/h" % v],
 	["Stage streaming budget", "stage_chunk_budget_ms", 0.25, 4.0,  0.25, func(v): return "%.2f ms/tick" % v],
+	["Stage chunks resident", "stage_max_chunks",      32.0,  1024.0, 32.0, func(v): return "%d chunks" % int(v)],
 	["Road class gravel (M2)","road_class_gravel",      2.0,    512.0,  2.0,  func(v): return "Gd0 %d" % int(v)],
 	["Road class tarmac (M2)","road_class_tarmac",      0.5,    128.0,  0.5,  func(v): return "Gd0 %d" % int(v)],
 	["Washboard depth (M2)", "washboard_amp",           0.0,     0.06, 0.002, func(v): return "%.1f cm" % (v * 100.0)],
@@ -287,10 +290,11 @@ func _ready() -> void:
 
 	# Help banner: pinned under the title so it never moves, and reserved at a fixed height so
 	# the list below does not jump around as explanations of different lengths come and go.
+	# The reserved height is DERIVED (see _fit_banner) from the longest explanation there is,
+	# because a hand-set one is only fixed for the texts that happen to fit it.
 	_help_lbl = Label.new()
 	_help_lbl.text = "Hover any control for an explanation."
 	_help_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_help_lbl.custom_minimum_size = Vector2(0, 76)
 	_help_lbl.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	_help_lbl.add_theme_font_size_override("font_size", 12)
 	_help_lbl.add_theme_color_override("font_color", Color(0.72, 0.84, 1.0))
@@ -325,6 +329,7 @@ func _process(_delta: float) -> void:
 	# would sit at stale positions and shove the old value back the moment one was touched.
 	if not _panel.visible:
 		return
+	_fit_banner()
 	for ctl in _ctls:
 		if not ctl.has_meta("prop"):
 			continue
@@ -338,6 +343,36 @@ func _process(_delta: float) -> void:
 		elif ctl is CheckButton:
 			if ctl.button_pressed != bool(cur):
 				ctl.button_pressed = bool(cur)
+
+func _fit_banner() -> void:
+	# The banner sits ABOVE the list, so its height is the list's origin. If it grows when a long
+	# explanation arrives, every row below slides down with it - the row you were pointing at
+	# leaves the cursor, its mouse_exited clears the banner, the banner shrinks, the row comes
+	# back, and it hovers again. Measured: 197 px banner vs 76, rows jumping 100 px, flipping
+	# EVERY FRAME while the mouse sat still. That is the stutter.
+	#
+	# So the banner is reserved at the height of the LONGEST explanation in HELP, at the width it
+	# actually has: then no text can change it and nothing below it can move. Derived rather than
+	# hand-set, so writing a longer HELP line re-reserves by itself. Recomputed only when the
+	# width changes (first layout, or a scrollbar appearing).
+	#
+	# Ask the LABEL how tall each text is rather than re-deriving it from font metrics: the font's
+	# own get_multiline_string_size() ignores the theme's line_spacing and came out 27 px short on
+	# the longest text (170 vs 197), which would have left exactly one explanation still able to
+	# shove the list. The label wraps and spaces text with the same code that draws it, so it
+	# cannot disagree with itself. Measured with the floor released, then restored.
+	var w: float = _help_lbl.size.x
+	if w <= 0.0 or is_equal_approx(w, _banner_w):
+		return
+	_banner_w = w
+	var keep := _help_lbl.text
+	_help_lbl.custom_minimum_size.y = 0.0
+	var tallest := 0.0
+	for t in HELP.values():
+		_help_lbl.text = String(t)
+		tallest = maxf(tallest, _help_lbl.get_minimum_size().y)
+	_help_lbl.text = keep
+	_help_lbl.custom_minimum_size.y = ceilf(tallest)
 
 func _add_row(vbox: VBoxContainer, label: String, prop: String, mn: float, mx: float, step: float, fmt: Callable) -> void:
 	var top := HBoxContainer.new()

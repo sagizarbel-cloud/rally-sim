@@ -858,7 +858,27 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   road book's 1-6). The lever is a design speed that VARIES along the stage, which is what real
   roads have. Full numbers in `CHANGELOG.md` 2026-08-28.
 - [ ] D4 — Chunked terrain, streaming and LOD — **BUILT AND PROBE-VERIFIED 2026-08-30. ONE ITEM
-  OPEN: the hiccups.** Everything else in the D4 checklist passed the drive on 2026-08-31. The open
+  OPEN: the hiccups — DIAGNOSED 2026-11-12, AWAITING A DRIVE TO CONFIRM.**
+  **THE TEST THIS ENTRY ORIGINALLY PROPOSED DOES NOT WORK, and it was checked before the user spent
+  a drive on it.** "Drive out, turn round, come back; the LRU cache makes the second pass create
+  almost nothing" was false: measured, the return pass rebuilt **101% of the outbound**. Two causes,
+  both now measured:
+  (a) `cache_max` was a hard-coded **256 — smaller than the live set it backs** (338 chunks at the
+  default budget), so it could never hold the ground behind you. It is now DERIVED as 4x the
+  resident budget (the measured knee: 256 -> 101% rebuilt, 1024 -> 38%, 2048 -> 30% while the cache
+  self-limits at ~1155), which costs about +24 MB.
+  (b) **68% of all chunk churn is a tile being rebuilt at a DIFFERENT LOD, not new ground arriving**
+  (1553 LOD changes against 739 new tiles over a 1200 m out-and-back). The cache is keyed
+  (x, z, lod), so the same ground at a new detail is a miss by construction — which is the deeper
+  reason a return pass can never be free while three LOD levels exist.
+  **RULED OUT, so nobody re-tries it:** more LOD hysteresis. At 1, 2 and 3 chunk spans the total
+  build count is 1148 / 1164 / 1160 — flat. The transitions are not band-edge dithering; they are
+  genuine, so widening the band cannot remove them. The remaining lever is FEWER LOD LEVELS, which
+  changes how the stage looks and is therefore the driver's call.
+  **The drive test is now:** open `[J]` and drive a stretch. The overlay reports resident chunks,
+  the cache, and **worst build ms**. If a hiccup coincides with a spike in `worst build ms` it is
+  CPU build cost; if the overlay stays calm through a hiccup it is GPU upload on first draw, which
+  no CPU timing can see and which points at the LOD-level count. Everything else in the D4 checklist passed the drive on 2026-08-31. The open
   item is *"the feel is that the game has hiccups sometimes"* with no fps drop; the hypothesis is
   chunk mesh creation (26.6 ArrayMeshes/s, GPU upload on first draw) and it **cannot be settled
   headless — headless has no GPU**. The test is a minute of driving: go down a stretch, turn round,

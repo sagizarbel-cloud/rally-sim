@@ -26,6 +26,7 @@ class_name SurfaceEffects
 
 var car                              # untyped so get_wheels() resolves dynamically
 var stage                            # RallyStage: grip_at() + _surface_color()
+var stage_area                       # StageArea (SHAKEDOWN) - streaming stats for the [J] overlay
 
 # --- slip, shared by every layer ----------------------------------------------------------
 @export var slip_ref := 6.0          # m/s of contact-patch slip for a full-intensity effect
@@ -205,6 +206,22 @@ func _update_perf() -> void:
 		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
 		String.num_uint64(int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME))),
 		live, "ON" if enabled else "OFF"]
+	# SHAKEDOWN's streamer, on the same overlay as draw calls and primitives, because the resident
+	# chunk budget is what moves those two. `chunks n/N` is what you GOT against what you ASKED for
+	# on the Tab slider - they part company at the low end, where the collidable disc alone fills
+	# the budget. Only shown when chunks actually exist, so the legacy map is not given a line of
+	# zeros.
+	_perf.text += _stream_line()
+
+func _stream_line() -> String:
+	if stage_area == null or stage_area.chunks == null:
+		return ""
+	var st: Dictionary = stage_area.chunks.stats()
+	if int(st["live"]) <= 0:
+		return ""
+	return "\nchunks %d/%d resident   %d collidable   peak %d   cached %d\nsolid %.0f m   detail %.0f m   view %.0f m   worst build %.1f ms" % [
+		int(st["live"]), int(st["budget"]), int(st["colliders"]), int(st["peak"]), int(st["cached"]),
+		float(st["r_solid"]), float(st["r_detail"]), float(st["r_view"]), float(st["worst_finalise_ms"])]
 
 func _find_sun() -> DirectionalLight3D:
 	var p := get_parent()

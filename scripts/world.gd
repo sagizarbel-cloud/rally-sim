@@ -122,6 +122,9 @@ func _build_effects(car: Node3D, stage) -> void:
 	add_child(fx)
 	fx.car = car
 	fx.stage = stage
+	# The [J] performance overlay reports the stage streamer's residency alongside draw calls and
+	# primitives, because those are the numbers the chunk budget moves. Built after the stage area.
+	fx.stage_area = _stage_area
 
 func _build_sound(car: Node3D, stage) -> void:
 	var snd: Node = load("res://scripts/sound.gd").new()

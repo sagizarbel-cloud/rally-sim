@@ -20,6 +20,57 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-12 (D4's hiccup test could not have worked; the retire cache was smaller than the live set)
+
+Picking the project back up after a two-month pause. The tree was left dirty mid-flight, with ~60
+lines of instrumentation aimed at D4's one open item - the reported hiccups. Finished and committed
+that work, then used it to check the TEST before spending a drive on it. The test was broken.
+
+**§9's proposed discriminator was false.** It said: drive out, turn round, come back; the LRU cache
+makes the second pass create almost nothing, so smooth-on-return means it IS chunk creation.
+**Measured: the return pass rebuilt 101% of the outbound.** The user would have driven a minute and
+learned nothing. Two causes, both measured:
+
+**1. `cache_max` was a hard-coded 256 - smaller than the live set it exists to back** (338 chunks at
+the default budget). Its own comment claimed "coming back costs nothing", which was simply untrue.
+It is now DERIVED as 4x the resident budget, which is where the measured knee is:
+
+| cache_max | return pass rebuilds | memory | cached |
+|---|---|---|---|
+| 256 (shipped) | **101% of outbound** | 156 MB | 256 |
+| 1024 (now derived) | **38%** | 180 MB | 1024 |
+| 2048 | 30% | 251 MB | self-limits at ~1155 |
+
+x4 is most of the benefit for about a third of the extra memory, and the cache IS the memory ceiling
+§5 probe 2 cares about, so it is deliberately not "as big as possible". This was also a
+"derive bounds, never pick them" violation sitting in plain sight.
+
+**2. 68% of all chunk churn is a tile being rebuilt at a DIFFERENT LOD, not new ground arriving** -
+1553 LOD changes against 739 new tiles over a 1200 m out-and-back. The cache is keyed (x, z, lod),
+so the same ground at a new detail is a miss **by construction**. That is the deeper reason a return
+pass can never be free while three LOD levels exist, and no cache size fixes it.
+
+**RULED OUT by measurement, so nobody re-tries it: more LOD hysteresis.** At 1, 2 and 3 chunk spans
+the total build count is **1148 / 1164 / 1160 - flat**. The transitions are not band-edge dithering,
+they are genuine detail changes as the car drives past ground, so widening the band cannot remove
+them. The knob was reverted rather than shipped: a tunable that measurement says does nothing is
+worse than no tunable.
+
+**What the drive test is now:** open `[J]` and drive a stretch. The overlay reports resident chunks,
+cache size and **worst build ms**. A hiccup that coincides with a spike in `worst build ms` is CPU
+build cost; a hiccup while the overlay stays calm is GPU upload on first draw - which no CPU timing
+can see, and which points at the LOD-level count as the remaining lever. Fewer LOD levels changes
+how the stage looks, so that one is the driver's call rather than a measurement's.
+
+**Also committed, from the mid-flight work:** `stage_max_chunks` (resident chunk budget, Tab slider
+with the measured saturation curve in its HELP: 128 -> 162 chunks, 256 -> 338, 512 -> 538,
+1024 -> 593, saturating at both ends), the `[J]` overlay's streaming line, and a `tuning_panel.gd`
+banner-height fix - the banner is now reserved at the height of the longest HELP text, because a
+banner that grows when a long explanation arrives pushes every row below it down, which moved the
+hovered row out from under the cursor and flipped the banner every frame.
+
+---
+
 ## 2026-09-05 (D6) — the road stops being one surface, and the berm was on the wrong side of every corner
 
 **Phase D6 built and probe-verified; awaiting a drive verdict.** The stage's surface is now a

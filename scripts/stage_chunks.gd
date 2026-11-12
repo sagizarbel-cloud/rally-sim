@@ -70,7 +70,23 @@ var _have_prev := false
 ## first time. A hidden MeshInstance3D keeps its mesh resident, so coming back costs nothing.
 var _cache: Dictionary = {}               ## Vector3i(kx, kz, lod) -> record
 var _cache_order: Array = []              ## least-recently-used first
-var cache_max := 256
+## DERIVED from the resident budget, not picked. It was a hard-coded 256 - SMALLER than the live
+## set it is meant to back (338 chunks at the default budget), so it could never hold the ground
+## behind you and its own comment above ("coming back costs nothing") was simply untrue.
+##
+## MEASURED 2026-11-12 over a 1200 m out-and-back, each run from a cold cache:
+##     cache 256  -> the return pass rebuilds 101% of the outbound, 156 MB
+##     cache 1024 -> 43%, 195 MB
+##     cache 2048 -> 30%, 271 MB, and the cache self-limits at ~1155 (the real working set)
+## x4 the resident budget lands on 1024 at the default, which is most of the benefit for about a
+## third of the extra memory. The cache is the memory ceiling §5 probe 2 cares about, so this is
+## deliberately not "as big as possible".
+##
+## WHAT DOES NOT HELP, so nobody re-tries it: more LOD hysteresis. Measured at 1, 2 and 3 chunk
+## spans the total build count is 1148 / 1164 / 1160 - flat. The LOD changes are not band-edge
+## dithering, they are genuine transitions as the car drives past ground, so widening the band
+## cannot remove them. 68% of all churn is a tile being rebuilt at a different detail.
+var cache_max := 1024                     ## set by _derive() from chunk_budget; see above
 var _cache_hits := 0
 var _band: Dictionary = {}
 var _band_built := false
@@ -137,6 +153,10 @@ func _derive() -> void:
 	## normal discontinuity showing as a crease along every seam. At `build_budget_ms` per tick, one
 	## chunk takes t_chunk seconds of wall time; the car covers v_max * t_chunk in that time. The
 	## radius must cover one whole chunk beyond that, because the car enters a chunk at its edge.
+	# The retire cache scales with the resident budget: it exists to hold the ground just behind
+	# you, and "how much ground is around you" is exactly what chunk_budget sets. x4 is the measured
+	# knee - see cache_max's own comment for the sweep and for what does NOT work.
+	cache_max = int(maxf(chunk_budget, 1.0) * 4.0)
 	var verts := float(chunk_cells + 3) * float(chunk_cells + 3)
 	var work_s: float = verts * _us_per_vertex * 1e-6
 	var ticks_needed: float = work_s / maxf(build_budget_ms * 1e-3, 1e-6)

@@ -116,6 +116,10 @@ class_name VehicleM2
 # is the one dial: raise it and the ground streams further ahead but the worst frame grows; lower it
 # and frames get calmer while the ground is built closer to the car.
 @export var stage_chunk_budget_ms := 1.0 # STAGE: ms per tick the stage may spend building ground
+# D4: how many chunks may be RESIDENT at once - the streamer's draw-call share, and the one number
+# that says how much ground exists around you. The far field's width derives from it. Exposed for
+# performance runs: sweep it and watch the streaming line on the HUD and the frame cost move.
+@export var stage_max_chunks := 256.0    # STAGE: resident chunk budget on SHAKEDOWN
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;
