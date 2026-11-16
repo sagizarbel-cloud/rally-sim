@@ -81,6 +81,12 @@ func _ready() -> void:
 	_build_reactive_patch(car, stage)
 	_build_area_manager(car, stage)               # D5: the tunnel between the two areas
 	_build_sound(car, stage)
+	# TEMPORARY D4 hiccup instrumentation - delete with scripts/probe_framelog.gd. Always armed, so
+	# it captures the run however the game was started.
+	var _fl: Node = load("res://scripts/probe_framelog.gd").new()
+	_fl.area = _stage_area
+	_fl.car = car
+	add_child(_fl)
 
 func _physics_process(delta: float) -> void:
 	if _car == null:
