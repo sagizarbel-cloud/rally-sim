@@ -24,7 +24,7 @@ migration early; it has its own prompt and its own prerequisite.
 | phase | state |
 |---|---|
 | D1, D2, D3, D5 | done, drive-verified |
-| D4 streaming | accepted 2026-08-31 with one item open: *"the game has hiccups sometimes"*. **Root causes found and fixed 2026-11-16; one confirmation drive is owed** |
+| D4 streaming | **done** - its last item, the hiccups, closed on the drive 2026-11-16 (*"i think it looks better"*; the frame log blamed nothing on the streamer) |
 | D6 mixed surfaces | driven 2026-11-16: three of four items pass. The tyre-AUDIO half of the fourth is untested and cannot be judged until the tyre audio itself is fixed (bug run) |
 | D7 ruts | open, optional, first to cut |
 | D8 bake / prune / end-to-end | open — closes Arc D |
@@ -36,97 +36,18 @@ commit: **stage files by name, never `commit -a`, and `git log --oneline -3` bef
 
 ---
 
-## STEP 1 — close D4's open item (needs the driver for about four minutes)
+## STEP 1 — close D4's open item: DONE 2026-11-16
 
-### What the hiccups were
+The confirmation drive happened: *"i think it looks better"*, and the frame log (27 late frames in
+6536, 107 s on SHAKEDOWN) blamed no burst on the streamer's scan or finalise. D4 is ticked in §9,
+the verdict is in `CHANGELOG.md`, and the frame logger, its report script and the equivalence
+probe were removed. **They are in git at commit c7b5a3d** if a before/after is wanted around the
+Godot 4.6 migration - restore `scripts/probe_framelog.gd`, `tools/framelog_report.py` and the
+six-line block at the end of `world.gd _ready()`. The log's one new finding, a 150 ms Jolt step
+stall ~6.6 s after arriving on the stage, is on the after-arc fix list beside the arrival freeze.
 
-Not GPU upload of new chunk meshes, not the LOD count, not the retire cache. They were the
-streamer's own **bookkeeping**, on the main thread, inside the physics tick
-(`scripts/stage_chunks.gd`):
-
-1. **An idle streamer cost more than the car.** `update()` re-scanned 338 resident chunks and 1521
-   view-window cells on every tick with no job in flight: 4.3 ms of every 16.7 ms frame with the
-   car PARKED on the stage, and 2.25 ms on the LEGACY map, where nothing can ever be wanted.
-2. **The measured vertex cost tracked the mix of chunks being built, not the machine**, so the
-   derived radii swung (`r_solid` 65–100 m) about twice a second, and every swing re-marked the
-   whole far-field band — about 4 ms inside one physics tick. That made 8–10 ms ticks five times a
-   second during the fill after `[B]`, which is *"worst in the first 20 sec"*.
-
-Both are fixed, and the first fix is **proved to be the same streamer** — 5500 calls along a driven
-path, 0 differences from the old per-tick scan. Numbers, method and the before/after table are in
-`CHANGELOG.md` 2026-11-16. **What is NOT established is that this is everything the driver feels**:
-the self-test parks the car, so the at-speed case is inferred. One drive settles it.
-
-### The drive
-
-A temporary frame logger is committed and always armed: `scripts/probe_framelog.gd`, wired at the
-end of `world.gd _ready()`. It never runs headless, so `./check.sh` cannot disturb a log.
-
-1. **Launch the game so its window comes to the FRONT.** A window opened behind another app is not
-   vsynced and macOS throttles it; a run started that way is unreadable (this cost a whole drive).
-   Run this in the background — it returns when the driver quits:
-   ```bash
-   open -n -W -a /Applications/Godot.app --args --path /Users/sgyzrbl/rally-sim
-   ```
-2. **Ask the driver to:** press `[B]` to SHAKEDOWN and drive away at once (the first 20 s is the
-   part they reported), drive a few minutes at speed, stop and turn round once, drive back, and
-   quit normally. Nothing else is needed — every key and pad button is logged as an event.
-3. **Read it:**
-   ```bash
-   ls -t ~/Library/Application\ Support/Godot/app_userdata/Rally\ Sim\ \(M0\)/framelog-*.csv | head -1
-   ```
-   ```bash
-   python3 tools/framelog_report.py "<that file>"
-   ```
-   The report gives what a normal frame costs per system, pacing by speed, and — the part that
-   matters — every burst of late frames with the **section and system that caused it**, then a
-   *BY CAUSE* table.
-
-### What to do with the answer
-
-| the report blames | meaning | next move |
-|---|---|---|
-| nothing on the streamer, and the driver calls it smooth | **done** | close the item (below) |
-| `the STREAMER … PRIME after a teleport` | the known ~0.21 s freeze on arriving at the stage | already on the after-arc fix list; not this item |
-| `the STREAMER … scan` or `finalise` | what is left of the streamer's own spikes: a scan is ~1.7 ms, only when the car has entered a new lattice cell AND a job has just finished; a full-detail chunk's finalise is unsliced | make the scan cheaper (walk the band's cells instead of the window) or make finalise resumable — and re-run the equivalence probe |
-| `draw: blocked in present with no extra CPU work` at speed, with a high particle count | GPU-bound: plume overdraw, the mirror's second render of the scene, or a Retina-size window | A/B with `[G]` (effects off) and windowed vs fullscreen before changing anything |
-| `draw: N pipeline(s) compiled` | first use of a shader variant mid-drive | pre-warm that material at load |
-| `physics: vehicle_m2` or `jolt step` | the car itself — usually off the road or against a bank | look at what the car was doing; this is not D4 |
-| `window focus`, `after draw`, `CPU itself slow` | the OS: a focus change, the event pump, the thread descheduled | tell the driver; it is not the game |
-| no late frames at all, but the driver still feels it | the 25 ms threshold is too coarse for what they feel | ask WHERE and WHEN, and look at the 18–25 ms band in the log |
-
-**To close the item:** tick D4 in §9 with the driver's words, add the verdict to `CHANGELOG.md`,
-then remove the instrumentation — `git rm scripts/probe_framelog.gd scripts/probe_framelog.gd.uid
-tools/framelog_report.py tools/probe_streamer_equivalence.gd`, delete the marked block at the end
-of `world.gd _ready()` — run `./check.sh`, commit, push. (If a before/after is wanted around the
-Godot 4.6 migration, the logger can be restored from git history.)
-
-### Do not reach for these — each was measured or reasoned out
-
-- **Cutting a LOD level.** The driver offered it *if it were the limiting factor*. It is not: the
-  scan cost the same with one level. Every tile is still built about twice (LOD 4, then 2, then 1)
-  and that is real build load, but it is not what hitched.
-- **A rescan timer** ("every N ticks"). It makes the ground late by a TIME, which at speed is a
-  distance the lead-distance derivation knows nothing about. The scan is keyed on the lattice
-  cell the car is in — a distance — for that reason.
-- **Widening the 20% re-derive band** to calm the radii. That hides the wobble and leaves the lead
-  wrong. The estimator now samples only full-detail, fully-searched chunks.
-- **More LOD hysteresis.** Flat at 1, 2 and 3 spans (1148 / 1164 / 1160 builds).
-- **Spreading `prime()` over several ticks.** The car is already there; late ground under a car is
-  a fall through the world.
-
-### Measuring without the driver
-
-The logger has a self-test, which is how the fix was measured before anyone was asked to drive:
-`RS_FRAMELOG=/abs/out.csv RS_FRAMELOG_STAGE=1 RS_FRAMELOG_STALL=40` in front of the Godot binary
-with `--path . --quit-after 1900` parks the car on SHAKEDOWN two seconds in and blocks the main
-thread for 40 ms every 4 s, so both the steady cost and the recovery from a hitch can be read.
-`tools/probe_streamer_equivalence.gd` is the call-for-call comparison against the old per-tick
-scan: copy it to the project root as `_probe_tmp.gd`, run
-`godot --headless --path . --script res://_probe_tmp.gd`, read the `PROBE` lines, delete the copy.
-**If you change `update()`, `_scan()` or `_next_job()`, it must still print 0 differences.**
-
----
+The streamer's do-not-retry list (no LOD cut, no rescan timer, no wider re-derive band, no more
+LOD hysteresis, no spreading `prime()` over ticks) lives in §9's D4 entry.
 
 ## STEP 2 — the bug-cleaning run
 
@@ -197,7 +118,7 @@ and unblocked today).
 - **Derive bounds, never pick them**, with the derivation in a comment — and name the tempting
   wrong fix beside it, because the next session will reach for it.
 - **Temporary probes live in the scratchpad**, are copied under `res://` only for the seconds a run
-  needs them, and are deleted. The frame logger is the exception while D4's item is open.
+  needs them, and are deleted.
 - **A height-field probe cannot see a mesh artefact** — screenshot it; a windowed run can
   photograph itself.
 - **A synthetic autopilot is not a driver.** Defer a feel measurement to the drive.
@@ -210,5 +131,5 @@ and unblocked today).
 
 ## Suggested opening move
 
-Tell the driver in two lines what was found and fixed, launch the game in front, and ask for the
-four-minute drive in step 1. Everything else waits on that verdict.
+Step 1 is done. Open step 2: put the bug list to the driver and agree an order, starting with the
+tyre audio so D6 can close.
