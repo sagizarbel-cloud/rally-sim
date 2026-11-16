@@ -20,6 +20,189 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-16 (the hiccups were the streamer's own bookkeeping - and D6's drive verdicts)
+
+Grep words: *hiccups*, *micro-stutter with no fps drop*, *stutter worst in the first 20 seconds
+after [B]*, *judder at speed on SHAKEDOWN*, *game stutters when another window is in front*,
+*frame-time spike*, *late frame*, *chunk radius wobbling*.
+
+**D4's one open item - "the game has hiccups sometimes", no fps drop, "worst in the first 20 sec" -
+has a measured cause and a fix. Awaiting one drive to confirm; feel cannot be verified here.**
+It was not GPU upload of new chunk meshes (the 2026-08-31 hypothesis), not the number of LOD
+levels, and not the retire cache (2026-11-12). It was main-thread work the streamer did on ticks
+when it had nothing to build.
+
+### How it was finally seen: cut the frame into what the engine executes
+
+Three drives had been logged with one number per frame, the engine's `delta`. That says WHEN a
+frame was long and never WHERE the time went, and it turned out to be wrong in two ways besides:
+`delta` is **clamped at 8 physics steps (66.7 ms)**, so a 70 ms stall and a 300 ms one logged the
+same; and `Performance.TIME_PHYSICS_PROCESS` is the **worst tick of the last SECOND**, republished
+once a second, which had been read as a per-frame figure.
+
+`scripts/probe_framelog.gd` (temporary) now times each frame on the wall clock in the engine's own
+sections - **idle scripts | pre | draw (render and the vsync wait) | post | physics ticks** - and
+splits the script time PER SYSTEM by slotting marker nodes between the world's children (equal
+priority means tree order, so a marker after system X runs after X and its subtree; the log
+records zero order violations). Beside that: the five `PIPELINE_COMPILATIONS_*` counters, the
+viewport's measured render time, window focus, every key and pad button as an event line, and a
+fixed calibration loop timed each frame (if the same loop takes 3x longer, the CPU itself slowed).
+`tools/framelog_report.py` reads the log and blames each late frame on a section and a system.
+
+**What a normal frame costs on this machine (M1 Air, 60 Hz, 1280x720 window), in ms of 16.7:**
+
+| | legacy map | SHAKEDOWN |
+|---|---|---|
+| physics, 2 ticks | 2.36 | 4.01 |
+| - the car (`vehicle_m2`) | 1.49 | 2.40 |
+| - `time_trial` | 0.07 | 0.71 |
+| - effects | 0.36 | 0.42 |
+| - Jolt's own step | 0.31 | 0.32 |
+| `_process` scripts (`pace_notes` alone is 0.40-0.43) | 0.74 | 1.01 |
+| between scripts and draw | 1.72 | 0.64 |
+| render CPU | 1.03 | 1.27 |
+
+(Those are AFTER the fix and with the car PARKED - a baseline, not a driving figure. Everything
+else in the frame is the vsync wait.)
+
+### Defect 1 - an idle streamer cost more than the car
+
+`StageChunks.update()` re-asked the whole question on every tick that had no job in flight: walk
+all 338 resident chunks for unloads, then all 1521 cells of the view window for wants. Measured in
+the running game, per frame:
+
+| state | streamer before | after |
+|---|---|---|
+| car PARKED on the start line, nothing left to build | **4.32 ms** | 0.01 |
+| far field filling after `[B]` | 4.80 | 2.22 |
+| car on the LEGACY map, where no chunk can be wanted | **2.25 ms** | 0.01 |
+
+So a quarter of every frame went on confirming nothing had changed, on both maps - the calibration
+bed had been paying 2.25 ms a frame for a stage it was 3 km away from since D4 landed. And it was
+backwards under load: a late frame runs up to 8 catch-up ticks, and each one re-ran the scan.
+
+**Fix:** what should be built or dropped is a function of two things only - which chunks are
+resident, and where the car is. So it is asked once per LATTICE CELL the car stands in (1.4 m, the
+ground's own resolution) and kept as a sorted work list and a drop list; the ticks that follow take
+the next entry. A car out of reach of the area skips the question (exact: past
+`max(r_view, 2 r_detail + span) + span` from the area box `lod_for()` answers 0 for everything).
+View-window cells that are neither near the car nor on the road band - about 1000 of the 1521 -
+are settled by one dictionary lookup before any distance is computed, which took a scan from
+2.43 ms to 1.69.
+
+**Proved to be the same streamer, not a similar one.** New against the old per-tick scan (fed the
+same cell-centre position), compared call for call along a driven path - parked, pulling away,
+40 m/s, 100 m off the road and back, stopped, turned round, flat out at 66 m/s, a 2 km teleport:
+**5500 calls, 1676 chunks built, 502 restored from the cache, 0 differences** in the resident set,
+LODs, colliders or cache order. 1023 scans instead of 5500. It works because a chunk's priority
+depends only on its OWN state and distance, so the list IS what a rescan from the same cell would
+choose, in the same order (ties keep scan order: the sort key is priority in micrometres above the
+scan index).
+
+### Defect 2 - the measured vertex cost tracked the MIX of chunks, not the machine
+
+`_derive()` turns `_us_per_vertex` into the lead distance. It was fed
+`max(this chunk's average, previous * 0.98)` over EVERY chunk. Off-road chunks cost ~1 us/vertex
+and road chunks ~12, so eleven cheap chunks decayed it 20% and the next road chunk snapped it
+back. Measured over a 5 s park and 1500 m at 30 m/s:
+
+| | before | after |
+|---|---|---|
+| re-derives | **131** (2.4 a second) | 1 |
+| `r_solid` | 65-100 m (72-103 m in the game) | 77-86 m |
+| `r_detail` | 130-200 m | 155-172 m |
+| corridor band re-marked | **130 times, 3.9 ms each** | once |
+| streamer calls over 3 ms | 528 of 6600 | 129 |
+| worst streamer call | 9.3 ms | 6.1 ms |
+
+EVERY re-derive re-marked the whole far-field band - 218 centreline samples and ~18,000 dictionary
+writes inside one physics tick - and about every other one also moved the band's edge by a whole
+chunk row (4% more chunks built over the probe than with the radii held still). In the game a
+frame that carries a re-mark shows a 5.5-7 ms scan against 2.0-2.2 without, which made **8-10 ms
+physics ticks about five times a second during the fill after `[B]`** (24 re-derives in the 5 s
+fill) and about twice a second while driving (104 in 50 s at 30 m/s). That is the shape of the
+report.
+
+**Fix:** only the kind of chunk the lead distance is ABOUT may move the figure - full detail, every
+vertex paying the search (`sample_at()` marks the ones that did not with `StageArea.OFF_CORRIDOR`,
+so the job already knows) - and the figure is the worst cost seen TWICE among the last five of
+those: once could be a build the OS interrupted, twice is the machine. The band is re-marked only
+when its reach in whole chunks changes, which is exact - it is marked in whole chunks.
+
+**This also explains a 2026-09 entry.** The chunk-budget sweep "reported ~1500 chunks at EVERY
+budget" when run headless, was written off as "streaming numbers are only meaningful in the
+configuration that renders", and the vertex cost was noted "swinging between 4.6 and 22.5 us".
+That was this estimator. Headless sweeps now separate cleanly: budget 128 → 138 resident chunks,
+256 → 337, 512 → 562, 1024 → 592 (the Tab HELP text quotes these now; 256 and 1024 are unchanged
+from the windowed sweep, the two in between had been measured mid-wobble).
+
+### The same self-test, before and after, in the running game
+
+Physics per frame (streamer's share), then the worst single physics tick, in ms:
+
+| state | before | after |
+|---|---|---|
+| legacy map, parked | 4.55 (2.25), worst 3.62 | **2.36 (0.01), worst 1.59** |
+| far field filling | 8.53 (4.80), worst 10.28 | **5.54 (2.22), worst 5.29** |
+| parked on the stage | 8.14 (4.32), worst 4.81 | **4.00 (0.01), worst 3.69** |
+
+The fill after `[B]` takes 3.9 s instead of 5.0. A deliberate 40 ms block of the main thread now
+costs a 47-56 ms frame instead of 61-73, because the catch-up ticks behind it are cheaper.
+
+### What was wrong in the earlier readings - mine included
+
+- **"The hitches track the first ~40 s of a session, even on the legacy map."** No. The game had
+  been launched from a shell BEHIND another app. A covered window is not vsynced: that run
+  free-ran at ~137 fps for 28 s, and the long frames in it were the window being brought forward.
+  **Launch it so it comes to the front** (`open -n -a /Applications/Godot.app --args --path ...`),
+  and the logger now records focus so a run like that is flagged rather than analysed.
+- **Losing focus mid-run is its own hitch, and it is the OS.** One self-test lost focus by
+  accident: 50-60 ms frames at the switch, then a **638 ms frame with 557 ms of it blocked in
+  present**, then several frames of 8 catch-up ticks with the calibration loop running 2-3x slow.
+  Bursts of long frames at 0-20 km/h at the END of two of the driven runs are probably this - the
+  driver stopping to quit - but that is a guess; the new log's focus and key events will say.
+- **"It was chunk creation, confined to the first 20 s."** Stated after the second drive and not
+  supported: the same analysis by session time shows the hitch rate does not follow the rate chunk
+  meshes are created (0 late frames per 1000 across a minute that built 562 meshes).
+- **A whole measured drive was destroyed by the compile gate.** The logger was default-on to one
+  fixed path, and `./check.sh` runs the game headless for 60 frames - so the gate truncated the
+  second drive's log, and the "backup" taken afterwards was a copy of the wreckage. The logger now
+  refuses to run headless and never writes the same file twice. Only that run's printed analysis
+  survives.
+
+### Not claimed, and still open
+
+- Whether this is everything the driver feels. A parked self-test cannot drive, so the at-speed
+  case is inferred from per-tick costs. **The drive decides**, and the report will name whatever is
+  left - the streamer's remaining spikes are a scan (1.7 ms, only when the car has moved to a new
+  cell AND a job has just finished) and a full-detail chunk's finalise.
+- Every tile on the path is still built about twice (1.99 builds per tile with steady radii),
+  arriving at LOD 4, then 2, then 1. The 2026-11-12 "68% of churn is a different LOD" finding
+  stands. The driver offered to cut a LOD level *if it were the limiting factor*; it is not, so it
+  was not cut.
+- Arriving on SHAKEDOWN - `[B]` or the tunnel - freezes for **208-215 ms**: `prime()` builds the
+  16-chunk collidable shell in one tick and ignores the retire cache. On the after-arc fix list.
+- No pipeline was compiled after startup in any self-test (counters flat at canvas 4, surface 24,
+  draw 0; only background specializations moved),
+  but those runs raised no dust or smoke. The drive log will show whether first use of an effect
+  compiles one.
+
+### D6 drive verdicts (2026-11-16) - three of four pass
+
+- Gravel over tarmac mid-corner: *"is felt (i dont think before i see it, not sure what you meant
+  here)"*. **Pass.** The "before you see it" wording was badly posed and is withdrawn - the patch is
+  drawn in its own colour, so it is seen first. What was meant: the grip change arrives through
+  the car and would be noticed by a driver not looking for it.
+- Audio and dust change with the surface: *"wasn't tested enough but dust seems good"*. Dust
+  provisionally good; **audio open**, and it cannot be judged until §6b's "tyre audio only fires on
+  the handbrake" is fixed, so it rides with the bug run.
+- Tarmac sections change how you drive them: *"tarmac does change the driving feel"*. **Pass.**
+- Corner berm now on the outside: *"is better we will need to tweak it for a more precise
+  generation - add this item"*. **Better**; added to the after-arc fix list with the warning that
+  the ridge is about one lattice vertex wide, so tuning its numbers cannot make it precise.
+
+---
+
 ## 2026-11-12 (D4's hiccup test could not have worked; the retire cache was smaller than the live set)
 
 Picking the project back up after a two-month pause. The tree was left dirty mid-flight, with ~60

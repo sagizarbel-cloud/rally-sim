@@ -858,32 +858,69 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   road book's 1-6). The lever is a design speed that VARIES along the stage, which is what real
   roads have. Full numbers in `CHANGELOG.md` 2026-08-28.
 - [ ] D4 — Chunked terrain, streaming and LOD — **BUILT AND PROBE-VERIFIED 2026-08-30. ONE ITEM
-  OPEN: the hiccups — DIAGNOSED 2026-11-12, AWAITING A DRIVE TO CONFIRM.**
-  **THE TEST THIS ENTRY ORIGINALLY PROPOSED DOES NOT WORK, and it was checked before the user spent
-  a drive on it.** "Drive out, turn round, come back; the LRU cache makes the second pass create
-  almost nothing" was false: measured, the return pass rebuilt **101% of the outbound**. Two causes,
-  both now measured:
-  (a) `cache_max` was a hard-coded **256 — smaller than the live set it backs** (338 chunks at the
-  default budget), so it could never hold the ground behind you. It is now DERIVED as 4x the
-  resident budget (the measured knee: 256 -> 101% rebuilt, 1024 -> 38%, 2048 -> 30% while the cache
-  self-limits at ~1155), which costs about +24 MB.
-  (b) **68% of all chunk churn is a tile being rebuilt at a DIFFERENT LOD, not new ground arriving**
-  (1553 LOD changes against 739 new tiles over a 1200 m out-and-back). The cache is keyed
-  (x, z, lod), so the same ground at a new detail is a miss by construction — which is the deeper
-  reason a return pass can never be free while three LOD levels exist.
-  **RULED OUT, so nobody re-tries it:** more LOD hysteresis. At 1, 2 and 3 chunk spans the total
-  build count is 1148 / 1164 / 1160 — flat. The transitions are not band-edge dithering; they are
-  genuine, so widening the band cannot remove them. The remaining lever is FEWER LOD LEVELS, which
-  changes how the stage looks and is therefore the driver's call.
-  **The drive test is now:** open `[J]` and drive a stretch. The overlay reports resident chunks,
-  the cache, and **worst build ms**. If a hiccup coincides with a spike in `worst build ms` it is
-  CPU build cost; if the overlay stays calm through a hiccup it is GPU upload on first draw, which
-  no CPU timing can see and which points at the LOD-level count. Everything else in the D4 checklist passed the drive on 2026-08-31. The open
-  item is *"the feel is that the game has hiccups sometimes"* with no fps drop; the hypothesis is
-  chunk mesh creation (26.6 ArrayMeshes/s, GPU upload on first draw) and it **cannot be settled
-  headless — headless has no GPU**. The test is a minute of driving: go down a stretch, turn round,
-  come back. The LRU cache makes the second pass create almost nothing, so smooth means it IS chunk
-  creation (fix: fewer LOD levels) and identical means it is not. `scripts/stage_chunks.gd` replaces `StageArea._build()`. The stage is now
+  OPEN: the hiccups — ROOT CAUSES FOUND AND FIXED 2026-11-16, AWAITING ONE DRIVE TO CONFIRM.**
+  **WHAT THE HICCUPS WERE** (measured in the running game with a per-system frame logger, not
+  inferred): not GPU upload of new meshes and not the number of LOD levels. They were the
+  streamer's own BOOKKEEPING, on the main thread, inside the physics tick:
+  (1) **An idle streamer cost more than the car.** `update()` re-scanned 338 resident chunks and
+  1521 view-window cells on every tick with no job in flight. Per 16.7 ms frame: **4.34 ms with
+  the car PARKED on the start line and nothing left to build** (the car's own physics: 2.29),
+  4.80 ms while the far field filled, and **2.25 ms on the LEGACY map**, where no chunk can ever
+  be wanted. A late frame runs up to 8 catch-up ticks and each one re-ran it.
+  (2) **The measured vertex cost tracked the MIX of chunks being built, not the machine.**
+  `max(sample, previous * 0.98)` over every chunk: off-road chunks cost ~1 us/vertex, road chunks
+  ~12, so a run of cheap ones decayed it 20% in eleven chunks and the next road chunk snapped it
+  back. **131 re-derives in 55 s of driving; r_solid swinging 65–100 m (72–103 m in the game)** and
+  r_detail with it. EVERY re-derive re-marked the whole far-field band (**~4 ms in one physics
+  tick**) and about every other one moved the band's edge by a whole chunk row. In the game that
+  made 8–10 ms physics ticks about five times a second during the fill after `[B]` and about twice
+  a second while driving - which is the shape of the report: *"hiccups sometimes"*, no fps drop,
+  *"worst in the first 20 sec"*.
+  **THE FIXES** (`scripts/stage_chunks.gd`): the scan is asked once per LATTICE CELL the car
+  stands in and its answer kept as a sorted work list; a car beyond reach of the area skips the
+  question; the band is re-marked only when its reach in whole chunks changes; view-window cells
+  that are neither near the car nor on the road band are settled by one dictionary lookup; and the
+  vertex cost is taken only from the kind of chunk the lead distance is about (full detail, every
+  vertex searched), as the worst seen TWICE among the last five.
+  **PROVED THE SAME STREAMER:** new against the old per-tick scan, call for call along a driven
+  path (parked, pulling away, 40 m/s, 100 m off the road and back, stopped, turned round, flat out
+  at 66 m/s, a 2 km teleport) - **5500 calls, 1676 chunks built, 502 restored, 0 differences** in
+  resident set, LODs, colliders or cache order, with 1023 scans instead of 5500.
+  **MEASURED IN THE GAME, same self-test before and after, ms of physics per frame (streamer's
+  share), and the worst single tick:**
+  legacy map, parked: 4.55 (2.25), 3.62 → **2.36 (0.01), 1.59**;
+  far field filling: 8.53 (4.80), 10.28 → **5.54 (2.22), 5.29**;
+  parked on the stage: 8.14 (4.32), 4.81 → **4.00 (0.01), 3.69**.
+  Re-derives over the 55 s probe 131 → 1, band re-marks 130 → 1, r_solid now 77–86 m, and the fill
+  after `[B]` takes 3.9 s instead of 5.0.
+  **WHAT IS NOT CLAIMED:** that this is everything the driver feels. Feel cannot be verified here.
+  A parked self-test cannot drive, so the at-speed case is inferred from the per-tick costs.
+  **THE DRIVE TEST IS NOW:** just drive SHAKEDOWN for three or four minutes - the first 20 s after
+  `[B]`, some time at speed, one stop-and-turn-round - and quit normally. The temporary logger
+  (`scripts/probe_framelog.gd`, wired at the end of `world.gd _ready()`) writes
+  `framelog-<timestamp>.csv` to the game's user-data folder and
+  `python3 tools/framelog_report.py <that file>` names the section and system behind every late
+  frame. Close the item when the driver calls it smooth AND the report blames no burst on the
+  streamer; then delete the probe, its `world.gd` block and `tools/framelog_report.py`.
+  **NOT TO BE RE-TRIED:** (a) cutting a LOD level for this - the driver offered it IF it were the
+  limiting factor, and it is not: the scan cost the same with one level; (b) a rescan TIMER - it
+  makes the ground late by a time, which at speed is a distance the lead derivation knows nothing
+  about; (c) widening the 20% re-derive band to calm the radii - that hides the wobble and leaves
+  the lead wrong; (d) more LOD hysteresis - flat at 1/2/3 spans (1148 / 1164 / 1160 builds).
+  **STILL TRUE, AND NOT WHAT HITCHED:** every tile on the path is built about twice (1.99 builds
+  per tile even with steady radii) because it arrives at LOD 4, then 2, then 1 - the 2026-11-12
+  finding that 68% of churn is a tile rebuilt at a different detail stands. And arriving on the
+  stage freezes for **~0.21 s** (`prime()` builds the 16-chunk shell in one tick and ignores the
+  retire cache) - on the after-arc fix list.
+  **EARLIER READINGS OF THIS ITEM THAT WERE WRONG, kept so they are not reached again:**
+  2026-08-31 said GPU upload on first draw, "cannot be settled headless" - the per-system log puts
+  the time in physics scripts. 2026-11-12 fixed a real defect (`cache_max` 256 was smaller than
+  the 338-chunk live set; now 4x the resident budget, return pass 101% → 38%) but that was not the
+  hitch either. And three drive logs were then misread in turn: "hitches track the first 40 s of a
+  session" was a window launched BEHIND another app, which is not vsynced (137 fps for 28 s) plus
+  the focus changes of bringing it forward; see `CHANGELOG.md` 2026-11-16 for all of it.
+  Everything else in the D4 checklist passed the drive on 2026-08-31.
+  `scripts/stage_chunks.gd` replaces `StageArea._build()`. The stage is now
   **4779 m timed / 4905 m of road** in a 4 km box, inside §1.2's 4–6 km target.
   **THIS PHASE'S PLAN TEXT IS WRONG ON ITS CENTRAL POINT, and it was measured before any code was
   written.** §3.4 and the D4 prompt say collider cooking is the spike to design around. Building one
@@ -972,8 +1009,10 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   sense; fixed to 0.63 m, a car's ride height. Full account in `CHANGELOG.md` 2026-08-31.
   Also fixed there: the tube was buried in the hillside (car wedged between floor and terrain), and
   the approach ramp was a staircase that launched the car and pegged damage at 1.0.
-- [ ] D6 — Mixed-surface transitions — **BUILT AND PROBE-VERIFIED 2026-09-05, AWAITING DRIVE
-  VERDICT.** The road's surface is a PROFILE ALONG S, exactly as D3's placeholder note said it would
+- [ ] D6 — Mixed-surface transitions — **BUILT AND PROBE-VERIFIED 2026-09-05. DRIVEN 2026-11-16:
+  THREE OF FOUR ITEMS PASS, the audio half of one is untested and is carried to the bug run**
+  (it cannot be judged until §6b's "tyre audio only fires on the handbrake" is fixed - a sideways
+  gravel slide is silent today, so there is nothing to hear change). The road's surface is a PROFILE ALONG S, exactly as D3's placeholder note said it would
   become: `StageDef` gains the settlement parameters, `StageGen.surface_mix()` answers with ONE
   factor per position, and everything the ground map exposes - grip, road class, colour, audio - is
   interpolated from that single number, so nothing can disagree.
@@ -996,11 +1035,20 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   98-100% of ~4000 samples per seed. That **exposed a D3 bug**: `stage_area.sample_at()`'s corner
   berm used `signed * k < 0` for "outside" and had therefore been piling material on the INSIDE of
   every corner since D3, against its own comment. Fixed here.
-  **Drive checklist:**
-  - [ ] Hitting gravel-over-tarmac mid-corner is a handling event you feel before you see.
-  - [ ] Audio and dust change with the surface at the same moment the grip does.
-  - [ ] Tarmac sections mid-stage genuinely change how you drive that section.
-  - [ ] The corner berm is now on the OUTSIDE of corners — does the stage read better or worse?
+  **Drive checklist** (verdicts 2026-11-16, in the driver's words):
+  - [x] Hitting gravel-over-tarmac mid-corner is a handling event. *"the gravel over tarmac mid
+    corner is felt (i dont think before i see it, not sure what you meant here)"*. PASS on the
+    event itself. The "before you see" half was badly posed and is withdrawn: the patch is drawn
+    in its own colour, so of course it is seen first. What was meant is that the grip change
+    arrives through the car and would be noticed even by a driver who was not looking for it.
+  - [ ] Audio and dust change with the surface at the same moment the grip does. *"the audio and
+    dust wasn't tested enough but dust seems good"*. DUST provisionally good; AUDIO OPEN, blocked
+    on §6b as above.
+  - [x] Tarmac sections mid-stage genuinely change how you drive that section. *"tarmac does
+    change the driving feel"*.
+  - [x] The corner berm is now on the OUTSIDE of corners - better or worse? *"corner berm is
+    better we will need to tweak it for a more precise generation"*. BETTER; the tuning is on the
+    after-arc fix list in `docs/ROADMAP.md`.
 - [ ] D7 — Deformable ruts along the corridor (optional)
 - [ ] D8 — Bake defaults, prune, end-to-end verification
 _(the centreline abstraction that was D2 now lives in **C1.0** — see the drivetrain plan)_

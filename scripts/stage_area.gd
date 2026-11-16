@@ -154,6 +154,11 @@ func height_at(x: float, z: float) -> float:
 func _road_blend(x: float, z: float) -> float:
 	return sample_at(x, z).y
 
+## The edge distance sample_at() reports for a point that is nowhere near the road and therefore
+## never paid the nearest_point search. StageChunks reads it to tell which vertices a chunk had to
+## search for - see its cost measurement. One constant so the two files cannot disagree.
+const OFF_CORRIDOR := 999.0
+
 func sample_at(x: float, z: float) -> Vector3:
 	## (height, road blend, EDGE DISTANCE) from ONE nearest_point call.
 	##
@@ -175,7 +180,7 @@ func sample_at(x: float, z: float) -> Vector3:
 	## down to meet it over `shoulder` metres - which is where the cut and fill becomes visible.
 	var base: float = def.elevation_at(x, z)
 	if gen == null or gen.centreline == null or not near_road(x, z):
-		return Vector3(base, 0.0, 999.0)
+		return Vector3(base, 0.0, OFF_CORRIDOR)
 	var np := _nearest(x, z)
 	var lat: float = absf(float(np["lateral"]))
 	var half: float = float(np["width"]) * 0.5

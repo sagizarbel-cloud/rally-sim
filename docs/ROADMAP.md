@@ -28,6 +28,28 @@ Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt**, built pro
 
 ---
 
+## STATE AS OF 2026-11-16 - read this before the history above
+
+The paragraph above is the story of how Arc D got here and some of its "awaiting a drive verdict"
+phrases are no longer true. Current state, from `docs/PLAN-stages-ground-map.md` §9:
+
+| phase | state |
+|---|---|
+| D1, D2, D3, D5 | done, drive-verified |
+| D4 streaming | drive-accepted 2026-08-31 with ONE item open - "the game has hiccups sometimes". **Root causes found and fixed 2026-11-16** (the streamer's own bookkeeping, not the GPU and not the LOD count); awaiting one drive to confirm |
+| D6 mixed surfaces | driven 2026-11-16: three of four items pass; the tyre-AUDIO half of the fourth is carried to the bug run |
+| D7 ruts | open, optional, first thing to cut |
+| D8 bake / prune / end-to-end | open - closes the arc |
+
+**The order of work, set by the driver on 2026-11-12 and still in force:** finish D4's open item →
+**a bug-cleaning run** (the after-arc fix list below, `PLAN-stages-ground-map.md` §6b's carried
+defects, Arc C's open C2 items, B3's hydraulic bump stop) → **migrate to Godot 4.6**
+(`docs/PROMPT-godot-46-migration.md`, whose own prerequisite is a clean tree and no phase
+mid-flight) → then development continues (D7 optional, D8, Arc E). `docs/PROMPT-resume.md` is the
+hand-over prompt for a fresh session and is kept current.
+
+---
+
 ## After-arc fix list (Arc D follow-ups)
 
 Things found while driving that are REAL but deliberately not fixed mid-arc, so a phase does not
@@ -61,6 +83,32 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
 - **Corner rhythm and hairpin tightness** (D3 drive). "Corners do have rhythm but we might improve
   it in the future"; "the hairpin is tight - can be tighter in future seeds, meaning this should not
   be the limit". The lever named in D3 is a design speed that VARIES along the stage.
+- **Tune the corner berm for a more precise generation** (driver, 2026-11-16, D6 drive: *"corner
+  berm is better we will need to tweak it for a more precise generation - add this item"*). D6
+  moved the extra corner berm to the OUTSIDE of the bend, where it had been piling on the inside
+  since D3, and that reads better; what is left is its shape and placement. **ASK what "precise"
+  means before touching it** - height, where it sits relative to the edge, how consistently it
+  follows the corner, or how it scales with corner severity are four different jobs. The levers are
+  `berm_height`, `berm_corner_gain`, `berm_pos` and `berm_width` in `stage_area.sample_at()`.
+  **The tempting wrong fix is to tune those four numbers until one corner looks right**: the ridge
+  is `berm_width` 1.6 m on a 1.41 m lattice, about ONE vertex across, so its drawn shape is set by
+  where the lattice happens to fall, not by the numbers - which is the scalloping item above. A
+  berm cannot be made precise on a mesh that cannot represent it; this item and the road-aligned
+  ribbon mesh are probably one piece of work.
+- **Arriving on SHAKEDOWN freezes for about 0.2 s** (measured 208-215 ms, 2026-11-16), whether by
+  `[B]` or by driving out of the tunnel. `StageChunks.prime()` builds the whole 16-chunk collidable
+  shell in ONE tick, and it ignores the retire cache even when the same chunks are sitting in it.
+  After `[B]` nobody minds; out of the tunnel it lands in the middle of driving. Candidates:
+  restore from the cache before building, and pre-build the far mouth's shell under the normal
+  budget while the car is still in the tube. Deferred because it is D5's transition path and wants
+  its own drive verdict. **Not the fix: spreading prime() over several ticks** - the car is already
+  there, and ground that arrives late under a car is a fall through the world.
+- **Frame headroom the 2026-11-16 logger exposed** - none of these hitch, they are what a frame
+  spends before anything goes wrong (ms per 16.7 ms frame on SHAKEDOWN): the car's own physics
+  2.40 (1.49 on the legacy map - the stage's ground queries cost more), `time_trial` 0.71 (0.07 on
+  the legacy map), `pace_notes` 0.43 in `_process` on every frame on either map, and 1.7 between
+  scripts and draw on the legacy map (HUD redraw). The mirror renders the scene a second time.
+  Worth a pass before Arc E adds foliage and textures to the same budget.
 
 ---
 
@@ -123,7 +171,8 @@ Two controls identify it. **It is not aerodynamic:** with `drag_k` set to 0.0 th
 ## Arc E (sketch) — the world you SEE, and vehicle identity
 
 Sequenced by the user 2026-08-30: **finish Arc D and Arc C's open items, then a bug-cleaning run,
-then plan this.** Not a plan yet - a captured intent, so it is not lost in chat. Six items, and they
+then plan this.** (Refined 2026-11-12: the Godot 4.6 migration sits between the bug run and this -
+see "State as of 2026-11-16" above.) Not a plan yet - a captured intent, so it is not lost in chat. Six items, and they
 are NOT one arc's worth of the same kind of work:
 
 **E-a. Procedural ground texturing.** The chunk mesh already carries a per-vertex EDGE DISTANCE for

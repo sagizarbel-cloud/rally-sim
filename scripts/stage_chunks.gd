@@ -50,6 +50,22 @@ var _tick := 1.0 / 120.0
 
 # measured, and fed straight back into the lead distance
 var _us_per_vertex := 12.0
+## LIKE WITH LIKE. `_derive()` turns this into t_chunk, the time to build one FULL-DETAIL chunk whose
+## every vertex pays the nearest_point search - the worst kind, and the kind the car is about to
+## drive on. So that is the only kind of chunk allowed to move it.
+## It used to be `max(this chunk's average, previous * 0.98)` over EVERY chunk. Off-road chunks cost
+## ~1 us/vertex against ~12 on the road, so a run of cheap ones decayed the figure 20% in eleven
+## chunks and the next road chunk snapped it back: it was tracking the MIX being built, not the
+## machine. MEASURED (2026-11-16): 131 re-derives in 55 s of driving, r_solid swinging 65-100 m
+## (72-103 m in the running game) and r_detail with it. Every one re-marked the far-field band
+## (4 ms in one physics tick) and about every other one moved the band's edge by a whole chunk
+## row. That is an 8-10 ms physics tick about twice a second while driving and five times a second
+## during the fill after [B] - the "hiccups".
+## The figure is now the worst cost seen TWICE among the last few comparable chunks: once could be
+## a build the OS interrupted, twice is the machine. Do NOT "fix" a wandering radius by widening the
+## 20% re-derive band in _finalise() - that hides the wobble and leaves the lead distance wrong.
+var _cost_window := PackedFloat64Array()
+const COST_WINDOW := 5
 var _worst_build_ms := 0.0
 var _peak_chunks := 0
 var _built := 0
@@ -90,7 +106,46 @@ var cache_max := 1024                     ## set by _derive() from chunk_budget;
 var _cache_hits := 0
 var _band: Dictionary = {}
 var _band_built := false
+var _band_reach := -1      ## the reach, in whole chunks, the band was last marked with
 var band_w := 200.0        ## far-field band half-width, derived in _derive()
+
+## AN IDLE STREAMER MUST COST NOTHING, and until 2026-11-16 it cost more than the car.
+## `update()` re-asked the whole question on every tick that had no job in flight: walk every
+## resident chunk for unloads, then every cell of the view window for wants - 338 + 1521 iterations
+## of GDScript. MEASURED IN THE RUNNING GAME, per 16.7 ms frame (two ticks):
+##     car PARKED on the start line, nothing left to build:  4.34 ms   (the car's own physics: 2.29)
+##     far field filling after [B]:                          4.74 ms
+##     car on the LEGACY map, where no chunk can be wanted:  2.25 ms
+## So a quarter of every frame went on confirming that nothing had changed - and it was backwards
+## under load: a late frame runs up to 8 catch-up ticks, and each one re-ran the scan.
+##
+## What should be built or dropped is a function of exactly two things: which chunks are resident,
+## and where the car is. So the question is asked once per LATTICE CELL the car stands in, and the
+## answer is kept as a work list (`_q_keys`) and a drop list (`_drops`). `cell` is the ground's own
+## resolution - nothing the streamer builds can tell two positions inside one cell apart - so that
+## is a derived quantum, not a tuned one. Taking the next entry off the list is not an approximation
+## of rescanning: a chunk's priority depends only on its OWN state and distance, so the list IS
+## what a rescan from the same cell would pick, in the same order. Probed against the per-tick scan
+## along a driven path - see CHANGELOG 2026-11-16 for the count.
+##
+## NOT the fix, though it is the first thing to reach for: a timer ("rescan every N ticks"). That
+## makes the ground late by a TIME, which at speed is a distance the lead-distance derivation in
+## _derive() knows nothing about. A cell is a DISTANCE, and a fixed one.
+## Nor is it fewer LOD levels: the scan costs the same with one.
+var _scan_q := Vector2i(1 << 30, 1 << 30) ## the lattice cell the last scan was made from
+var _scan_valid := false                  ## false once anything the scan read has changed
+var _pq := Vector3.ZERO                   ## that cell's centre: the position every decision uses
+var _q_keys := PackedInt64Array()         ## work list, nearest-first: (priority in um << 20) | index
+var _q_cells: Array = []                  ## index -> chunk key, in scan order
+var _q_at := 0
+var _drops: Array = []                    ## chunks that scan found droppable, in _live's order
+var _drops_at := 0
+var _scans := 0
+var _scan_us := 0                         ## cumulative time spent scanning, for probes and [J]
+var _band_marks := 0
+var _finalise_us := 0
+var _scanned_r := PackedFloat64Array([0.0, 0.0, 0.0])   ## (r_solid, r_detail, r_view) that scan
+                                          ## compared against - 64-bit: a Vector3 would round them
 
 const EDGE_SHADER := """
 shader_type spatial;
@@ -221,7 +276,17 @@ func _derive() -> void:
 	# the honest answer to "why did 64 not give me 64 chunks".
 	var across: float = maxf((chunk_budget - disc_chunks) / along, 3.0)
 	band_w = across * span * 0.5
-	_band_built = false          # the band depends on band_w, so it has to be re-marked
+	# The band is marked in WHOLE CHUNKS, so it only changes when band_w crosses a chunk boundary.
+	# It used to be re-marked on every call - 218 centreline samples and ~18,000 dictionary writes,
+	# 3.9 ms - and _finalise() calls this whenever the measured vertex cost drifts 20%, which the
+	# mix of cheap far-field chunks and expensive corridor ones makes it do constantly: MEASURED
+	# 131 re-derives in 55 s of driving, 130 of them re-marking a band that had not changed. That
+	# was a 4 ms spike in a physics tick 2.4 times a second, on top of the tick's own work.
+	if maxi(int(ceil(band_w / span)), 1) != _band_reach:
+		_band_built = false
+	# ...and the last scan's answer is void only if a radius it compared against actually moved.
+	if r_solid != _scanned_r[0] or r_detail != _scanned_r[1] or r_view != _scanned_r[2] or not _band_built:
+		_scan_valid = false
 	_derived_at_us = _us_per_vertex
 
 func lod_for(d: float, have: int = 0) -> int:
@@ -268,6 +333,8 @@ func _build_band() -> void:
 	if cl == null:
 		return
 	var reach: int = maxi(int(ceil(band_w / span)), 1)
+	_band_reach = reach
+	_band_marks += 1
 	var s := 0.0
 	while s <= cl.length():
 		var p: Dictionary = cl.point_at(s)
@@ -310,6 +377,10 @@ func _in_area(k: Vector2i) -> bool:
 func prime(p: Vector3) -> void:
 	## Everything the car could touch, built NOW. The car spawns into this, so it cannot be streamed
 	## in behind it - it would fall through the world for the first few frames.
+	# Colliders are judged from where the car is ABOUT to be, and whatever the last scan concluded
+	# is void: this changes what is resident behind its back.
+	_pq = _cell_centre(_cell_of(p))
+	_scan_valid = false
 	var r := int(ceil(r_solid / span)) + 1
 	var c := key_at(p.x, p.z)
 	var want: Array = []
@@ -342,44 +413,93 @@ func update(p: Vector3) -> void:
 	if not _job.is_empty():
 		_step_job()
 		return
-	var r := int(ceil(r_view / span)) + 1
-	var c := key_at(p.x, p.z)
-	# unload first: cheap, and it frees the memory before the next build claims it
-	var drop: Array = []
-	for k in _live:
-		# HYSTERESIS is one whole chunk span. That is the natural scale here rather than a tuned
-		# margin: a chunk only becomes droppable once the car is a full chunk past the radius that
-		# would re-request it, so sitting on a boundary cannot thrash a chunk in and out.
-		var dk: float = _dist_to_chunk(k, p)
-		if dk > r_view + span:
-			drop.append(k)
-		elif dk > r_detail + span and not _near_corridor(k):
-			drop.append(k)      # dead space to the sides of the road: scenery nobody looks at
+	# Ask again only if the answer can have changed: the car is in a different lattice cell, or
+	# something the last scan read has moved under it (a re-derive, a prime). See `_scan_q`.
+	var q := _cell_of(p)
+	if not _scan_valid or q != _scan_q:
+		_scan(q)
 	# UNLOADING IS WORK TOO. Freeing a chunk frees an ArrayMesh and possibly a HeightMapShape3D, and
 	# a tick that drops a dozen at once pays for all of them at end-of-frame - so the build budget
 	# alone does not bound the worst frame. Cap it: chunks leave the disc at about v/span per second
 	# (~0.4/s at 18 m/s), so two per TICK is 240/s - two orders of magnitude more headroom than the
 	# rate needs, while still bounding the spike.
 	var freed := 0
-	for k in drop:
-		if freed >= 2:
-			break
-		_unload(k)
-		freed += 1
-	# keep colliders in step with the car over the small set that could possibly need one
-	var rc := int(ceil((r_solid + span) / span)) + 1
-	for dz in range(-rc, rc + 1):
-		for dx in range(-rc, rc + 1):
-			var kk := Vector2i(c.x + dx, c.y + dz)
-			if _live.has(kk):
-				_sync_collider(kk)
+	while freed < 2 and _drops_at < _drops.size():
+		var dk: Vector2i = _drops[_drops_at]
+		_drops_at += 1
+		if _live.has(dk):
+			_unload(dk)
+			freed += 1
+	_next_job()
 
-	var best_k := Vector2i.ZERO
-	var best_d := INF
-	var best_lod := 0
+func _cell_of(p: Vector3) -> Vector2i:
+	return Vector2i(int(floor(p.x / cell)), int(floor(p.z / cell)))
+
+func _cell_centre(q: Vector2i) -> Vector3:
+	return Vector3((float(q.x) + 0.5) * cell, 0.0, (float(q.y) + 0.5) * cell)
+
+func _beyond_reach(p: Vector3) -> bool:
+	## True when the car is so far from the generated area that NO chunk in it can be wanted at any
+	## detail - which is the whole time it is on the legacy map, 2-4 km away. Exact, not a shortcut:
+	## past max(r_view, 2 r_detail + span) lod_for() answers 0 whatever is resident, and a chunk only
+	## has to OVERLAP the area (see _in_area), so it can stand one span outside the box.
+	var half: float = area._size * 0.5
+	var dx: float = maxf(absf(p.x - area._origin.x) - half, 0.0)
+	var dz: float = maxf(absf(p.z - area._origin.z) - half, 0.0)
+	return sqrt(dx * dx + dz * dz) > maxf(r_view, r_detail * 2.0 + span) + span
+
+func _scan(q: Vector2i) -> void:
+	## The whole question, asked from the centre of lattice cell `q`: what is droppable, which
+	## colliders are due, and everything that wants building - sorted, so the ticks that follow only
+	## have to take the next entry.
+	var t_scan := Time.get_ticks_usec()
+	_scan_q = q
+	_scan_valid = true
+	_scanned_r[0] = r_solid
+	_scanned_r[1] = r_detail
+	_scanned_r[2] = r_view
+	_scans += 1
+	_pq = _cell_centre(q)
+	_q_keys.clear()
+	_q_cells.clear()
+	_q_at = 0
+	_drops.clear()
+	_drops_at = 0
+	var p := _pq
+	for k in _live:
+		# HYSTERESIS is one whole chunk span. That is the natural scale here rather than a tuned
+		# margin: a chunk only becomes droppable once the car is a full chunk past the radius that
+		# would re-request it, so sitting on a boundary cannot thrash a chunk in and out.
+		var dk: float = _dist_to_chunk(k, p)
+		if dk > r_view + span:
+			_drops.append(k)
+		elif dk > r_detail + span and not _near_corridor(k):
+			_drops.append(k)      # dead space to the sides of the road: scenery nobody looks at
+	var c := key_at(p.x, p.z)
+	if not _live.is_empty():
+		# keep colliders in step with the car over the small set that could possibly need one
+		var rc := int(ceil((r_solid + span) / span)) + 1
+		for dz in range(-rc, rc + 1):
+			for dx in range(-rc, rc + 1):
+				var kk := Vector2i(c.x + dx, c.y + dz)
+				if _live.has(kk):
+					_sync_collider(kk)
+	if _beyond_reach(p):
+		_scan_us += Time.get_ticks_usec() - t_scan
+		return
+	var r := int(ceil(r_view / span)) + 1
+	# Beyond r_detail a chunk is only ever wanted if the road goes there (_want_lod), and the view
+	# window is mostly ground the road does not visit: of its 1521 cells about 1000 are neither
+	# near the car nor in the band. One dictionary lookup settles those before any distance is
+	# worked out - the same answer _want_lod would give, reached without the three calls.
+	var near := int(ceil(r_detail / span)) + 1
+	if not _band_built:
+		_build_band()
 	for dz in range(-r, r + 1):
 		for dx in range(-r, r + 1):
 			var k := Vector2i(c.x + dx, c.y + dz)
+			if (dx > near or dx < -near or dz > near or dz < -near) and not _band.has(k):
+				continue
 			if not _in_area(k):
 				continue
 			var d := _dist_to_chunk(k, p)
@@ -391,15 +511,28 @@ func update(p: Vector3) -> void:
 				continue
 			# A chunk that is merely too COARSE can wait behind one that does not exist at all.
 			var pri: float = d if have == 0 else d + r_view
-			if pri < best_d:
-				best_d = pri
-				best_k = k
-				best_lod = want_lod
-	if best_lod > 0:
-		if _restore(best_k, best_lod):
+			# Sorted natively: the priority in micrometres above the scan index, so equal
+			# priorities keep scan order - the same chunk the old first-minimum search picked.
+			_q_keys.append((int(pri * 1e6) << 20) | _q_cells.size())
+			_q_cells.append(k)
+	_q_keys.sort()
+	_scan_us += Time.get_ticks_usec() - t_scan
+
+func _next_job() -> void:
+	while _q_at < _q_keys.size():
+		var k: Vector2i = _q_cells[_q_keys[_q_at] & 0xFFFFF]
+		_q_at += 1
+		# Re-ask the one question for this one chunk. Nothing but this list's own work touches a
+		# listed chunk between scans, so this only ever skips an entry already satisfied.
+		var have: int = int(_live[k]["lod"]) if _live.has(k) else 0
+		var want_lod := _want_lod(k, _dist_to_chunk(k, _pq), have)
+		if want_lod == 0 or have == want_lod:
+			continue
+		if _restore(k, want_lod):
 			return                     # it was still in the cache: no rebuild, no GPU re-upload
-		_start_job(best_k, best_lod)
+		_start_job(k, want_lod)
 		_step_job()
+		return
 
 func _restore(k: Vector2i, lod: int) -> bool:
 	var ck := Vector3i(k.x, k.y, lod)
@@ -430,7 +563,9 @@ func _sync_collider(k: Vector2i) -> void:
 	var rec: Dictionary = _live[k]
 	if int(rec["lod"]) != 1:
 		return
-	var d: float = _dist_to_chunk(k, car.global_position) if car != null else 0.0
+	# From the position the scan was made for, not the car's raw one: every decision between two
+	# scans has to be a function of the same cell, or the work list stops being exact.
+	var d: float = _dist_to_chunk(k, _pq)
 	var has: bool = rec["col"] != null
 	if not has and d <= r_solid:
 		var hh: PackedFloat32Array = rec["h"]
@@ -629,13 +764,23 @@ func _finalise() -> void:
 
 	# Feed the MEASURED cost straight back into the lead distance, so r_solid tracks what a chunk
 	# actually costs on this machine rather than what it cost when this was written.
-	# The lead must cover the WORST chunk, not the average one. Chunks away from the road cost
-	# ~1 us/vertex and corridor chunks 11.4, so an average is dominated by the cheap ones and would
-	# shrink the lead exactly when the car is on the road - where the ground has to be there. Track
-	# the worst seen, with a slow decay so the figure can still come down on a lighter machine.
+	# The lead must cover the WORST kind of chunk, not the average one: chunks away from the road
+	# cost ~1 us/vertex and corridor chunks 11.4. So only a chunk of that worst kind - full detail,
+	# every vertex searched - is allowed to move the figure, and it takes the worst cost seen TWICE
+	# among the last few of them. See _cost_window for what the per-chunk max-with-decay that used
+	# to live here actually did (it tracked the mix, and the radii swung with it).
 	var total_us: float = float(int(_job["us"]) + (Time.get_ticks_usec() - t0))
-	_us_per_vertex = maxf(total_us / float(ax * ax), _us_per_vertex * 0.98)
+	if lod == 1 and e.count(StageArea.OFF_CORRIDOR) == 0:
+		# A comparable chunk: full detail, every vertex searched. See _cost_window.
+		_cost_window.append(total_us / float(ax * ax))
+		if _cost_window.size() > COST_WINDOW:
+			_cost_window.remove_at(0)
+		if _cost_window.size() >= 2:
+			var sorted := _cost_window.duplicate()
+			sorted.sort()
+			_us_per_vertex = sorted[sorted.size() - 2]
 	_worst_build_ms = maxf(_worst_build_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+	_finalise_us += Time.get_ticks_usec() - t0
 	_built += 1
 	_job = {}
 	# Re-derive only when the measured cost has actually MOVED. Re-deriving on a fixed build count
@@ -695,7 +840,9 @@ func stats() -> Dictionary:
 	return {"live": _live.size(), "peak": _peak_chunks, "built": _built, "budget": chunk_budget,
 		"us_per_vertex": _us_per_vertex, "worst_finalise_ms": _worst_build_ms,
 		"r_solid": r_solid, "r_detail": r_detail, "r_view": r_view, "span": span,
-		"colliders": _collider_count(), "cached": _cache.size(), "cache_hits": _cache_hits}
+		"colliders": _collider_count(), "cached": _cache.size(), "cache_hits": _cache_hits,
+		"scans": _scans, "queued": _q_keys.size() - _q_at, "scan_us": _scan_us,
+		"band_marks": _band_marks, "finalise_us": _finalise_us}
 
 func _collider_count() -> int:
 	var c := 0
