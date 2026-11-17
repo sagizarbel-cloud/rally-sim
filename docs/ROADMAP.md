@@ -185,6 +185,14 @@ then plan this.** (Refined 2026-11-12: the Godot 4.6 migration sits between the 
 see "State as of 2026-11-16" above.) Not a plan yet - a captured intent, so it is not lost in chat. Six items, and they
 are NOT one arc's worth of the same kind of work:
 
+**STATUS 2026-11-17 (branch `claude/project-thread-gogg6v`, not yet driven):** E-a started (shader
+noise, wheel lines, forest floor - no textures yet), E-b done for SHAKEDOWN (`stage_forest.gd`,
+spruces streamed with the chunks, solid trunks), E-c done (sky shader with clouds), plus filmic
+tonemapping, haze, an SSAO/glow switch and the sRGB colour fix that was the real cause of the
+washed-out look. The streamer's far field is now a narrow ROAD WINDOW made safe by the forest - see
+CHANGELOG 2026-11-17. Open: the legacy map's ball-on-a-stick trees could become spruces (visual
+only), real textures/normal detail for the ground, and the drive verdict on all of it.
+
 **E-a. Procedural ground texturing.** The chunk mesh already carries a per-vertex EDGE DISTANCE for
 exactly this reason (`StageArea.sample_at()` returns it so the road edge can be thresholded per
 PIXEL rather than per vertex). **Order matters: this comes AFTER D6.** D6 changes what the ground

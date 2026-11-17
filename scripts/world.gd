@@ -18,7 +18,7 @@ var _car                          # the vehicle (untyped so get_wheels() resolve
 var _stage                        # RallyStage, for the base surface type (skid marks are asphalt-only)
 var _sun: DirectionalLight3D      # M10: the sun, cycled by time-of-day
 var _env: Environment
-var _sky_mat: ProceduralSkyMaterial
+var _sky_mat: ShaderMaterial      # Arc E: procedural sky WITH clouds (was ProceduralSkyMaterial)
 var _tod := 0                     # time-of-day preset index
 # --- Right-stick look. The LEFT stick steers, so looking around lives on the right one. The
 # mapping is ABSOLUTE (stick deflection = view angle) rather than accumulating, so letting go
@@ -376,31 +376,134 @@ func _add_button(action: String, button: JoyButton) -> void:
 # ---------------------------------------------------------------------------
 # Scene construction
 # ---------------------------------------------------------------------------
+## ARC E - THE SKY. ProceduralSkyMaterial is an empty two-colour gradient, which is a large part of
+## why the game read as a model on a table rather than a place. This is the same gradient plus a sun
+## disc and a layer of fbm cumulus projected onto a plane overhead, lit by the sun's own colour so
+## the time-of-day presets carry through. It uses no TIME, so the sky's radiance (the ambient light
+## it feeds) is re-baked only when a uniform changes - i.e. on a time-of-day switch, not per frame.
+const SKY_SHADER := """
+shader_type sky;
+uniform vec3 top_col : source_color = vec3(0.34, 0.50, 0.86);
+uniform vec3 horizon_col : source_color = vec3(0.72, 0.82, 0.95);
+uniform vec3 ground_col : source_color = vec3(0.25, 0.27, 0.24);
+uniform float cloud_cover = 0.45;
+uniform float cloud_shade = 1.0;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+			mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p) {
+	float a = 0.5;
+	float v = 0.0;
+	for (int i = 0; i < 5; i++) {
+		v += a * vnoise(p);
+		p = p * 2.03 + vec2(17.1, 9.2);
+		a *= 0.5;
+	}
+	return v;
+}
+void sky() {
+	vec3 d = EYEDIR;
+	float h = d.y;
+	vec3 col = mix(horizon_col, top_col, pow(clamp(h, 0.0, 1.0), 0.45));
+	if (h < 0.0) {
+		col = mix(horizon_col, ground_col, clamp(-h * 6.0, 0.0, 1.0));
+	}
+	vec3 sun_c = LIGHT0_COLOR * LIGHT0_ENERGY;
+	float sd = dot(d, LIGHT0_DIRECTION);
+	if (LIGHT0_ENABLED) {
+		col += sun_c * (smoothstep(0.99955, 0.99975, sd) * 12.0 + pow(max(sd, 0.0), 48.0) * 0.25);
+	}
+	if (h > 0.0) {
+		vec2 uv = d.xz / (h + 0.06);
+		float c = fbm(uv * 0.55 + vec2(3.7, 1.3));
+		float cov = smoothstep(1.0 - cloud_cover - 0.08, 1.0 - cloud_cover + 0.22, c);
+		// thicker cloud is darker underneath; the sun side of each cloud is brighter
+		float thick = smoothstep(0.4, 0.85, c);
+		vec3 lit = mix(horizon_col * 1.1, sun_c * 0.85 + horizon_col * 0.35, 0.65 - thick * 0.35);
+		lit += sun_c * pow(max(sd, 0.0), 6.0) * 0.35;
+		col = mix(col, lit * cloud_shade, cov * smoothstep(0.0, 0.12, h) * 0.92);
+	}
+	COLOR = col;
+}
+"""
+
 func _build_environment() -> void:
 	_sun = DirectionalLight3D.new()
 	_sun.shadow_enabled = true
+	# Arc E: shadows reach far enough to lay the roadside spruces' shadows across the road ahead, and
+	# soft enough at the edge that the penumbra reads as sunlight rather than a stencil.
+	_sun.directional_shadow_max_distance = 160.0
+	_sun.shadow_blur = 1.5
 	add_child(_sun)
 
 	_env = Environment.new()
 	_env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	_sky_mat = ProceduralSkyMaterial.new()
+	var ssh := Shader.new()
+	ssh.code = SKY_SHADER
+	_sky_mat = ShaderMaterial.new()
+	_sky_mat.shader = ssh
 	sky.sky_material = _sky_mat
 	_env.sky = sky
 	_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	# ARC E - TONEMAPPING. The default LINEAR mapper clips: a sunlit light surface lands above 1.0
+	# and is drawn white, which is the washed-out road and grass the audit's baseline screenshots
+	# showed. Filmic rolls the highlights off instead of clipping them.
+	_env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	_env.tonemap_exposure = 0.95
+	_env.tonemap_white = 6.0
+	# ARC E - AERIAL PERSPECTIVE. Without it a hill 800 m away is as sharp and saturated as the road
+	# under the car, which flattens the depth of the whole picture. Exponential fog tinted by the sky
+	# (aerial_perspective) makes distance read as distance. The density puts ~60% haze at the
+	# streamer's 800 m road horizon, so the far end of the road window fades into the sky rather
+	# than ending.
+	_env.fog_enabled = true
+	_env.fog_density = 0.0011
+	_env.fog_aerial_perspective = 0.55
+	_env.fog_sky_affect = 0.0
+	_env.fog_sun_scatter = 0.15
+	# Screen-space extras, both behind the Tab panel's graphics switch (see _apply_gfx).
+	_env.ssao_radius = 1.2
+	_env.ssao_intensity = 1.6
+	_env.ssao_power = 1.4
+	_env.ssao_detail = 0.4
+	_env.glow_intensity = 0.35
+	_env.glow_strength = 0.9
+	_env.glow_bloom = 0.0
+	_env.glow_hdr_threshold = 1.2
+	_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 	var we := WorldEnvironment.new()
 	we.environment = _env
 	add_child(we)
 	_apply_tod(_tod)
+	_apply_gfx(true)
+
+func _apply_gfx(high: bool) -> void:
+	_env.ssao_enabled = high
+	_env.glow_enabled = high
 
 func _apply_tod(i: int) -> void:
 	var p: Dictionary = TOD[i]
 	_sun.rotation_degrees = p["rot"]
 	_sun.light_color = p["col"]
 	_sun.light_energy = p["energy"]
-	_sky_mat.sky_top_color = p["top"]
-	_sky_mat.sky_horizon_color = p["horizon"]
-	_env.ambient_light_energy = p["ambient"]
+	_sky_mat.set_shader_parameter("top_col", p["top"])
+	_sky_mat.set_shader_parameter("horizon_col", p["horizon"])
+	# clouds are lit by the sun; at night there is nothing to light them, so they go to silhouettes
+	_sky_mat.set_shader_parameter("cloud_shade", clampf(float(p["energy"]) / 1.1, 0.25, 1.0))
+	# Arc E: the sky now feeds real ambient (it has clouds and a bright horizon), and at the presets'
+	# old energy that flat fill swamped the sun - no shading contrast, everything pale. A clear-sky
+	# day is roughly 80% direct and 20% sky light on a horizontal surface; 0.55 of the old fill puts
+	# the shadow side back near that ratio.
+	_env.ambient_light_energy = float(p["ambient"]) * 0.55
+	# the haze takes the horizon's colour, so morning haze is warm and night haze is dark blue
+	_env.fog_light_color = p["horizon"]
+	_env.fog_light_energy = clampf(float(p["energy"]), 0.15, 1.0)
 
 func _build_ground() -> void:
 	var body := StaticBody3D.new()
@@ -507,6 +610,10 @@ func _apply_mirror() -> void:
 		_mirror_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
 
 func _process(delta: float) -> void:
+	if _car != null and _env != null:
+		var hi := bool(_car.get("gfx_high"))
+		if hi != _env.ssao_enabled:
+			_apply_gfx(hi)
 	if Input.is_action_just_pressed("camera_toggle"):
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()

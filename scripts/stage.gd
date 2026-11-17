@@ -239,6 +239,7 @@ func _build() -> void:
 			norms[idx] = Vector3(hl - hr, 2.0 * _cs, hd - hu).normalized()
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true      # Arc E: the colours are authored in sRGB; read as linear they washed out
 	mat.roughness = 1.0
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED   # terrain: render both sides (no see-through slopes)
 	# THE GROUND IS DRAWN AS TILES, NOT AS ONE MESH. The same vertices, normals, colours and

@@ -20,6 +20,76 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-17 (Arc E opens: roadside spruces, a road-window streamer, and the washed-out look fixed)
+
+Grep words: *washed out*, *road looks white*, *pale grass*, *flat colours*, *low poly look*,
+*trees*, *spruces*, *forest*, *hit a tree*, *void past the trees*, *dark ground at the horizon*,
+*too many chunks loaded*, *chunks behind me still loaded*, *fog*, *haze*, *clouds*, *SSAO*.
+
+Not yet driven. Everything below was verified by compile gate, headless probes and Forward+
+screenshots in the cloud (lavapipe); feel, real-GPU frame time and the look on the Mac's screen
+still need the drive.
+
+**Why the stage looked washed out - it was a bug, not a missing feature.** The chunk shader's
+grass/road/seal colours were declared without `source_color` AND passed as `Vector3`, so the sRGB
+colours were used as linear light: the gravel (0.58 sRGB) drew as ~0.79 on screen, near white,
+and the grass went pale. Fixed both halves (hint + pass a `Color`; a `Vector3` skips the sRGB
+conversion even with the hint). The legacy ground's `StandardMaterial3D` read its vertex colours as
+linear too; it now sets `vertex_color_is_srgb`. MEASURED pixels in the same chase view: road
+0.80 -> 0.67, verge 0.73 -> 0.49. If the stage goes pale again, check these two first.
+
+**The look (`world.gd`, `stage_chunks.gd`).** Filmic tonemapping (the linear mapper clipped sunlit
+surfaces to white); ambient cut to 0.55 of each time-of-day preset so the sun can shade; exponential
+haze tinted by the horizon colour (~60% at the 800 m road horizon); a sky SHADER with sun disc and
+fbm clouds lit by the sun colour (no TIME, so its radiance only re-bakes on [L]); sun shadows out to
+160 m; the ground shader gained value-noise detail at 0.4 / 5 / 30 m, darker compacted WHEEL LINES
+`rut_pos` inside each edge, a noisy verge edge, and needle litter and moss under the trees. SSAO and
+a soft glow sit behind a new Tab checkbox, `gfx_high` (default ON) - the one item whose GPU cost
+could not be priced off the Mac.
+
+**Spruces (`stage_forest.gd`, new).** Tall Norway spruces, 16-29 m, one per 33 m^2 before clearings,
+from 5 m outside the carriageway edge, thickening over 7 m, with ~100 m-scale clearings from a
+seeded noise field and no trees within 70 m of either road end (the tunnel mouths). Each tree's
+position, height, lean, yaw and tint is a hash of a GLOBAL lattice cell and the stage seed, so the
+same seed always grows the same forest and chunks partition it exactly at any LOD. Trees are grown
+from the chunk's own height and edge-distance samples (no extra road search) and hang off the chunk's
+mesh, so they hide, cache and free with it. Full-detail chunks carry a ~180-triangle spruce to 110 m
+and a 24-triangle silhouette beyond (visibility ranges); the shadow map is drawn from the silhouette
+only. Trunks are solid wherever the chunk has its height collider: one StaticBody per chunk with all
+its trunks (22 bodies / 857 trunks at a typical spot), built complete before it enters the tree so
+Jolt assembles it once. A gentle wind sway in the vertex shader. Tab: `stage_forest` (on rebuild).
+
+**The streamer is a ROAD WINDOW (`stage_chunks.gd`).** Beyond the full-detail disc, only chunks within
+`stage_band_chunks` (new Tab slider, default 2 = 90 m of forest) of the road between `road_behind`
+and `road_ahead` metres of ROAD from the car are wanted; both lengths derive from the chunk budget,
+which now buys road length (default: 791 m ahead, 198 m behind). Work is ordered by metres of road to
+reach it, so forward road is built first. A coarse 96x96 backdrop of the base terrain, shaded as
+distant canopy and dropped below the true ground by its measured worst over-shoot (9.7 m on the
+default seed), fills everything outside the window (build 17 ms). MEASURED, default seed, 1500 m at
+30 m/s from the start line:
+
+|                       | before | after |
+|---|---|---|
+| chunks resident       | ~600 (peak 637) | ~190 (peak 197) |
+| chunk builds          | 1909   | 881   |
+| scan cost, mean       | 2.28 ms | ~1.0 ms |
+
+Render, chase view 300 m into the stage, exact lavapipe counts: before 520 draw calls / 473 k
+triangles (bare grass); after 544 / 700 k with the forest (976 k before the shadow-silhouette trick).
+
+**The earlier half of this pass (6 commits by the previous session, golden probe byte-identical):**
+grip resolved once per wheel per tick; SHAKEDOWN gravel answers road class without a road search
+(roughness 738 -> 199 us a tick); the four surface effects ask the ground only for what they use;
+pace notes find the nearest route point on a grid (354 -> 6 us); the hidden rear-view mirror no
+longer renders the world a second time in chase view; HUD text one Label per line; the car merged
+into a few meshes (569 -> 127 draw calls) and the legacy ground cut into 4x4 render tiles. Legacy
+chase view: 1,213 draw calls / 2.55 M triangles -> 448 / 0.60 M.
+
+**If something regresses:** trees floating or sunk = the bilinear read in `StageForest.grow()` (apron
+index is +1); a tree on the road = `clearance` vs the edge-distance field; ground popping in ahead =
+`road_ahead` or the `_consider()` priority; the dark plane at the horizon back = the backdrop not
+built (`_build_backdrop` runs from `configure()`).
+
 ## 2026-11-16, evening (D4 closed on the drive - the hiccups are gone)
 
 Grep words: *hiccups*, *stutter after [B]*, *freeze a few seconds after arriving on the stage*,

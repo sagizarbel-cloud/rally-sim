@@ -431,7 +431,11 @@ func _physics_process(_d: float) -> void:
 	var n: float = float(car.stage_max_chunks)
 	if not is_equal_approx(n, chunks.chunk_budget):
 		chunks.chunk_budget = n
-		chunks._derive()                     # band_w derives from it, and _derive re-marks the band
+		chunks._derive()                     # the road window's length derives from it
+	var bc: int = int(car.stage_band_chunks)
+	if bc != chunks.band_chunks:
+		chunks.band_chunks = bc
+		chunks._derive()                     # ...and its price per metre from this
 	chunks.update(car.global_position)
 
 

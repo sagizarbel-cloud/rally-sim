@@ -120,6 +120,13 @@ class_name VehicleM2
 # that says how much ground exists around you. The far field's width derives from it. Exposed for
 # performance runs: sweep it and watch the streaming line on the HUD and the frame cost move.
 @export var stage_max_chunks := 256.0    # STAGE: resident chunk budget on SHAKEDOWN
+# ARC E: the far field is a ROAD WINDOW this many chunks either side of the road, made safe by the
+# roadside forest that hides everything behind it. See StageChunks._mark_window.
+@export var stage_band_chunks := 2.0     # STAGE: road window half-width, whole chunks (45 m each)
+@export var stage_forest := true         # STAGE: roadside spruces on SHAKEDOWN (applies on rebuild)
+# ARC E: the screen-space extras whose GPU cost cannot be priced from the cloud machine: ambient
+# occlusion (contact shading) and glow. OFF = the cheap path. Read by world.gd every frame.
+@export var gfx_high := true             # GRAPHICS: SSAO + glow ON (high) / OFF (low)
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;
