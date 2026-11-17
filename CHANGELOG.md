@@ -103,9 +103,11 @@ triangles vs 0.61 M windowed). No fullscreen "before" exists, so pixels vs the 1
 is not yet separated. [B] arrival still freezes 0.2-0.4 s (known prime() item); one 35 ms physics
 stall at t=22 s.
 
-**Follow-ups the same day (not yet driven):** a Tab slider `gfx_render_scale` (0.5-1.0, FSR 1
-upscale, HUD stays native) for the fullscreen GPU cost - 0.67 is ~45% of the pixels and looked clean
-in a screenshot; and NIGHT shadows lightened: the ambient cut now scales with sun strength (night
+**Follow-ups the same day (not yet driven):** a render-scale (FSR upscale) slider was added and then
+REMOVED on the user's call - *"just swiping optimization problems under the rug"*; resolution
+scaling is for much later, at much higher fidelity. The fullscreen cost is to be found and fixed
+instead: first a fullscreen drive on main for the missing "before", then shadows/SSAO. NIGHT
+shadows lightened: the ambient cut now scales with sun strength (night
 keeps 0.95 of its fill, day 0.55) and the sun's `shadow_opacity` is 0.6 at night. If night looks
 flat or day looks pale, those two lines in `world.gd` `_apply_tod()` are where to look.
 

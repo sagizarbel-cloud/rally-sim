@@ -620,12 +620,6 @@ func _process(delta: float) -> void:
 		var hi := bool(_car.get("gfx_high"))
 		if hi != _env.ssao_enabled:
 			_apply_gfx(hi)
-		var rs := clampf(float(_car.get("gfx_render_scale")), 0.5, 1.0)
-		var vp := get_viewport()
-		if not is_equal_approx(rs, vp.scaling_3d_scale):
-			# Bilinear at native costs nothing extra; below native, FSR 1 upscales and sharpens.
-			vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR if rs < 0.999 else Viewport.SCALING_3D_MODE_BILINEAR
-			vp.scaling_3d_scale = rs
 	if Input.is_action_just_pressed("camera_toggle"):
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()

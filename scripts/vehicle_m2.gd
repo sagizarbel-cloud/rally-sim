@@ -127,11 +127,6 @@ class_name VehicleM2
 # ARC E: the screen-space extras whose GPU cost cannot be priced from the cloud machine: ambient
 # occlusion (contact shading) and glow. OFF = the cheap path. Read by world.gd every frame.
 @export var gfx_high := true             # GRAPHICS: SSAO + glow ON (high) / OFF (low)
-# ARC E: 3D render resolution as a fraction of the window, upscaled with AMD FSR 1. The 2026-11-17
-# drive went GPU-bound on SHAKEDOWN only in FULLSCREEN (2880x1800, 5.6x the 1280x720 window's
-# pixels): ~38 fps there against a steady 60 windowed. Per-pixel cost scales with scale^2, so 0.67
-# is ~45% of the pixels. The HUD stays at full resolution.
-@export var gfx_render_scale := 1.0      # GRAPHICS: 3D resolution scale (1.0 = native)
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;
