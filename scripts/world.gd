@@ -500,7 +500,13 @@ func _apply_tod(i: int) -> void:
 	# old energy that flat fill swamped the sun - no shading contrast, everything pale. A clear-sky
 	# day is roughly 80% direct and 20% sky light on a horizontal surface; 0.55 of the old fill puts
 	# the shadow side back near that ratio.
-	_env.ambient_light_energy = float(p["ambient"]) * 0.55
+	# NIGHT is the exception (drive verdict 2026-11-17: "maybe the night shadows are too strong"). By
+	# moonlight the direct beam is weak and the sky's share of the light is much larger, so cutting
+	# the fill there made shadows near-black. Scale the cut by how strong the sun is.
+	var sun_share: float = clampf((float(p["energy"]) - 0.3) / 0.75, 0.0, 1.0)
+	_env.ambient_light_energy = float(p["ambient"]) * lerpf(0.95, 0.55, sun_share)
+	# ...and moon shadows are soft-edged and faint, not stencils: the moon is a weak, broad source.
+	_sun.shadow_opacity = lerpf(0.6, 1.0, sun_share)
 	# the haze takes the horizon's colour, so morning haze is warm and night haze is dark blue
 	_env.fog_light_color = p["horizon"]
 	_env.fog_light_energy = clampf(float(p["energy"]), 0.15, 1.0)
@@ -614,6 +620,12 @@ func _process(delta: float) -> void:
 		var hi := bool(_car.get("gfx_high"))
 		if hi != _env.ssao_enabled:
 			_apply_gfx(hi)
+		var rs := clampf(float(_car.get("gfx_render_scale")), 0.5, 1.0)
+		var vp := get_viewport()
+		if not is_equal_approx(rs, vp.scaling_3d_scale):
+			# Bilinear at native costs nothing extra; below native, FSR 1 upscales and sharpens.
+			vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR if rs < 0.999 else Viewport.SCALING_3D_MODE_BILINEAR
+			vp.scaling_3d_scale = rs
 	if Input.is_action_just_pressed("camera_toggle"):
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()

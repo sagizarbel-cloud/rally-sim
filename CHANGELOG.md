@@ -101,7 +101,13 @@ After going fullscreen at t=305 s (2880x1800, 5.6x the pixels): legacy map still
 per 1000); **SHAKEDOWN GPU-bound at ~38 fps** (middle frame 26 ms, 635 late per 1000, 1.19 M
 triangles vs 0.61 M windowed). No fullscreen "before" exists, so pixels vs the 160 m shadows vs SSAO
 is not yet separated. [B] arrival still freezes 0.2-0.4 s (known prime() item); one 35 ms physics
-stall at t=22 s. **Open:** night shadows too strong; fullscreen GPU cost on SHAKEDOWN.
+stall at t=22 s.
+
+**Follow-ups the same day (not yet driven):** a Tab slider `gfx_render_scale` (0.5-1.0, FSR 1
+upscale, HUD stays native) for the fullscreen GPU cost - 0.67 is ~45% of the pixels and looked clean
+in a screenshot; and NIGHT shadows lightened: the ambient cut now scales with sun strength (night
+keeps 0.95 of its fill, day 0.55) and the sun's `shadow_opacity` is 0.6 at night. If night looks
+flat or day looks pale, those two lines in `world.gd` `_apply_tod()` are where to look.
 
 **If something regresses:** trees floating or sunk = the bilinear read in `StageForest.grow()` (apron
 index is +1); a tree on the road = `clearance` vs the edge-distance field; ground popping in ahead =
