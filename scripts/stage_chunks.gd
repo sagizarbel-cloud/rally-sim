@@ -26,6 +26,7 @@ class_name StageChunks
 
 var area                                  ## StageArea - the height field authority
 var car: Node3D
+var forest: StageForest                   ## Arc E: the roadside spruces each chunk grows
 
 # --- lattice -------------------------------------------------------------------------------------
 # The chunk lattice is GLOBAL and shared by every chunk: vertex (i, j) of chunk k sits at world
@@ -104,10 +105,30 @@ var _cache_order: Array = []              ## least-recently-used first
 ## cannot remove them. 68% of all churn is a tile being rebuilt at a different detail.
 var cache_max := 1024                     ## set by _derive() from chunk_budget; see above
 var _cache_hits := 0
-var _band: Dictionary = {}
-var _band_built := false
-var _band_reach := -1      ## the reach, in whole chunks, the band was last marked with
-var band_w := 200.0        ## far-field band half-width, derived in _derive()
+## ARC E: THE FAR FIELD IS A ROAD WINDOW, NOT A BAND OVER THE WHOLE ROUTE.
+## Until 2026-11-17 everything within `band_w` of ANY part of the road was eligible, tested by
+## straight-line distance - so wherever the route folds back on itself, ground belonging to road you
+## drove ten minutes ago (or will drive in ten) sat inside the view radius and was built. MEASURED on
+## the default seed, driving 1500 m at 30 m/s: ~600 chunks resident against a slider of 256, and 1909
+## chunk builds. The band was also derived WIDE (band_w ~ 4 chunks a side) because a narrow band showed
+## its own edge against the sky.
+##
+## The roadside forest (stage_forest.gd) is what makes a narrow window safe: a sight line through a
+## forest survives with probability exp(-density * crown width * depth), which at the forest's own
+## density and two chunks (90 m) of depth is ~1e-5. So the window is `band_chunks` chunks either side
+## of the road - a slider, default 2 - and only along the stretch of road from `road_behind` metres
+## behind the car to `road_ahead` metres ahead of it, MEASURED ALONG THE ROAD. Both lengths derive from
+## the chunk budget: it now buys road LENGTH, not width.
+##
+## The window is re-marked only when the car's arc-length crosses a half-chunk quantum (the step the
+## centreline is walked at), so it costs ~one marking per 22 m of road, not one per scan.
+var band_chunks := 2              ## lateral reach of the window, whole chunks each side (Tab panel)
+var road_ahead := 800.0           ## m of road ahead kept resident - derived in _derive()
+var road_behind := 200.0          ## m of road behind - derived in _derive()
+var _win: Dictionary = {}         ## Vector2i -> road priority (m); -1 = hysteresis margin, keep only
+var _win_q := -(1 << 40)          ## the arc-length quantum the window was marked for
+var _win_params := Vector3.ZERO   ## (ahead, behind, reach) it was marked with
+var _s_car := 0.0                 ## the car's arc-length when the window was last marked
 
 ## AN IDLE STREAMER MUST COST NOTHING, and until 2026-11-16 it cost more than the car.
 ## `update()` re-asked the whole question on every tick that had no job in flight: walk every
@@ -157,33 +178,168 @@ shader_type spatial;
 // kind of quantity: a field that must be read per pixel, not a class decided per vertex. It costs
 // no extra attribute and no extra nearest_point search, since StageArea memoises that per position
 // and sample_at has already paid for it at this very vertex.
-uniform vec3 grass_col;
-uniform vec3 road_col;
-uniform vec3 seal_col;
+// ARC E: `source_color`. Without the hint these sRGB colours were used AS LINEAR, which lifts every
+// one of them - the gravel came out near-white and the grass pale (0.58 sRGB drawn as 0.58 linear is
+// 0.79 on screen). That, more than any missing polygon, is why the stage looked washed out.
+uniform vec3 grass_col : source_color;
+uniform vec3 road_col : source_color;
+uniform vec3 seal_col : source_color;
+uniform vec3 litter_col : source_color = vec3(0.21, 0.17, 0.12);   // needle litter under spruce
+uniform vec3 moss_col : source_color = vec3(0.24, 0.30, 0.14);
 uniform float blend_m = 2.0;
+uniform float forest_edge = 5.0;     // StageForest.clearance: where the trunks start
+uniform float rut_pos = 1.3;         // StageArea.rut_pos: the wheel lines, metres inside each edge
 varying float edge_d;
 varying float mix_t;
+varying vec3 wpos;
+// Cheap value noise. Surface DETAIL with no textures: the ground is one colour per surface type,
+// and real ground is never one colour. A few octaves at sizes from 0.3 m to 30 m break that up,
+// and it costs a handful of ALU per pixel rather than texture bandwidth.
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x),
+			mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
+}
 void vertex() {
 	edge_d = UV.x;
 	mix_t = UV.y;
+	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 void fragment() {
-	float t = 1.0 - smoothstep(0.0, blend_m, edge_d);
-	vec3 surf = mix(road_col, seal_col, mix_t);
-	ALBEDO = mix(grass_col, surf, t);
+	vec2 p = wpos.xz;
+	float n_big = vnoise(p * 0.035);                 // ~30 m patches
+	float n_mid = vnoise(p * 0.21 + 7.3);            // ~5 m
+	float n_fine = vnoise(p * 2.7 + 1.9);            // ~0.4 m: individual stones / tufts
+	// --- verge and forest floor ---
+	vec3 g = grass_col * mix(0.82, 1.12, n_big) * mix(0.9, 1.08, n_mid);
+	g = mix(g, g * vec3(1.08, 1.02, 0.80), smoothstep(0.55, 0.8, n_mid));    // dry yellow tufts
+	// under the trees the grass gives way to needle litter and moss
+	float wood = smoothstep(forest_edge - 1.0, forest_edge + 4.0, edge_d);
+	vec3 floor_c = mix(litter_col, moss_col, smoothstep(0.35, 0.7, n_mid)) * mix(0.8, 1.15, n_fine);
+	g = mix(g, floor_c, wood * 0.85);
+	// --- the road ---
+	vec3 gravel = road_col * mix(0.86, 1.10, n_big) * mix(0.84, 1.12, n_fine);
+	// The wheel lines: traffic sweeps the loose stones off them, so they are darker and more
+	// compacted; the crown and the edges keep a lighter loose layer.
+	float lines = exp(-pow((edge_d + rut_pos) / 0.65, 2.0));
+	gravel = mix(gravel, gravel * vec3(0.78, 0.76, 0.74), lines * 0.75);
+	gravel = mix(gravel, gravel * 1.08, smoothstep(-0.6, 0.0, edge_d) * (1.0 - lines));
+	vec3 seal = seal_col * mix(0.9, 1.06, n_big) * mix(0.94, 1.04, n_fine);
+	vec3 surf = mix(gravel, seal, mix_t);
+	float t = 1.0 - smoothstep(0.0, blend_m, edge_d + (n_mid - 0.5) * 0.8);
+	ALBEDO = mix(g, surf, t);
 	// Sealed road is a smoother surface than gravel, and only where it IS road.
-	ROUGHNESS = mix(1.0, 0.62, mix_t * t);
+	ROUGHNESS = mix(mix(0.95, 0.88, lines * t), 0.62, mix_t * t);
+	SPECULAR = 0.35;
 }
 """
+
+## ARC E - THE BACKDROP. The road window ends a couple of chunks from the road, and past it there was
+## nothing: from a crest, or from the chase camera over a rise, the world stopped at a ragged forest
+## edge with the sky's ground colour below it. One coarse mesh of the base terrain under the whole
+## stage, shaded as distant forest canopy, fills that - one draw call, a few thousand triangles, built
+## once per stage. It sits BELOW the true ground by the most its coarse triangles can over-shoot the
+## fine ground (measured at build), so the real chunks always cover it where they exist.
+const BACKDROP_SHADER := """
+shader_type spatial;
+uniform vec3 canopy_col : source_color = vec3(0.13, 0.19, 0.12);
+uniform vec3 canopy_hi : source_color = vec3(0.20, 0.27, 0.16);
+varying vec3 wpos;
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x),
+			mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+void vertex() {
+	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+void fragment() {
+	// crowns ~5 m across, and stands of lighter and darker trees on a ~60 m scale
+	float crowns = vnoise(wpos.xz * 0.2);
+	float stands = vnoise(wpos.xz * 0.017 + 4.1);
+	vec3 c = mix(canopy_col, canopy_hi, stands * 0.8) * mix(0.65, 1.1, crowns);
+	ALBEDO = c;
+	ROUGHNESS = 1.0;
+	SPECULAR = 0.1;
+}
+"""
+var _backdrop: MeshInstance3D
+
+func _build_backdrop() -> void:
+	var t0 := Time.get_ticks_usec()
+	var cells := 96
+	var size: float = area._size * 1.6        # past the area's own edge, so the horizon is not a cliff
+	var c0: Vector3 = area._origin - Vector3(size * 0.5, 0.0, size * 0.5)
+	var step: float = size / float(cells)
+	var n := cells + 1
+	var hs := PackedFloat32Array(); hs.resize(n * n)
+	for j in range(n):
+		for i in range(n):
+			hs[j * n + i] = area.def.elevation_at(c0.x + float(i) * step, c0.z + float(j) * step)
+	# How far can a coarse triangle stand ABOVE the fine ground? Compare each cell's centre with the
+	# interpolated value there; the worst over-shoot is how far the whole sheet is lowered.
+	var drop := 0.0
+	for j in range(cells):
+		for i in range(cells):
+			var a: int = j * n + i
+			var mid: float = (hs[a] + hs[a + 1] + hs[a + n] + hs[a + n + 1]) * 0.25
+			var real: float = area.def.elevation_at(c0.x + (float(i) + 0.5) * step, c0.z + (float(j) + 0.5) * step)
+			drop = maxf(drop, mid - real)
+	drop += 1.0
+	var verts := PackedVector3Array(); verts.resize(n * n)
+	var norms := PackedVector3Array(); norms.resize(n * n)
+	for j in range(n):
+		for i in range(n):
+			var a: int = j * n + i
+			verts[a] = Vector3(c0.x + float(i) * step, hs[a] - drop, c0.z + float(j) * step)
+			var hx: float = hs[j * n + mini(i + 1, n - 1)] - hs[j * n + maxi(i - 1, 0)]
+			var hz: float = hs[mini(j + 1, n - 1) * n + i] - hs[maxi(j - 1, 0) * n + i]
+			norms[a] = Vector3(-hx, 2.0 * step, -hz).normalized()
+	var idxs := PackedInt32Array()
+	for j in range(cells):
+		for i in range(cells):
+			var a: int = j * n + i
+			var bb: int = a + 1
+			var c: int = a + n
+			var d: int = a + n + 1
+			idxs.append_array([a, bb, c, bb, d, c])     # same winding as the chunks: top is the front
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = norms
+	arr[Mesh.ARRAY_INDEX] = idxs
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	var sh := Shader.new()
+	sh.code = BACKDROP_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = sh
+	mesh.surface_set_material(0, m)
+	_backdrop = MeshInstance3D.new()
+	_backdrop.name = "Backdrop"
+	_backdrop.mesh = mesh
+	_backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_backdrop)
+	_backdrop_info = {"drop": drop, "ms": float(Time.get_ticks_usec() - t0) / 1000.0}
+
+var _backdrop_info := {}
 
 func _ready() -> void:
 	var sh := Shader.new()
 	sh.code = EDGE_SHADER
 	_mat = ShaderMaterial.new()
 	_mat.shader = sh
-	_mat.set_shader_parameter("grass_col", Vector3(area.grass_color.r, area.grass_color.g, area.grass_color.b))
-	_mat.set_shader_parameter("road_col", Vector3(area.road_color.r, area.road_color.g, area.road_color.b))
-	_mat.set_shader_parameter("seal_col", Vector3(area.seal_color.r, area.seal_color.g, area.seal_color.b))
+	# Passed as COLOR, not Vector3: a `source_color` uniform is converted from sRGB only when it is
+	# given a Color. A Vector3 goes in raw - the second half of why the stage was washed out.
+	_mat.set_shader_parameter("grass_col", area.grass_color)
+	_mat.set_shader_parameter("road_col", area.road_color)
+	_mat.set_shader_parameter("seal_col", area.seal_color)
 
 # ---------------------------------------------------------------- derived sizes
 
@@ -195,6 +351,15 @@ func configure() -> void:
 	chunk_cells = area.def.chunk_cells
 	span = float(chunk_cells) * cell
 	_tick = 1.0 / maxf(float(Engine.physics_ticks_per_second), 1.0)
+	if forest == null and area.gen != null and (car == null or bool(car.get("stage_forest") != false)):
+		forest = StageForest.new(area)
+	if forest != null:
+		_mat.set_shader_parameter("forest_edge", forest.clearance)
+	else:
+		_mat.set_shader_parameter("forest_edge", 1e6)       # no forest: no needle-litter floor
+	_mat.set_shader_parameter("rut_pos", area.rut_pos)
+	if _backdrop == null:
+		_build_backdrop()
 	if car != null and car.has_method("top_speed_kmh"):
 		# The ground has to be solid at any speed the CAR can reach, not at a speed we hope it
 		# drives. Taking the car's own derived top speed means re-gearing the car re-derives this.
@@ -229,22 +394,9 @@ func _derive() -> void:
 	r_solid = minf(span + v_max * t_chunk * queue_depth, r_max)
 	# Beyond the solid shell the ground is scenery: no collider, and detail falls off in strides.
 	r_detail = minf(r_solid * 2.0, r_max)
-	# r_view is a RENDERING budget, not a physical distance, so it is derived from what the static
-	# area it replaces already cost and the user already accepted: one 512x512-cell mesh over a
-	# 720 m square = 524288 triangles, and one draw call per chunk. Whichever budget binds first
-	# wins. In practice the draw-call budget does, and it gives ~400 m of visible ground - more
-	# than the legacy area shows in any direction from its centre.
-	# The reference is D3's ACCEPTED static area - a 512x512-cell mesh over a 720 m square - not the
-	# current box, which D4 has grown to 4 km. Deriving the budget from the current box would let the
-	# rendering cost grow with the stage, which is the thing streaming exists to prevent.
-	var tri_budget := 2.0 * 512.0 * 512.0
-	var tri_per_m2_full := 2.0 / (cell * cell)
-	# rings: full inside r_detail, then stride 2, then stride 4 out to r_view
-	var tri_inner: float = PI * r_detail * r_detail * tri_per_m2_full
-	var r_mid := r_detail * 2.0
-	var tri_mid: float = PI * (r_mid * r_mid - r_detail * r_detail) * tri_per_m2_full / 4.0
-	var left: float = maxf(tri_budget - tri_inner - tri_mid, 0.0)
-	var r_tri: float = sqrt(maxf(left * 16.0 / (PI * tri_per_m2_full) + r_mid * r_mid, 0.0))
+	# (r_view used to be derived from a TRIANGLE budget for a disc of rings. Arc E bounds the far
+	# field by the chunk budget along a road window instead - see _mark_window - and r_view is now
+	# just the straight-line ceiling of that window, set below.)
 	# `chunk_budget` draw calls is this subsystem's share; the static area it replaces used one
 	# mesh, but one mesh cannot stream. It defaults to the 256 D4 was accepted at and is on the Tab
 	# panel so a performance run can sweep it - it is the ONE number that says how much ground is
@@ -261,31 +413,33 @@ func _derive() -> void:
 	# continuation arriving in front of you. Everything LEFT of the budget after that then goes into
 	# how WIDE the far field is, because a narrow band shows its own edge.
 	var disc_chunks: float = PI * (r_detail + span) * (r_detail + span) / (span * span)
+	# ARC E - the budget left after the disc buys ROAD LENGTH. A window `band_chunks` wide either side
+	# covers (2 * reach + 1) chunks per chunk-span of road, so that is the price of a metre of road.
+	# Ahead gets the driving horizon (twelve seconds at the car's top speed, as before); behind gets
+	# what is left, capped at a quarter of ahead - enough for the chase camera and the mirror, which
+	# look back over a few hundred metres at most.
+	var reach: int = maxi(band_chunks, 1)
+	var per_m: float = float(2 * reach + 1) / span
+	var road_len: float = maxf((chunk_budget - disc_chunks) / per_m, span * 4.0)
+	road_ahead = minf(v_max * 12.0, road_len * 0.8)
+	road_behind = clampf(road_len - road_ahead, span, road_ahead * 0.25)
 	# clampf(value, MIN, MAX) returns MIN when MIN > MAX - verified: clampf(791, 7893, 2000) = 7893.
 	# So writing the area's edge as the MAX here did not bound anything once r_detail passed it; the
 	# ceiling quietly stopped applying exactly when it was needed. r_detail is now bounded above, so
 	# min <= max holds by construction and this reads as intended.
-	r_view = clampf(v_max * 12.0, r_detail, r_max)
-	r_view = minf(r_view, r_tri)
-	# A winding road covers about 1.3 m of length per metre of radius, so this many chunks lie ALONG
-	# the far field; the remaining draw calls set how many lie ACROSS it.
-	var along: float = maxf(1.3 * (r_view - r_detail) / span, 1.0)
-	# What is LEFT of the budget after the solid disc has taken its share. The disc is derived from
-	# build_budget_ms and the car's top speed, so it is a FLOOR the count cannot go below: turning
-	# this slider down past it widens nothing further and the readout stops falling. That floor is
-	# the honest answer to "why did 64 not give me 64 chunks".
-	var across: float = maxf((chunk_budget - disc_chunks) / along, 3.0)
-	band_w = across * span * 0.5
-	# The band is marked in WHOLE CHUNKS, so it only changes when band_w crosses a chunk boundary.
-	# It used to be re-marked on every call - 218 centreline samples and ~18,000 dictionary writes,
-	# 3.9 ms - and _finalise() calls this whenever the measured vertex cost drifts 20%, which the
-	# mix of cheap far-field chunks and expensive corridor ones makes it do constantly: MEASURED
-	# 131 re-derives in 55 s of driving, 130 of them re-marking a band that had not changed. That
-	# was a 4 ms spike in a physics tick 2.4 times a second, on top of the tick's own work.
-	if maxi(int(ceil(band_w / span)), 1) != _band_reach:
-		_band_built = false
+	# r_view is now only the straight-line CEILING on anything the window can hold: road ahead can be
+	# no further away in a straight line than its length along the road, plus the window's width.
+	r_view = clampf(road_ahead + span * float(reach + 1), r_detail, r_max)
+	# The window is marked in whole chunks along a quantised arc-length, so it only has to be redone
+	# when one of the three numbers it was marked with actually moves. _finalise() re-derives
+	# whenever the measured vertex cost drifts 20% (see _cost_window), and re-marking on every
+	# call was a measured 4 ms spike in a physics tick under the old band (CHANGELOG 2026-11-16).
+	var wp := Vector3(road_ahead, road_behind, float(reach))
+	if wp != _win_params:
+		_win_q = -(1 << 40)
+		_scan_valid = false
 	# ...and the last scan's answer is void only if a radius it compared against actually moved.
-	if r_solid != _scanned_r[0] or r_detail != _scanned_r[1] or r_view != _scanned_r[2] or not _band_built:
+	if r_solid != _scanned_r[0] or r_detail != _scanned_r[1] or r_view != _scanned_r[2]:
 		_scan_valid = false
 	_derived_at_us = _us_per_vertex
 
@@ -323,42 +477,65 @@ func _dist_to_chunk(k: Vector2i, p: Vector3) -> float:
 	var dz: float = maxf(maxf(o.z - p.z, p.z - (o.z + span)), 0.0)
 	return sqrt(dx * dx + dz * dz)
 
-func _build_band() -> void:
-	## Which CHUNKS the far field may contain: everything within `band_w` of the road, marked once by
-	## walking the centreline. Reusing area.near_road() for this was wrong - that mask is sized for
-	## collision queries (~53 m), so the far field came out as a 106 m ribbon with a hard jagged edge
-	## where the world simply stopped, which looks worse than the dead space it replaced.
-	_band.clear()
-	var cl = area.gen.centreline
+func _mark_window(p: Vector3) -> void:
+	## Which chunks beyond the full-detail disc may exist: those within `band_chunks` of the road
+	## between `road_behind` behind the car and `road_ahead` ahead of it, measured ALONG the road.
+	## Each gets a priority = metres of road to reach it (behind counts double: ground you are
+	## leaving matters less than ground you are about to see), so the work list builds forward road
+	## first. A margin of one chunk-span of road past each end is marked "keep, do not build" (-1):
+	## that is the window's hysteresis, so a car parked on a quantum boundary cannot thrash the
+	## window's end chunks in and out.
+	var cl = area.gen.centreline if area.gen != null else null
 	if cl == null:
 		return
-	var reach: int = maxi(int(ceil(band_w / span)), 1)
-	_band_reach = reach
+	var step: float = span * 0.5
+	var np: Dictionary = cl.nearest_point(p.x, p.z)
+	var q: int = int(floor(float(np["s"]) / step))
+	var reach: int = maxi(band_chunks, 1)
+	var wp := Vector3(road_ahead, road_behind, float(reach))
+	if q == _win_q and wp == _win_params:
+		return
+	_win_q = q
+	_win_params = wp
 	_band_marks += 1
-	var s := 0.0
-	while s <= cl.length():
-		var p: Dictionary = cl.point_at(s)
-		var pos: Vector3 = p["pos"]
+	_win.clear()
+	var s_c: float = (float(q) + 0.5) * step
+	_s_car = s_c
+	var length: float = cl.length()
+	var lo: float = maxf(s_c - road_behind - span, 0.0)
+	var hi: float = minf(s_c + road_ahead + span, length)
+	var s: float = lo
+	while true:
+		var pos: Vector3 = cl.point_at(s)["pos"]
+		var ds: float = s - s_c
+		var inner: bool = ds >= -road_behind and ds <= road_ahead
+		var pri: float = ds if ds >= 0.0 else -ds * 2.0
 		var c := key_at(pos.x, pos.z)
-		for dx in range(-reach, reach + 1):
-			for dz in range(-reach, reach + 1):
-				_band[Vector2i(c.x + dx, c.y + dz)] = true
-		s += span * 0.5
-	_band_built = true
-
-func _near_corridor(k: Vector2i) -> bool:
-	if not _band_built:
-		_build_band()
-	return _band.has(k)
+		for dz in range(-reach, reach + 1):
+			for dx in range(-reach, reach + 1):
+				var kk := Vector2i(c.x + dx, c.y + dz)
+				var old: float = _win.get(kk, -2.0)
+				if inner:
+					if old < 0.0 or pri < old:
+						_win[kk] = pri
+				elif old == -2.0:
+					_win[kk] = -1.0
+		if s >= hi:
+			break
+		s = minf(s + step, hi)
 
 func _want_lod(k: Vector2i, d: float, have: int) -> int:
-	## The full LOD rule in one place: detail by distance, and beyond the driveable shell only where
-	## the road actually goes.
+	## The full LOD rule in one place: detail by distance, and beyond the driveable disc only where
+	## the road window goes (see _mark_window).
 	var l := lod_for(d, have)
 	if l == 0:
 		return 0
-	if d > r_detail and not _near_corridor(k):
-		return 0
+	if d > r_detail:
+		var w: float = _win.get(k, -2.0)
+		if w == -2.0:
+			return 0
+		if w < 0.0:
+			return have            # the window's margin: keep what is there, build nothing new
 	return l
 
 func _in_area(k: Vector2i) -> bool:
@@ -466,6 +643,8 @@ func _scan(q: Vector2i) -> void:
 	_drops.clear()
 	_drops_at = 0
 	var p := _pq
+	if not _beyond_reach(p):
+		_mark_window(p)
 	for k in _live:
 		# HYSTERESIS is one whole chunk span. That is the natural scale here rather than a tuned
 		# margin: a chunk only becomes droppable once the car is a full chunk past the radius that
@@ -473,8 +652,8 @@ func _scan(q: Vector2i) -> void:
 		var dk: float = _dist_to_chunk(k, p)
 		if dk > r_view + span:
 			_drops.append(k)
-		elif dk > r_detail + span and not _near_corridor(k):
-			_drops.append(k)      # dead space to the sides of the road: scenery nobody looks at
+		elif dk > r_detail + span and not _win.has(k):
+			_drops.append(k)      # off the road window: behind the forest, or road long gone
 	var c := key_at(p.x, p.z)
 	if not _live.is_empty():
 		# keep colliders in step with the car over the small set that could possibly need one
@@ -487,36 +666,41 @@ func _scan(q: Vector2i) -> void:
 	if _beyond_reach(p):
 		_scan_us += Time.get_ticks_usec() - t_scan
 		return
-	var r := int(ceil(r_view / span)) + 1
-	# Beyond r_detail a chunk is only ever wanted if the road goes there (_want_lod), and the view
-	# window is mostly ground the road does not visit: of its 1521 cells about 1000 are neither
-	# near the car nor in the band. One dictionary lookup settles those before any distance is
-	# worked out - the same answer _want_lod would give, reached without the three calls.
+	# Candidates are the full-detail disc's block plus the road window - nothing else can be wanted
+	# (_want_lod), so nothing else is walked. The old loop walked the whole (2 r_view / span)^2 view
+	# square, 1521 cells, and spent ~2.3 ms a scan doing it (MEASURED 2026-11-17, see CHANGELOG).
 	var near := int(ceil(r_detail / span)) + 1
-	if not _band_built:
-		_build_band()
-	for dz in range(-r, r + 1):
-		for dx in range(-r, r + 1):
-			var k := Vector2i(c.x + dx, c.y + dz)
-			if (dx > near or dx < -near or dz > near or dz < -near) and not _band.has(k):
-				continue
-			if not _in_area(k):
-				continue
-			var d := _dist_to_chunk(k, p)
-			var have: int = int(_live[k]["lod"]) if _live.has(k) else 0
-			var want_lod := _want_lod(k, d, have)
-			if want_lod == 0:
-				continue
-			if have == want_lod:
-				continue
-			# A chunk that is merely too COARSE can wait behind one that does not exist at all.
-			var pri: float = d if have == 0 else d + r_view
-			# Sorted natively: the priority in micrometres above the scan index, so equal
-			# priorities keep scan order - the same chunk the old first-minimum search picked.
-			_q_keys.append((int(pri * 1e6) << 20) | _q_cells.size())
-			_q_cells.append(k)
+	for dz in range(-near, near + 1):
+		for dx in range(-near, near + 1):
+			_consider(Vector2i(c.x + dx, c.y + dz), p)
+	for k in _win:
+		if absi(k.x - c.x) <= near and absi(k.y - c.y) <= near:
+			continue                       # already considered as part of the disc
+		_consider(k, p)
 	_q_keys.sort()
 	_scan_us += Time.get_ticks_usec() - t_scan
+
+func _consider(k: Vector2i, p: Vector3) -> void:
+	if not _in_area(k):
+		return
+	var d := _dist_to_chunk(k, p)
+	var have: int = int(_live[k]["lod"]) if _live.has(k) else 0
+	var want_lod := _want_lod(k, d, have)
+	if want_lod == 0 or have == want_lod:
+		return
+	# Inside the disc, nearest first. Beyond it, by metres of ROAD to reach it, so the road ahead
+	# is built before ground to the side or behind - never less than the straight distance, so the
+	# two orderings agree where they meet.
+	var pri: float = d
+	if d > r_detail:
+		pri = maxf(d, float(_win.get(k, d)))
+	# A chunk that is merely too COARSE can wait behind one that does not exist at all.
+	if have != 0:
+		pri += r_view
+	# Sorted natively: the priority in micrometres above the scan index, so equal
+	# priorities keep scan order - the same chunk the old first-minimum search picked.
+	_q_keys.append((int(pri * 1e6) << 20) | _q_cells.size())
+	_q_cells.append(k)
 
 func _next_job() -> void:
 	while _q_at < _q_keys.size():
@@ -584,11 +768,19 @@ func _sync_collider(k: Vector2i) -> void:
 		col.position = Vector3(o.x + span * 0.5, 0.0, o.z + span * 0.5)
 		area.add_child(col)
 		rec["col"] = col
+		# ...and the chunk's tree trunks, solid over exactly the same ground.
+		if forest != null and rec.has("trunks"):
+			var tb: StaticBody3D = forest.trunk_body(rec["trunks"])
+			if tb != null:
+				tb.name = "T%d_%d" % [k.x, k.y]
+				area.add_child(tb)
+			rec["tcol"] = tb
 	elif has and d > r_solid + span:
 		var c: Node = rec["col"]
 		if is_instance_valid(c):
 			c.queue_free()
 		rec["col"] = null
+		_free_trunks(rec)
 
 func _unload(k: Vector2i) -> void:
 	## Retire a chunk into the cache rather than destroying it. The collider IS freed - a physics
@@ -599,6 +791,7 @@ func _unload(k: Vector2i) -> void:
 	if col != null and is_instance_valid(col):
 		col.queue_free()
 	rec["col"] = null
+	_free_trunks(rec)
 	_live.erase(k)
 	var mi: Node = rec["mi"]
 	if not is_instance_valid(mi):
@@ -611,6 +804,12 @@ func _unload(k: Vector2i) -> void:
 	_cache_order.append(ck)
 	while _cache_order.size() > cache_max:
 		_evict(_cache_order[0])
+
+func _free_trunks(rec: Dictionary) -> void:
+	var tb = rec.get("tcol")
+	if tb != null and is_instance_valid(tb):
+		tb.queue_free()
+	rec["tcol"] = null
 
 func _evict(ck: Vector3i) -> void:
 	_cache_order.erase(ck)
@@ -749,6 +948,12 @@ func _finalise() -> void:
 	mi.name = "C%d_%d" % [k.x, k.y]
 	mi.mesh = mesh
 	add_child(mi)
+	# Arc E: the chunk's trees, read off the same sample arrays - no extra road search.
+	var trunks := PackedVector4Array()
+	if forest != null:
+		var g: Dictionary = forest.grow(k, lod, h, e, ax, step, o, span)
+		forest.attach(mi, g, lod)
+		trunks = g["trunks"]
 
 	# Collider only where a wheel can REACH, which is r_solid - not everywhere the ground is drawn at
 	# full detail. Cooking one for every full-detail chunk put 79 heightfields in the physics world
@@ -757,7 +962,8 @@ func _finalise() -> void:
 		_unload(k)
 	# Heights are KEPT for full-detail chunks so a collider can be attached or dropped later without
 	# rebuilding the chunk. 33x33 floats is 4.4 kB; rebuilding to gain a collider would be 15 ms.
-	_live[k] = {"mi": mi, "col": null, "lod": lod, "h": heights if lod == 1 else PackedFloat32Array()}
+	_live[k] = {"mi": mi, "col": null, "lod": lod, "h": heights if lod == 1 else PackedFloat32Array(),
+		"trunks": trunks if lod == 1 else PackedVector4Array(), "tcol": null}
 	if lod == 1:
 		_sync_collider(k)
 	_peak_chunks = maxi(_peak_chunks, _live.size())
@@ -842,7 +1048,8 @@ func stats() -> Dictionary:
 		"r_solid": r_solid, "r_detail": r_detail, "r_view": r_view, "span": span,
 		"colliders": _collider_count(), "cached": _cache.size(), "cache_hits": _cache_hits,
 		"scans": _scans, "queued": _q_keys.size() - _q_at, "scan_us": _scan_us,
-		"band_marks": _band_marks, "finalise_us": _finalise_us}
+		"band_marks": _band_marks, "finalise_us": _finalise_us, "window": _win.size(),
+		"road_ahead": road_ahead, "road_behind": road_behind, "band_chunks": band_chunks}
 
 func _collider_count() -> int:
 	var c := 0

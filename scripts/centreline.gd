@@ -147,6 +147,16 @@ func _finish_build() -> void:
 func length() -> float:
 	return _length
 
+func max_segment_length() -> float:
+	## The longest gap between two neighbouring samples, in metres. nearest_point() reports an `s`
+	## within one segment of the nearest SAMPLE, so any bound on "how far along the road can the
+	## answer be from where I am" needs this number - see StageArea._mark_sealed(), which derives a
+	## reach from it rather than assuming the samples are dense.
+	var m := 0.0
+	for v in _seglen:
+		m = maxf(m, v)
+	return m
+
 func is_loop() -> bool:
 	return _loop
 

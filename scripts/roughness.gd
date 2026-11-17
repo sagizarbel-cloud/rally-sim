@@ -43,9 +43,15 @@ const N_OCTAVES := 5         # bands [n0,2n0]..[16n0,32n0] = 0.1-3.2 cycles/m, 1
 # sample's weight toward 1.0 as its value approaches the patch's own peak, never below this floor.
 const ENVELOPE_FLOOR := 0.5
 
-var _oct_noise: Array = []
+var _oct_noise: Array[FastNoiseLite] = []
 var _oct_norm: PackedFloat32Array   # measured RMS of each octave, so the ISO amplitudes land true
 var _patch_noise: FastNoiseLite
+# The five band amplitudes of _broadband() for the last two road classes asked about. Two slots
+# because a tick alternates between at most two classes (gravel and tarmac); see _broadband().
+var _rms_gd_a := NAN
+var _rms_a := PackedFloat64Array()
+var _rms_gd_b := NAN
+var _rms_b := PackedFloat64Array()
 
 func _ready() -> void:
 	_build_noise()
@@ -94,13 +100,34 @@ func _octave_rms(gd_n0_1e6: float, n: float) -> float:
 	return sqrt(gd0 * pow(N0, WAVINESS) * pow(n, 1.0 - WAVINESS)
 		* (pow(2.0, 1.0 - WAVINESS) - 1.0) / (1.0 - WAVINESS))
 
+func _band_rms(gd_n0_1e6: float) -> PackedFloat64Array:
+	# _octave_rms() for all five bands of one road class. It is a pure function of the class, three
+	# pow() and a sqrt per band, and _broadband() asked for it at every one of the 36 field samples
+	# a tick takes - 180 times a tick for ten numbers. Held as 64-bit values and keyed on the exact
+	# class, so the amplitude that reaches the sum is the identical double. A surface BLEND (the
+	# sealed transitions on a generated stage) has a different class at every sample and simply
+	# misses, which costs what it always did.
+	if gd_n0_1e6 == _rms_gd_a:
+		return _rms_a
+	if gd_n0_1e6 == _rms_gd_b:
+		return _rms_b
+	_rms_gd_b = _rms_gd_a
+	_rms_b = _rms_a
+	_rms_gd_a = gd_n0_1e6
+	_rms_a = PackedFloat64Array()
+	_rms_a.resize(N_OCTAVES)
+	for i in range(N_OCTAVES):
+		_rms_a[i] = _octave_rms(gd_n0_1e6, N0 * pow(2.0, i))
+	return _rms_a
+
 func _broadband(x: float, z: float, gd_n0_1e6: float) -> float:
+	var rms := _band_rms(gd_n0_1e6)
 	var h := 0.0
 	for i in range(N_OCTAVES):
-		var n := N0 * pow(2.0, i)
 		# normalise the layer to unit RMS, then scale by the band's exact rms: independent octaves
-		# add in quadrature, so the total lands on the ISO variance for the whole spectrum
-		h += _oct_noise[i].get_noise_2d(x, z) * _octave_rms(gd_n0_1e6, n) / _oct_norm[i]
+		# add in quadrature, so the total lands on the ISO variance for the whole spectrum.
+		# (noise * rms) / norm, in that order - pre-dividing rms by norm would round differently.
+		h += _oct_noise[i].get_noise_2d(x, z) * rms[i] / _oct_norm[i]
 	return h
 
 # ---------------------------------------------------------------- road class + per-surface detail

@@ -36,12 +36,12 @@ phrases are no longer true. Current state, from `docs/PLAN-stages-ground-map.md`
 | phase | state |
 |---|---|
 | D1, D2, D3, D5 | done, drive-verified |
-| D4 streaming | drive-accepted 2026-08-31 with ONE item open - "the game has hiccups sometimes". **Root causes found and fixed 2026-11-16** (the streamer's own bookkeeping, not the GPU and not the LOD count); awaiting one drive to confirm |
+| D4 streaming | **done**. Drive-accepted 2026-08-31; its last item, "the game has hiccups sometimes", was fixed (the streamer's own bookkeeping, not the GPU and not the LOD count) and closed on the drive 2026-11-16: *"i think it looks better"*, and the frame log blamed no burst on the streamer |
 | D6 mixed surfaces | driven 2026-11-16: three of four items pass; the tyre-AUDIO half of the fourth is carried to the bug run |
 | D7 ruts | open, optional, first thing to cut |
 | D8 bake / prune / end-to-end | open - closes the arc |
 
-**The order of work, set by the driver on 2026-11-12 and still in force:** finish D4's open item →
+**The order of work, set by the driver on 2026-11-12 and still in force:** finish D4's open item (DONE 2026-11-16) →
 **a bug-cleaning run** (the after-arc fix list below, `PLAN-stages-ground-map.md` §6b's carried
 defects, Arc C's open C2 items, B3's hydraulic bump stop) → **migrate to Godot 4.6**
 (`docs/PROMPT-godot-46-migration.md`, whose own prerequisite is a clean tree and no phase
@@ -103,6 +103,16 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   budget while the car is still in the tube. Deferred because it is D5's transition path and wants
   its own drive verdict. **Not the fix: spreading prime() over several ticks** - the car is already
   there, and ground that arrives late under a car is a fall through the world.
+- **A 150 ms physics stall a few seconds after arriving on SHAKEDOWN** (found in the D4 closing
+  drive's frame log, 2026-11-16; asked, the driver said *"no i dont think i felt a freeze after pressing B"*). At t=16.7 s, 6.6 s after
+  `[B]`, at 44 km/h: two physics ticks each ~150 ms over normal (worst tick 152.3 ms), 9 late frames,
+  **710 ms lost - the largest single burst of the run**, bigger than the `prime()` freeze. The
+  logger put it in the **Jolt step itself**, not in `vehicle_m2` or the streamer's scripts.
+  **Unproven guess:** Jolt digesting the many static colliders the streamer adds during the initial
+  fill (broad-phase rebuild, or first contact with freshly cooked shapes) - which would make it a
+  streaming side-effect and a sibling of the arrival freeze above. First move: reproduce it with
+  the parked self-test (logger is in git at c7b5a3d) and see whether it tracks collider adds.
+  Deferred because D4's item was the streamer's own hitches, which are gone.
 - **Frame headroom the 2026-11-16 logger exposed** - none of these hitch, they are what a frame
   spends before anything goes wrong (ms per 16.7 ms frame on SHAKEDOWN): the car's own physics
   2.40 (1.49 on the legacy map - the stage's ground queries cost more), `time_trial` 0.71 (0.07 on
@@ -174,6 +184,14 @@ Sequenced by the user 2026-08-30: **finish Arc D and Arc C's open items, then a 
 then plan this.** (Refined 2026-11-12: the Godot 4.6 migration sits between the bug run and this -
 see "State as of 2026-11-16" above.) Not a plan yet - a captured intent, so it is not lost in chat. Six items, and they
 are NOT one arc's worth of the same kind of work:
+
+**STATUS 2026-11-17 (branch `claude/project-thread-gogg6v`, not yet driven):** E-a started (shader
+noise, wheel lines, forest floor - no textures yet), E-b done for SHAKEDOWN (`stage_forest.gd`,
+spruces streamed with the chunks, solid trunks), E-c done (sky shader with clouds), plus filmic
+tonemapping, haze, an SSAO/glow switch and the sRGB colour fix that was the real cause of the
+washed-out look. The streamer's far field is now a narrow ROAD WINDOW made safe by the forest - see
+CHANGELOG 2026-11-17. Open: the legacy map's ball-on-a-stick trees could become spruces (visual
+only), real textures/normal detail for the ground, and the drive verdict on all of it.
 
 **E-a. Procedural ground texturing.** The chunk mesh already carries a per-vertex EDGE DISTANCE for
 exactly this reason (`StageArea.sample_at()` returns it so the road edge can be thresholded per

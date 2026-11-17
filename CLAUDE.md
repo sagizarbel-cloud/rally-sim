@@ -58,5 +58,6 @@ with one of these, confirm WHICH of the four before changing anything - the fixe
 - `stage.gd` — procedural terrain: rally loop, asphalt ring, dirt circle (centre deformable patch), drag strip, collidable obstacles.
 - `ground_map.gd` — **the one authority for what the ground IS** at any (x, z): surface, road class, deformability, grip, colour, audio, composed of layers in priority order. Every surface question goes through it.
 - `centreline.gd` · `stage_def.gd` · `stage_gen.gd` · `stage_area.gd` · `stage_chunks.gd` — arc-length centrelines (open or closed), the SHAKEDOWN stage generator, and the streamed ground. **`stage_chunks.gd` is the ground's build step, not the road's shape**: it asks `stage_area.sample_at(x, z)` — a pure function of position and seed — for every vertex, which is what makes a chunk's contents independent of load order. If you are changing how the road is SHAPED you are in `stage_gen.gd`, not here.
+- `stage_forest.gd` — SHAKEDOWN's roadside spruces: seeded per global lattice cell, grown per chunk from the chunk's own samples, solid trunks near the car. The forest is what lets `stage_chunks.gd` stream only a narrow road window.
 - `time_trial.gd` — 3-circuit lap timing + ghost + sector splits.
 - `pace_notes.gd` · `wear.gd` · `sound.gd` · `hud.gd` · `component_hud.gd` · `terrain.gd` · `tuning_panel.gd`.
