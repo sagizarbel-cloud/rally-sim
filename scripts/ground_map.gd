@@ -81,26 +81,33 @@ func _resolve(x: float, z: float) -> void:
 	for a in areas:
 		if not a.in_area(x, z):
 			continue
-		# D5: a layer may NAME its own surface. Generated stages are gravel roads on grass, which is
-		# the default below; a tunnel is paved, and saying so here is what stops every consumer -
-		# grip, audio, dust, roughness - having to learn what a tunnel is.
-		if a.has_method("surface_at"):
-			_pure(int(a.surface_at(x, z)))
-			return
-		if not a.on_road(x, z):
-			_pure(Surface.GRASS)
-			return
-		# D6: a generated stage's road is a MIX of gravel and seal, from one factor the area owns.
-		# §1.1 keeps this off the legacy map entirely - the calibration bed's edges stay hard, and its
-		# ground lattice stays bit-identical, because no layer below this one blends.
-		if a.has_method("road_mix_at"):
-			_ra = Surface.DIRT
-			_rb = Surface.ASPHALT
-			_rt = clampf(float(a.road_mix_at(x, z)), 0.0, 1.0)
-			return
-		_pure(Surface.DIRT)
+		_resolve_area(a, x, z)
 		return
+	_resolve_legacy(x, z)
 
+func _resolve_area(a, x: float, z: float) -> void:
+	## One generated area's answer for a position it has already claimed with in_area().
+	# D5: a layer may NAME its own surface. Generated stages are gravel roads on grass, which is
+	# the default below; a tunnel is paved, and saying so here is what stops every consumer -
+	# grip, audio, dust, roughness - having to learn what a tunnel is.
+	if a.has_method("surface_at"):
+		_pure(int(a.surface_at(x, z)))
+		return
+	if not a.on_road(x, z):
+		_pure(Surface.GRASS)
+		return
+	# D6: a generated stage's road is a MIX of gravel and seal, from one factor the area owns.
+	# §1.1 keeps this off the legacy map entirely - the calibration bed's edges stay hard, and its
+	# ground lattice stays bit-identical, because no layer below this one blends.
+	if a.has_method("road_mix_at"):
+		_ra = Surface.DIRT
+		_rb = Surface.ASPHALT
+		_rt = clampf(float(a.road_mix_at(x, z)), 0.0, 1.0)
+		return
+	_pure(Surface.DIRT)
+
+func _resolve_legacy(x: float, z: float) -> void:
+	## The calibration map's own layers, in grip_at's original order (see _resolve).
 	# 1. Asphalt ring corridor.
 	var ad: float = stage._asphalt_dist(x, z)
 	if ad < float(stage.asphalt_width) * 0.5 + 1.0:
@@ -168,12 +175,38 @@ func surface_at(x: float, z: float) -> int:
 	return _classify(x, z)
 
 func is_tarmac_at(x: float, z: float) -> bool:
-	return _classify(x, z) == Surface.ASPHALT
+	# Same area walk as _resolve(), with one exit added: an area that vouches its ground here is
+	# certainly gravel (see road_class_at) is not tarmac, whether this point is on its road or not.
+	for a in areas:
+		if not a.in_area(x, z):
+			continue
+		if a.has_method("road_is_gravel_at") and a.road_is_gravel_at(x, z):
+			return false
+		_resolve_area(a, x, z)
+		return (_rb if _rt >= 0.5 else _ra) == Surface.ASPHALT
+	_resolve_legacy(x, z)
+	return (_rb if _rt >= 0.5 else _ra) == Surface.ASPHALT
 
 func road_class_at(x: float, z: float) -> float:
 	# Interpolated with the same factor as grip, so the suspension's roughness and the tyre's grip
 	# can never describe different ground.
-	_resolve(x, z)
+	#
+	# THE HOT PATH OF THE WHOLE GROUND MAP: the roughness field asks this 36 times a tick, nine
+	# samples under each wheel. On a generated stage every one of those used to find the nearest
+	# road point (on_road, then road_mix_at) to learn the class - and GRASS and DIRT share ONE
+	# class, so on ground that cannot be sealed the search could only ever return the same number.
+	# An area that can vouch for that (road_is_gravel_at) is answered without it. Exact, not
+	# approximate: the area's test is a proof, and the value returned is the one _resolve() would
+	# have reached. Measured on SHAKEDOWN gravel: 14.5 us a call before, see CHANGELOG 2026-11-17.
+	# The legacy map never reaches this branch - no area claims it - so its lattice cannot move.
+	for a in areas:
+		if not a.in_area(x, z):
+			continue
+		if a.has_method("road_is_gravel_at") and a.road_is_gravel_at(x, z):
+			return _road_class_for(Surface.DIRT)
+		_resolve_area(a, x, z)
+		return lerpf(_road_class_for(_ra), _road_class_for(_rb), _rt) if _rt > 0.0 else _road_class_for(_ra)
+	_resolve_legacy(x, z)
 	return lerpf(_road_class_for(_ra), _road_class_for(_rb), _rt) if _rt > 0.0 else _road_class_for(_ra)
 
 func audio_at(x: float, z: float) -> StringName:
