@@ -535,14 +535,27 @@ func _say(text: String) -> void:
 	if _tts:
 		DisplayServer.tts_speak(text, _voice, 60, 1.0, speech_rate, 0, true)   # interrupt any prior call
 
+var _box: VBoxContainer
+## Where the notes sit, as a fraction of the screen height from the top (0 = top, 1 = bottom).
+## Set from the HUD menu ([H]) and saved there. 0.85 is about where they always were.
+var note_height := 0.85
+
+func set_note_height(f: float) -> void:
+	note_height = clampf(f, 0.05, 0.95)
+	if _box != null:
+		_box.anchor_top = note_height
+		_box.anchor_bottom = note_height
+		_box.offset_top = -40
+		_box.offset_bottom = 40
+
 func _build_ui() -> void:
 	var box := VBoxContainer.new()
 	box.anchor_left = 0.5; box.anchor_right = 0.5
-	box.anchor_top = 1.0; box.anchor_bottom = 1.0
 	box.offset_left = -260; box.offset_right = 260
-	box.offset_top = -150; box.offset_bottom = -70
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(box)
+	_box = box
+	set_note_height(note_height)
 
 	_cur_label = Label.new()
 	_cur_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

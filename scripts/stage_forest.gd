@@ -24,7 +24,10 @@ var area                                 ## StageArea
 var spacing := 5.75                      ## m: one tree per spacing^2 = 33 m^2, before clearings
 var clearance := 5.0                     ## m outside the carriageway edge kept clear of trunks
 var edge_ramp := 7.0                     ## m over which the forest thickens from the clearance line
-var detail_m := 110.0                    ## camera distance at which a chunk swaps to silhouettes
+var detail_m := 80.0                     ## camera distance at which a chunk swaps to silhouettes.
+                                         ## 110 -> 80 m after the fullscreen drive: past 80 m a
+                                         ## 25 m spruce is under ~1/8 of the screen tall, and the
+                                         ## silhouette is the same outline.
 var min_h := 16.0                        ## m, tree height range (mature Norway spruce: 15-35 m)
 var max_h := 29.0
 var collide := true                      ## trunks near the car are solid
@@ -60,8 +63,8 @@ void fragment() {
 	ALBEDO = to_linear(clamp(COLOR.rgb, 0.0, 1.0));
 	ROUGHNESS = 0.92;
 	SPECULAR = 0.25;
-	// Needles scatter light through the crown: a little back-lit glow on the thin outer boughs.
-	BACKLIGHT = ALBEDO * 0.35;
+	// (No BACKLIGHT: it switches the material onto the translucency lighting path for every tree
+	// pixel, and the 2026-11-17 fullscreen drive was bound by per-pixel cost.)
 }
 """
 

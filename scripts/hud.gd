@@ -54,6 +54,9 @@ var _fps_box: CheckBox
 var _trial_box: CheckBox
 var _bind_btn: Button
 var _rebinding := false
+var _notes_slider: HSlider
+var note_height := 0.85                  # pace notes' vertical position (fraction of screen height)
+var _vp_rid: RID
 
 func _ready() -> void:
 	# one Theme on the box instead of four overrides on each Label: the font size is then changed
@@ -94,9 +97,19 @@ func _ready() -> void:
 	_help.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_help.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_help)
+	# GPU frame time, for the "120 fps of GPU headroom on a 60 Hz screen" target: vsync hides how
+	# much of each 16.7 ms frame the GPU actually needs, so fps alone cannot show the headroom.
+	_vp_rid = get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(_vp_rid, true)
 	_load_cfg()
 	_build_menu()
 	_apply_mode()
+	_apply_notes.call_deferred()
+
+func _apply_notes() -> void:
+	var pn := get_parent().get_node_or_null("PaceNotes") if get_parent() != null else null
+	if pn != null and pn.has_method("set_note_height"):
+		pn.set_note_height(note_height)
 
 # ---------------------------------------------------------------- display modes + the menu
 
@@ -180,6 +193,31 @@ func _build_menu() -> void:
 		_apply_mode()
 		_save_cfg())
 	v.add_child(_trial_box)
+	var nl := Label.new()
+	nl.text = "Pace notes height (top - bottom)"
+	v.add_child(nl)
+	_notes_slider = HSlider.new()
+	_notes_slider.min_value = 0.05
+	_notes_slider.max_value = 0.95
+	_notes_slider.step = 0.01
+	_notes_slider.value = note_height
+	_notes_slider.custom_minimum_size = Vector2(320, 0)
+	_notes_slider.focus_mode = Control.FOCUS_NONE
+	_notes_slider.value_changed.connect(func(val: float):
+		note_height = val
+		_apply_notes()
+		_save_cfg())
+	v.add_child(_notes_slider)
+	var unc := CheckBox.new()
+	unc.text = "Uncapped fps (vsync off) - to measure headroom"
+	unc.focus_mode = Control.FOCUS_NONE
+	unc.toggled.connect(func(on: bool):
+		# With vsync on, frames are held to the screen's 60 Hz and spare GPU capacity is invisible -
+		# and Metal does not report GPU time - so this is how the "120 fps of headroom" target is
+		# measured. Not saved: it tears, and is a measuring tool rather than a setting.
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED if on else DisplayServer.VSYNC_ENABLED)
+		Engine.max_fps = 0 if on else 144)
+	v.add_child(unc)
 	_bind_btn = Button.new()
 	_bind_btn.focus_mode = Control.FOCUS_NONE
 	_bind_btn.pressed.connect(func():
@@ -230,6 +268,7 @@ func _save_cfg() -> void:
 	c.set_value("hud", "mode", mode)
 	c.set_value("hud", "show_fps", show_fps)
 	c.set_value("hud", "show_trial", show_trial)
+	c.set_value("hud", "note_height", note_height)
 	var evs := InputMap.action_get_events("hud_menu") if InputMap.has_action("hud_menu") else []
 	if not evs.is_empty():
 		var e: InputEvent = evs[0]
@@ -246,6 +285,7 @@ func _load_cfg() -> void:
 	mode = clampi(int(c.get_value("hud", "mode", mode)), 0, MODE_NAMES.size() - 1)
 	show_fps = bool(c.get_value("hud", "show_fps", show_fps))
 	show_trial = bool(c.get_value("hud", "show_trial", show_trial))
+	note_height = clampf(float(c.get_value("hud", "note_height", note_height)), 0.05, 0.95)
 	if c.has_section_key("hud", "menu_key"):
 		var k := InputEventKey.new()
 		k.physical_keycode = int(c.get_value("hud", "menu_key")) as Key
@@ -295,7 +335,11 @@ func _process(delta: float) -> void:
 		var fwd_kmh: float = v.dot(fwd) * 3.6
 		var steer := Input.get_action_strength("steer_left") - Input.get_action_strength("steer_right")
 		var eng := {}
-		_put("fps", "fps %d" % Engine.get_frames_per_second())
+		var gpu_ms: float = RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid)
+		if gpu_ms > 0.0:
+			_put("fps", "fps %d   gpu %.1f ms (%d fps headroom)" % [Engine.get_frames_per_second(), gpu_ms, int(1000.0 / gpu_ms)])
+		else:
+			_put("fps", "fps %d" % Engine.get_frames_per_second())
 		if has_eng:
 			eng = car.get_engine()
 			_put("title", "RALLY SIM - M2  (slip-ratio drivetrain)")

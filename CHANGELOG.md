@@ -20,6 +20,35 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-17, late (toward a 120 fps GPU baseline; first-30-seconds stutter; pace-note height)
+
+Grep words: *stutter on entering SHAKEDOWN*, *first 30 seconds slow*, *shader compile hitch*,
+*120 fps*, *vsync hides headroom*, *GPU ms*, *SSAO and glow are the cost*, *notes too high/low*.
+
+Drive 3 (fullscreen 2880x1800, commit 05221be, framelog-2026-11-17T15-51-04.csv on the Mac),
+fps by time of day with SSAO+glow toggled during the run: noon 47, morning 52, evening 59,
+night 56. User verdict: "seems the ssao+glow are the main things causing the performance
+issues". 160 m shadows measured about +4 ms over 100 m. The first-30-seconds slowness after
+[B] coincided with shader compilation at 80-83 s into the log (first time the chunk, backdrop and
+forest materials are drawn), partly overlapping the noon segment.
+
+Changes (not yet driven):
+- **Shader warm-up**: `world.gd _warm_shaders()` draws tiny copies of the chunk, backdrop and
+  forest near/far materials in front of the chase cam for 0.5 s at boot, so their pipelines
+  compile before the stage is entered rather than during the first seconds of the run.
+- **Cheaper per-pixel cost**: the value-noise hash in the ground/backdrop/sky shaders is now an
+  arithmetic hash (no `sin()`); the forest BACKLIGHT term is gone; the near-tree detail range is
+  80 m (was 110); the sun uses 2 shadow splits (was 4). Cloud probe at 300 m: 528 -> 487 draw
+  calls, 676k -> 587k primitives, look unchanged.
+- **Measuring tools**: HUD menu (H) gets a GPU ms readout beside fps (shown only where the driver
+  reports it; Metal may report 0) and an "Uncapped fps (vsync off)" toggle, because a 60 Hz
+  vsync cap hides any headroom toward the 120 fps target. Not saved between runs.
+- **Pace-note height**: slider in the HUD menu, saved in user://hud.cfg.
+
+Plan: reach a 120 fps baseline fullscreen with SSAO+glow off, then add them back on top.
+
+---
+
 ## 2026-11-17 (Arc E opens: roadside spruces, a road-window streamer, and the washed-out look fixed)
 
 Grep words: *washed out*, *road looks white*, *pale grass*, *flat colours*, *low poly look*,

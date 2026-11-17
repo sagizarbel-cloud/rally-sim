@@ -195,7 +195,9 @@ varying vec3 wpos;
 // Cheap value noise. Surface DETAIL with no textures: the ground is one colour per surface type,
 // and real ground is never one colour. A few octaves at sizes from 0.3 m to 30 m break that up,
 // and it costs a handful of ALU per pixel rather than texture bandwidth.
-float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// Arithmetic hash (Hoskins' hash12): no sin(), which is a slow multi-instruction op on many GPUs
+// and was evaluated 12 times per ground pixel. Per-pixel cost is what the fullscreen drive was bound by.
+float hash2(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);
@@ -248,7 +250,9 @@ shader_type spatial;
 uniform vec3 canopy_col : source_color = vec3(0.13, 0.19, 0.12);
 uniform vec3 canopy_hi : source_color = vec3(0.20, 0.27, 0.16);
 varying vec3 wpos;
-float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// Arithmetic hash (Hoskins' hash12): no sin(), which is a slow multi-instruction op on many GPUs
+// and was evaluated 12 times per ground pixel. Per-pixel cost is what the fullscreen drive was bound by.
+float hash2(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);

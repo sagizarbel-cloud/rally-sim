@@ -82,6 +82,7 @@ func _ready() -> void:
 	_build_reactive_patch(car, stage)
 	_build_area_manager(car, stage)               # D5: the tunnel between the two areas
 	_build_sound(car, stage)
+	_warm_shaders()
 
 func _physics_process(delta: float) -> void:
 	if _car == null:
@@ -390,7 +391,7 @@ uniform vec3 horizon_col : source_color = vec3(0.72, 0.82, 0.95);
 uniform vec3 ground_col : source_color = vec3(0.25, 0.27, 0.24);
 uniform float cloud_cover = 0.45;
 uniform float cloud_shade = 1.0;
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);
@@ -460,6 +461,10 @@ func _build_environment() -> void:
 	# gfx_shadow_m on the car, which drives it live.
 	_sun.directional_shadow_max_distance = 100.0
 	_sun.shadow_blur = 1.0
+	# Two cascades, not four: every shadow caster is drawn once per cascade it touches, and over a
+	# 100 m range two splits keep the near shadows sharp. Halves the shadow passes.
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	_sun.directional_shadow_split_1 = 0.25
 	add_child(_sun)
 
 	_env = Environment.new()
@@ -503,6 +508,42 @@ func _build_environment() -> void:
 	add_child(we)
 	_apply_tod(_tod)
 	_apply_gfx(false)
+
+func _warm_shaders() -> void:
+	## THE FIRST 30 SECONDS ON SHAKEDOWN STUTTERED (drive 2026-11-17): the frame log shows shaders
+	## compiling at the moment the car arrived, because the stage's ground, tree and backdrop
+	## materials are first DRAWN there, 3 km from the spawn. Draw each of them once, a couple of
+	## metres in front of the chase camera and behind the car, during the first frames - with shadows,
+	## so the shadow-pass variants compile too - then remove them.
+	if _stage_area == null or _stage_area.chunks == null or _chase_cam == null:
+		return
+	var ch = _stage_area.chunks
+	var meshes: Array = []
+	var q := QuadMesh.new()
+	q.size = Vector2(0.05, 0.05)
+	q.material = ch._mat
+	meshes.append(q)
+	if ch._backdrop != null:
+		var q2 := QuadMesh.new()
+		q2.size = Vector2(0.05, 0.05)
+		q2.material = ch._backdrop.mesh.surface_get_material(0)
+		meshes.append(q2)
+	if ch.forest != null:
+		meshes.append(ch.forest.mesh_near)
+		meshes.append(ch.forest.mesh_far)
+	var holder := Node3D.new()
+	holder.name = "ShaderWarmup"
+	_chase_cam.add_child(holder)
+	var x := -0.06
+	for m in meshes:
+		var mi := MeshInstance3D.new()
+		mi.mesh = m
+		mi.scale = Vector3.ONE * 0.05
+		mi.position = Vector3(x, 0.0, -1.5)
+		holder.add_child(mi)
+		x += 0.04
+	# a few frames is enough for the pipelines to be built; then it is gone
+	get_tree().create_timer(0.5).timeout.connect(holder.queue_free)
 
 func _apply_gfx(high: bool) -> void:
 	_env.ssao_enabled = high
