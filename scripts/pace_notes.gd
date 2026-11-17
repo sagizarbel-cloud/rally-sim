@@ -95,7 +95,11 @@ var _ng_min_z := 0.0
 var _ng_max_x := 0.0
 var _ng_max_z := 0.0
 var _ng_max_ring := 0
-var _ng_brute := 0.0
+var _ng_brute := 0.0                  # beyond this distance from the routes the full scan is cheaper
+var _ng_ring_limit := 0               # ...which is this many rings of cells
+var _ng_last_d := 0.0                 # the last answer's distance, and where it was asked from:
+var _ng_last_p := Vector3.ZERO        # the nearest point cannot come closer faster than the car moves
+const NG_PROBE_COST := 5.6            # one cell probe costs this many point tests (measured, see below)
 var _nb_d := 1e18                     # the three results of _nearest_route_point()
 var _nb_r := -1
 var _nb_j := 0
@@ -120,9 +124,14 @@ func _build_nearest_grid() -> void:
 	# a handful of points per cell: eight times the mean spacing, the rule Centreline uses
 	_ng_cell = maxf(total_len / float(n) * 8.0, 1.0)
 	_ng_max_ring = int(ceil(maxf(_ng_max_x - _ng_min_x, _ng_max_z - _ng_min_z) / _ng_cell)) + 2
-	# reaching a distance d costs about 4*(d/cell)^2 cell probes and the full scan costs n point
-	# tests, so the scan wins beyond d = cell * sqrt(n / 4) (Centreline's derivation)
-	_ng_brute = _ng_cell * sqrt(float(n) / 4.0)
+	# Reaching a distance d costs about 4*(d/cell)^2 cell probes and the full scan costs n point
+	# tests, so the scan wins beyond the d where those meet. A probe is not a point test, though:
+	# measured here, walking to 130 m took 143 us (about 320 probes) while the scan's ~4,500 point
+	# tests took 354 us - one probe costs what NG_PROBE_COST point tests do. So
+	# d = cell * sqrt(n / (4 * NG_PROBE_COST)), about 200 m on this map.
+	_ng_brute = _ng_cell * sqrt(float(n) / (4.0 * NG_PROBE_COST))
+	_ng_ring_limit = int(ceil(_ng_brute / _ng_cell))
+	_ng_last_d = 0.0
 	for ri in range(_routes.size()):
 		var rpts2: PackedVector3Array = _routes[ri]["pts"]
 		for i in range(rpts2.size()):
@@ -154,15 +163,23 @@ func _nearest_route_point(cp: Vector3) -> void:
 	if _ng.is_empty():
 		_nearest_scan(cp)
 		return
+	# FAR FROM EVERY ROUTE THE SCAN IS THE CHEAPER WAY, and two things say "far" without searching:
+	# the box round all the routes, and the last answer - the nearest point was _ng_last_d away when
+	# asked from _ng_last_p, and it cannot be nearer now than that minus how far the car has moved.
+	# Either way the answer is the scan's own, so which path runs changes the cost and nothing else.
 	var dx_out: float = maxf(maxf(_ng_min_x - cp.x, cp.x - _ng_max_x), 0.0)
 	var dz_out: float = maxf(maxf(_ng_min_z - cp.z, cp.z - _ng_max_z), 0.0)
-	if dx_out * dx_out + dz_out * dz_out > _ng_brute * _ng_brute:
+	var moved: float = Vector2(cp.x - _ng_last_p.x, cp.z - _ng_last_p.z).length()
+	if dx_out * dx_out + dz_out * dz_out > _ng_brute * _ng_brute or _ng_last_d - moved > _ng_brute:
 		_nearest_scan(cp)
+		_ng_last_d = sqrt(_nb_d)
+		_ng_last_p = cp
 		return
 	var ck := _ng_key(cp.x, cp.z)
 	var best_key := -1
+	var proven := false
 	var r := 0
-	while r <= _ng_max_ring:
+	while r <= mini(_ng_max_ring, _ng_ring_limit):
 		for dxi in range(-r, r + 1):
 			var stride: int = 1 if (absi(dxi) == r or r == 0) else 2 * r
 			var dzi := -r
@@ -185,13 +202,20 @@ func _nearest_route_point(cp: Vector3) -> void:
 		var hi_z := _ng_min_z + float(ck.y + r + 1) * _ng_cell
 		var safe := minf(minf(cp.x - lo_x, hi_x - cp.x), minf(cp.z - lo_z, hi_z - cp.z)) * 0.99
 		if best_key >= 0 and safe > 0.0 and _nb_d <= safe * safe:
+			proven = true
 			break
 		r += 1
-	if best_key < 0:
+	if not proven:
+		# nothing within the walk's reach was provably the nearest: let the scan answer from scratch
+		_nb_d = 1e18
+		_nb_r = -1
+		_nb_j = 0
 		_nearest_scan(cp)
-		return
-	_nb_r = best_key >> 20
-	_nb_j = best_key & 0xFFFFF
+	else:
+		_nb_r = best_key >> 20
+		_nb_j = best_key & 0xFFFFF
+	_ng_last_d = sqrt(_nb_d)
+	_ng_last_p = cp
 
 # ---------------------------------------------------------------- build a circuit's route + notes
 
@@ -242,8 +266,14 @@ func _build_route(cl: Centreline, rname: String, cmin: float, sev_scale: float, 
 	# `loop` and `n` travel WITH the route. They used to live only in the members _rloop/_rn, which
 	# are per-build scratch: the last route built wins, and _process then read another road's
 	# topology through _idx. See _process for the measured damage that did.
+	# `s0s`: every corner's start arc length again, as a packed array in the same order. _process
+	# asks "how far ahead is each corner" every frame; reading a packed double is several times
+	# cheaper than a Dictionary lookup, and a double holds the Dictionary's value exactly.
+	var s0s := PackedFloat64Array(); s0s.resize(corners.size())
+	for k in range(corners.size()):
+		s0s[k] = float(corners[k]["s0"])
 	return {"name": rname, "pts": pts, "arc": arc, "elev": elev, "total": s, "corners": corners,
-		"loop": _rloop, "n": count}
+		"s0s": s0s, "loop": _rloop, "n": count}
 
 func _index_at_s(arc: PackedFloat32Array, s_target: float) -> int:
 	## Nearest sample to an arc length. The gate is a distance along the road, not a sample index,
@@ -461,18 +491,22 @@ func _process(delta: float) -> void:
 		fwd = vflat.normalized().dot(_heading_at(pts, jn))
 	var s_car: float = arc[jn]
 
-	for c in corners:                     # re-arm corners we've clearly passed
-		var rem: float = fposmod(c["s0"] - s_car, total)
-		if rem > total * 0.6:
-			c["spoken"] = false
-
-	var nxt: Dictionary = {}
+	# One pass over the corners does both jobs that used to take two: re-arm the ones clearly
+	# passed, and find the nearest one ahead. Same distances, same order, so the same answers.
+	var s0s: PackedFloat64Array = route["s0s"]
+	var rearm: float = total * 0.6
+	var nxt_k := -1
 	var nxt_rem := 1e18
-	for c in corners:
-		var rem: float = fposmod(c["s0"] - s_car, total)
+	for k in range(s0s.size()):
+		var rem: float = fposmod(s0s[k] - s_car, total)
+		if rem > rearm:                   # re-arm corners we've clearly passed
+			corners[k]["spoken"] = false
 		if rem < nxt_rem:
 			nxt_rem = rem
-			nxt = c
+			nxt_k = k
+	var nxt: Dictionary = {}
+	if nxt_k >= 0:
+		nxt = corners[nxt_k]
 
 	var driving := on_route and fwd > 0.25 and speed > 2.5
 	if not nxt.is_empty() and driving:

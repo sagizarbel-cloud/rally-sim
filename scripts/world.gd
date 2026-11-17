@@ -11,6 +11,7 @@ var _dash_cam: Camera3D           # dash-mounted forward view (rigidly attached)
 var _hood_cam: Camera3D           # bonnet view (rigidly attached to the car)
 var _rear_cam: Camera3D           # rear-facing camera feeding the cockpit rear-view mirror overlay
 var _mirror_layer: CanvasLayer    # the mirror panel; shown only in cockpit view
+var _mirror_vp: SubViewport       # the mirror's own render of the world; see _apply_mirror()
 var _status_layer: CanvasLayer    # bottom-right rev/speed/telltales; the OUTSIDE-view cluster
 var _cam_mode := 0                # 0 = chase, 1 = cockpit, 2 = dash, 3 = bonnet
 var _car                          # the vehicle (untyped so get_wheels() resolves dynamically)
@@ -487,10 +488,23 @@ func _apply_camera() -> void:
 	_cockpit_cam.current = (_cam_mode == 1)
 	_dash_cam.current = (_cam_mode == 2)
 	_hood_cam.current = (_cam_mode == 3)
-	if _mirror_layer != null:
-		_mirror_layer.visible = (_cam_mode == 1 or _cam_mode == 2)   # mirror in cockpit + dash views
+	_apply_mirror()
 	if _status_layer != null:
 		_status_layer.visible = not (_cam_mode == 1 or _cam_mode == 2)   # outside views only
+
+func _apply_mirror() -> void:
+	# The mirror is a SECOND render of the whole world, so it must only run while it is on screen.
+	# A SubViewportContainer does switch its viewport off when hidden, but only at the moment its
+	# own visibility CHANGES - and at startup the viewport is added to a container that is already
+	# hidden, so no change ever arrives and the mirror kept rendering behind the chase camera until
+	# the driver had cycled through the cockpit view once. Measured 2026-11-17 on the legacy map in
+	# chase view: 343 of 1,213 draw calls and 1.25 M of 2.55 M primitives a frame were the unseen
+	# mirror. Stating the mode here, every time the view changes, makes it not depend on that.
+	var on := (_cam_mode == 1 or _cam_mode == 2)                 # mirror in cockpit + dash views
+	if _mirror_layer != null:
+		_mirror_layer.visible = on
+	if _mirror_vp != null:
+		_mirror_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
 
 func _process(delta: float) -> void:
 	if Input.is_action_just_pressed("camera_toggle"):
@@ -562,11 +576,12 @@ func _build_rearview(_car_ref: Node3D) -> void:
 	cont.scale = Vector2(-1, 1)                             # ...so the mirror image is left-right reversed
 	_mirror_layer.add_child(cont)
 	var vp := SubViewport.new()
-	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	vp.own_world_3d = false                                 # share the MAIN world (real geometry)
 	cont.add_child(vp)
+	_mirror_vp = vp
 	_rear_cam = Camera3D.new()
 	_rear_cam.fov = 72.0
 	_rear_cam.far = 600.0
 	vp.add_child(_rear_cam)
 	_rear_cam.make_current()
+	_apply_mirror()                                         # off unless an interior view is up
