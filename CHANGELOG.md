@@ -85,6 +85,24 @@ longer renders the world a second time in chase view; HUD text one Label per lin
 into a few meshes (569 -> 127 draw calls) and the legacy ground cut into 4x4 render tiles. Legacy
 chase view: 1,213 draw calls / 2.55 M triangles -> 448 / 0.60 M.
 
+**DRIVE VERDICT (2026-11-17, PR #4 build, frame logger armed; log
+`framelog-2026-11-17T14-06-42.csv`, 675 s, 34,211 frames):** *"trees solid, rally loop feels the
+same, time of day all look very good - maybe the night shadows are too strong"*. SSAO not toggled
+(it defaults ON, so it was on throughout). *"performance do seem to suffer"* - which the log pins to
+FULLSCREEN, not to this branch:
+
+| 1280x720 window | middle frame | late (>25 ms) per 1000 | draw calls | physics scripts |
+|---|---|---|---|---|
+| before (Nov 16, main), SHAKEDOWN | 16.66 ms | 3.0 | 1364 | 4.01 ms |
+| PR #4, SHAKEDOWN | 16.66 ms | 5.4 | 619 | 3.45 ms |
+| PR #4, legacy map | 16.67 ms | 1.4 | 497 | - |
+
+After going fullscreen at t=305 s (2880x1800, 5.6x the pixels): legacy map still ~60 fps (22 late
+per 1000); **SHAKEDOWN GPU-bound at ~38 fps** (middle frame 26 ms, 635 late per 1000, 1.19 M
+triangles vs 0.61 M windowed). No fullscreen "before" exists, so pixels vs the 160 m shadows vs SSAO
+is not yet separated. [B] arrival still freezes 0.2-0.4 s (known prime() item); one 35 ms physics
+stall at t=22 s. **Open:** night shadows too strong; fullscreen GPU cost on SHAKEDOWN.
+
 **If something regresses:** trees floating or sunk = the bilinear read in `StageForest.grow()` (apron
 index is +1); a tree on the road = `clearance` vs the edge-distance field; ground popping in ahead =
 `road_ahead` or the `_consider()` priority; the dark plane at the horizon back = the backdrop not
