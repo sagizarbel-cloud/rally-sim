@@ -97,7 +97,10 @@ func _build_ghost() -> void:
 
 func _clone_meshes(node: Node, mat: StandardMaterial3D) -> void:
 	for child in node.get_children():
-		if child is MeshInstance3D and (child as MeshInstance3D).mesh != null:
+		# (a shadow-only mesh is a second copy of triangles the ghost already has - skip it, or the
+		# see-through ghost would be drawn twice over and read as more solid)
+		if child is MeshInstance3D and (child as MeshInstance3D).mesh != null \
+				and (child as MeshInstance3D).cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY:
 			var src := child as MeshInstance3D
 			var mi := MeshInstance3D.new()
 			mi.mesh = src.mesh

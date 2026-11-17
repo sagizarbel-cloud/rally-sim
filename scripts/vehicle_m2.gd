@@ -385,6 +385,8 @@ var _steer := 0.0                 # smoothed steering (-1..1); keyboard ramps to
 var _throttle_pedal := 0.0        # virtual throttle pedal (0..1), shaped from the binary key
 var _brake_pedal := 0.0           # virtual brake pedal (0..1)
 var _steer_wheel: Node3D          # cockpit steering wheel (spins with steering input)
+const MeshMerge := preload("res://scripts/mesh_merge.gd")
+var _static_parts: Array = []     # opaque shell + cockpit pieces, merged into one mesh once built
 var _rev_segs: Array = []         # cabin rev-bar segments: {mat, col}
 var _shift_mat: StandardMaterial3D   # cabin shift-light material (flashes near the shift point)
 var _cluster: Node3D              # the gauge cluster (dashboard.gd); the rev bar mounts on it
@@ -689,6 +691,12 @@ func _build_body() -> void:
 	col.shape = box; add_child(col)
 	_build_shell()
 	_build_cockpit()
+	# ~75 opaque boxes and cylinders that never move relative to the body become ONE mesh with a
+	# surface per material, plus one shadow-only copy - the same triangles in a twentieth of the
+	# draw calls (see mesh_merge.gd for the measurement). The glass stays as separate panes: they
+	# are transparent, and transparent things are sorted against each other per node.
+	MeshMerge.merge(self, _static_parts, "BodyStatic", true)
+	_static_parts.clear()
 	_build_cluster()
 	_build_revbar()
 	# NOTE: no in-cabin 3D mirror quad -- a ViewportTexture renders black on a 3D surface on Metal.
@@ -722,6 +730,8 @@ func _part(size: Vector3, pos: Vector3, mat: StandardMaterial3D, rot_deg := Vect
 	if rot_deg != Vector3.ZERO:
 		mi.rotation_degrees = rot_deg
 	add_child(mi)
+	if mat.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+		_static_parts.append(mi)
 	return mi
 
 func _cyl(radius: float, height: float, pos: Vector3, mat: StandardMaterial3D, rot_deg := Vector3.ZERO, sides := 16) -> MeshInstance3D:
@@ -734,6 +744,8 @@ func _cyl(radius: float, height: float, pos: Vector3, mat: StandardMaterial3D, r
 	if rot_deg != Vector3.ZERO:
 		mi.rotation_degrees = rot_deg
 	add_child(mi)
+	if mat.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+		_static_parts.append(mi)
 	return mi
 
 func _build_shell() -> void:
@@ -847,6 +859,7 @@ func _build_cockpit() -> void:
 	var hub := MeshInstance3D.new()
 	var hbx := BoxMesh.new(); hbx.size = Vector3(0.08, 0.08, 0.06); hub.mesh = hbx
 	hub.material_override = _mat(accent_color); _steer_wheel.add_child(hub)
+	MeshMerge.merge(_steer_wheel, [rim, hbar, lbar, hub], "SteeringWheel")   # one node that spins
 
 func _build_wheels() -> void:
 	var defs := [
@@ -855,35 +868,50 @@ func _build_wheels() -> void:
 		[Vector3(-0.82, -0.1,  1.35), false, true],
 		[Vector3( 0.82, -0.1,  1.35), false, true],
 	]
+	# All four wheels are the same shape, so they share ONE mesh (tyre, backing disc, five spokes
+	# and cap baked together, a surface per material) instead of eight nodes each. Sharing the
+	# mesh and its materials is also what lets the renderer draw the four as one instanced call.
+	var wheel_mesh := _wheel_mesh()
 	for d in defs:
 		var w := Wheel.new()
 		w.pos = d[0]; w.steer = d[1]; w.drive = d[2]
 		var vis := MeshInstance3D.new()
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = wheel_radius; cyl.bottom_radius = wheel_radius; cyl.height = 0.26; cyl.radial_segments = 24
-		vis.mesh = cyl
-		var tire := StandardMaterial3D.new(); tire.albedo_color = Color(0.05, 0.05, 0.06); tire.roughness = 0.9
-		vis.material_override = tire
-		var gold := _mat(Color(0.85, 0.68, 0.22), false, 0.85, 0.25)              # iconic gold rim
-		# dark backing disc + 5 gold spokes + centre cap = spoked rally wheel
-		var back := MeshInstance3D.new()
-		var bc := CylinderMesh.new(); bc.top_radius = 0.2; bc.bottom_radius = 0.2; bc.height = 0.27; bc.radial_segments = 24
-		back.mesh = bc; back.material_override = _mat(Color(0.1, 0.1, 0.11), false, 0.3, 0.5)
-		vis.add_child(back)
-		for s in range(5):
-			var a := float(s) * TAU / 5.0
-			var sp := MeshInstance3D.new()
-			var sbm := BoxMesh.new(); sbm.size = Vector3(0.16, 0.28, 0.04)
-			sp.mesh = sbm; sp.material_override = gold
-			sp.position = Vector3(cos(a) * 0.095, 0.0, sin(a) * 0.095)
-			sp.rotation.y = -a
-			vis.add_child(sp)
-		var cap := MeshInstance3D.new()
-		var cc := CylinderMesh.new(); cc.top_radius = 0.05; cc.bottom_radius = 0.05; cc.height = 0.29; cc.radial_segments = 12
-		cap.mesh = cc; cap.material_override = gold
-		vis.add_child(cap)
+		vis.mesh = wheel_mesh
 		add_child(vis); w.vis = vis
 		_wheels.append(w)
+
+func _wheel_mesh() -> Mesh:
+	var scratch := Node3D.new()
+	var parts: Array = []
+	var tyre := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = wheel_radius; cyl.bottom_radius = wheel_radius; cyl.height = 0.26; cyl.radial_segments = 24
+	tyre.mesh = cyl
+	var tire := StandardMaterial3D.new(); tire.albedo_color = Color(0.05, 0.05, 0.06); tire.roughness = 0.9
+	tyre.material_override = tire
+	scratch.add_child(tyre); parts.append(tyre)
+	var gold := _mat(Color(0.85, 0.68, 0.22), false, 0.85, 0.25)              # iconic gold rim
+	# dark backing disc + 5 gold spokes + centre cap = spoked rally wheel
+	var back := MeshInstance3D.new()
+	var bc := CylinderMesh.new(); bc.top_radius = 0.2; bc.bottom_radius = 0.2; bc.height = 0.27; bc.radial_segments = 24
+	back.mesh = bc; back.material_override = _mat(Color(0.1, 0.1, 0.11), false, 0.3, 0.5)
+	scratch.add_child(back); parts.append(back)
+	for s in range(5):
+		var a := float(s) * TAU / 5.0
+		var sp := MeshInstance3D.new()
+		var sbm := BoxMesh.new(); sbm.size = Vector3(0.16, 0.28, 0.04)
+		sp.mesh = sbm; sp.material_override = gold
+		sp.position = Vector3(cos(a) * 0.095, 0.0, sin(a) * 0.095)
+		sp.rotation.y = -a
+		scratch.add_child(sp); parts.append(sp)
+	var cap := MeshInstance3D.new()
+	var cc := CylinderMesh.new(); cc.top_radius = 0.05; cc.bottom_radius = 0.05; cc.height = 0.29; cc.radial_segments = 12
+	cap.mesh = cc; cap.material_override = gold
+	scratch.add_child(cap); parts.append(cap)
+	var merged := MeshMerge.merge(scratch, parts, "Wheel")
+	var mesh: Mesh = merged.mesh
+	scratch.free()
+	return mesh
 
 func _mu_load(mu0: float, Fz: float) -> float:
 	# tire grip coefficient drops as vertical load rises (load sensitivity) -> the total grip
