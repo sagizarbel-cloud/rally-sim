@@ -41,6 +41,7 @@ var _tts := false
 var _cur_label: Label
 var _next_label: Label
 var _hold := 0.0
+var _cur_col := Color(-1, -1, -1)       # the note colour currently applied; see _update_ui
 
 func _ready() -> void:
 	layer = 6
@@ -70,8 +71,127 @@ func rebuild_routes() -> void:
 			s_fin = float(stage_area.gen.timed_end_s)
 		_routes.append(_build_route(centrelines[3], "SHAKEDOWN", curv_min_dirt, 1.0, s_fin))
 	_active = -1
+	_build_nearest_grid()
 	if debug_print:
 		_dump()
+
+# ---------------------------------------------------------------- nearest route point, exactly
+
+# _process() needs the nearest point across EVERY route, every frame, and it used to get it by
+# testing all of them - 4,494 points with the generated stage loaded, measured at 0.35-0.41 ms a
+# frame, two thirds of all idle script time in the game. The points never move, so they are binned
+# once into a uniform grid and the search walks outward ring by ring, exactly as
+# Centreline._nearest_sample does, stopping only when the answer is PROVABLE.
+#
+# THE ANSWER IS THE SAME ONE, not a nearby one: same distance expression, same winner on an exact
+# tie (the lowest route, then the lowest index - which is what a first-wins scan in route order
+# gives), and the stop test carries a 1% margin so that 32-bit rounding in the distance can never
+# let an unscanned point beat the winner. Far from every route the walk would cost more than the
+# scan it replaces, so past a derived distance it IS that scan.
+var _ng: Dictionary = {}              # cell -> PackedInt32Array of (route << 20 | index)
+var _ng_cell := 16.0
+var _ng_min_x := 0.0
+var _ng_min_z := 0.0
+var _ng_max_x := 0.0
+var _ng_max_z := 0.0
+var _ng_max_ring := 0
+var _ng_brute := 0.0
+var _nb_d := 1e18                     # the three results of _nearest_route_point()
+var _nb_r := -1
+var _nb_j := 0
+
+func _build_nearest_grid() -> void:
+	_ng.clear()
+	var n := 0
+	var total_len := 0.0
+	var first := true
+	for route in _routes:
+		var rpts: PackedVector3Array = route["pts"]
+		n += rpts.size()
+		total_len += float(route["total"])
+		for p in rpts:
+			if first:
+				_ng_min_x = p.x; _ng_max_x = p.x; _ng_min_z = p.z; _ng_max_z = p.z
+				first = false
+			_ng_min_x = minf(_ng_min_x, p.x); _ng_max_x = maxf(_ng_max_x, p.x)
+			_ng_min_z = minf(_ng_min_z, p.z); _ng_max_z = maxf(_ng_max_z, p.z)
+	if n == 0:
+		return
+	# a handful of points per cell: eight times the mean spacing, the rule Centreline uses
+	_ng_cell = maxf(total_len / float(n) * 8.0, 1.0)
+	_ng_max_ring = int(ceil(maxf(_ng_max_x - _ng_min_x, _ng_max_z - _ng_min_z) / _ng_cell)) + 2
+	# reaching a distance d costs about 4*(d/cell)^2 cell probes and the full scan costs n point
+	# tests, so the scan wins beyond d = cell * sqrt(n / 4) (Centreline's derivation)
+	_ng_brute = _ng_cell * sqrt(float(n) / 4.0)
+	for ri in range(_routes.size()):
+		var rpts2: PackedVector3Array = _routes[ri]["pts"]
+		for i in range(rpts2.size()):
+			var key := _ng_key(rpts2[i].x, rpts2[i].z)
+			if not _ng.has(key):
+				_ng[key] = PackedInt32Array()
+			_ng[key].append((ri << 20) | i)
+
+func _ng_key(x: float, z: float) -> Vector2i:
+	return Vector2i(int(floor((x - _ng_min_x) / _ng_cell)), int(floor((z - _ng_min_z) / _ng_cell)))
+
+func _nearest_scan(cp: Vector3) -> void:
+	# the original search: every point of every route, first winner kept
+	for ri in range(_routes.size()):
+		var rpts: PackedVector3Array = _routes[ri]["pts"]
+		for i in range(rpts.size()):
+			var d := Vector2(cp.x - rpts[i].x, cp.z - rpts[i].z).length_squared()
+			if d < _nb_d:
+				_nb_d = d
+				_nb_r = ri
+				_nb_j = i
+
+func _nearest_route_point(cp: Vector3) -> void:
+	## Sets _nb_d (squared distance), _nb_r (route) and _nb_j (point index) to the nearest route
+	## point to `cp` - the same three values the full scan produces.
+	_nb_d = 1e18
+	_nb_r = -1
+	_nb_j = 0
+	if _ng.is_empty():
+		_nearest_scan(cp)
+		return
+	var dx_out: float = maxf(maxf(_ng_min_x - cp.x, cp.x - _ng_max_x), 0.0)
+	var dz_out: float = maxf(maxf(_ng_min_z - cp.z, cp.z - _ng_max_z), 0.0)
+	if dx_out * dx_out + dz_out * dz_out > _ng_brute * _ng_brute:
+		_nearest_scan(cp)
+		return
+	var ck := _ng_key(cp.x, cp.z)
+	var best_key := -1
+	var r := 0
+	while r <= _ng_max_ring:
+		for dxi in range(-r, r + 1):
+			var stride: int = 1 if (absi(dxi) == r or r == 0) else 2 * r
+			var dzi := -r
+			while dzi <= r:
+				var key := Vector2i(ck.x + dxi, ck.y + dzi)
+				dzi += stride
+				if not _ng.has(key):
+					continue
+				for pk: int in _ng[key]:
+					var rpts: PackedVector3Array = _routes[pk >> 20]["pts"]
+					var q: Vector3 = rpts[pk & 0xFFFFF]
+					var d := Vector2(cp.x - q.x, cp.z - q.z).length_squared()
+					if d < _nb_d or (d == _nb_d and pk < best_key):
+						_nb_d = d
+						best_key = pk
+		# everything unscanned lies outside the square of cells swept so far
+		var lo_x := _ng_min_x + float(ck.x - r) * _ng_cell
+		var hi_x := _ng_min_x + float(ck.x + r + 1) * _ng_cell
+		var lo_z := _ng_min_z + float(ck.y - r) * _ng_cell
+		var hi_z := _ng_min_z + float(ck.y + r + 1) * _ng_cell
+		var safe := minf(minf(cp.x - lo_x, hi_x - cp.x), minf(cp.z - lo_z, hi_z - cp.z)) * 0.99
+		if best_key >= 0 and safe > 0.0 and _nb_d <= safe * safe:
+			break
+		r += 1
+	if best_key < 0:
+		_nearest_scan(cp)
+		return
+	_nb_r = best_key >> 20
+	_nb_j = best_key & 0xFFFFF
 
 # ---------------------------------------------------------------- build a circuit's route + notes
 
@@ -301,17 +421,10 @@ func _process(delta: float) -> void:
 	var cp: Vector3 = car.global_position
 
 	# pick the circuit you're actually on: nearest centreline sample across all routes
-	var best_d := 1e18
-	var best_r := -1
-	var best_j := 0
-	for ri in range(_routes.size()):
-		var rpts: PackedVector3Array = _routes[ri]["pts"]
-		for i in range(rpts.size()):
-			var d := Vector2(cp.x - rpts[i].x, cp.z - rpts[i].z).length_squared()
-			if d < best_d:
-				best_d = d
-				best_r = ri
-				best_j = i
+	_nearest_route_point(cp)
+	var best_d := _nb_d
+	var best_r := _nb_r
+	var best_j := _nb_j
 	if best_r < 0:
 		return
 	if best_r != _active:                 # switched circuits -> re-arm its notes
@@ -422,7 +535,12 @@ func _update_ui(nxt: Dictionary, rem: float, driving: bool) -> void:
 	if d == 0:
 		col = Color(0.85, 1.0, 0.6)                                        # a call, not a corner
 	var arrow := "◄  " if d > 0 else "  ►"
-	_cur_label.add_theme_color_override("font_color", col if _hold > 0.0 else col.darkened(0.15))
+	# only when it CHANGES: a theme override re-notifies the label and re-shapes its text even when
+	# the colour is the one it already has, and this runs every frame
+	var shown: Color = col if _hold > 0.0 else col.darkened(0.15)
+	if shown != _cur_col:
+		_cur_col = shown
+		_cur_label.add_theme_color_override("font_color", shown)
 	if d == 0:
 		_cur_label.text = String(nxt["display"])
 	else:
