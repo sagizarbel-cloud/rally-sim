@@ -111,6 +111,23 @@ shadows lightened: the ambient cut now scales with sun strength (night
 keeps 0.95 of its fill, day 0.55) and the sun's `shadow_opacity` is 0.6 at night. If night looks
 flat or day looks pale, those two lines in `world.gd` `_apply_tod()` are where to look.
 
+**FULLSCREEN COMPARISON (2026-11-17, second drive, main at 2880x1800; log
+`framelog-2026-11-17T15-34-52.csv`):** main held a steady 60 fps on SHAKEDOWN at every time of day
+(1.68 late frames per 1000 over 478 s). PR #4 at the same size ran 38-42 fps, GPU-bound: noon
+26.4 ms middle frame, 712 late per 1000, 70% of late frames waiting on the GPU - with FEWER draw
+calls than main (974 vs 1244). So the cost is PER PIXEL, and only shows at Retina fullscreen. Night
+was no worse than the other times, so it is not the night shadows. Response (B, not yet driven):
+SSAO + glow now default OFF (full-screen passes); sun shadow range back to main's 100 m and softer
+blur 1.0, with a Tab slider `gfx_shadow_m` (40-200 m) to A/B it; the cloud sky computes in the
+half-resolution sky pass (a quarter of the pixels) with only the sun disc at full resolution. The
+user ruled out render-scale upscaling as a fix. If fullscreen is still under 60, the next suspects
+are the ground shader's per-pixel noise and tree overdraw.
+
+**HUD menu (drive request, same day):** the test read-outs and the key help are folded behind a
+menu on `[H]` (rebindable inside it, keys or pad buttons). Default shows only fps and the
+track + time line, each with a tick box; a button cycles Minimal / All / key help only (bottom
+left, wrapped) / test metrics only (top left). Saved in `user://hud.cfg`.
+
 **If something regresses:** trees floating or sunk = the bilinear read in `StageForest.grow()` (apron
 index is +1); a tree on the road = `clearance` vs the edge-distance field; ground popping in ahead =
 `road_ahead` or the `_consider()` priority; the dark plane at the horizon back = the backdrop not

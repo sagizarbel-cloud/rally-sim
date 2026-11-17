@@ -126,7 +126,12 @@ class_name VehicleM2
 @export var stage_forest := true         # STAGE: roadside spruces on SHAKEDOWN (applies on rebuild)
 # ARC E: the screen-space extras whose GPU cost cannot be priced from the cloud machine: ambient
 # occlusion (contact shading) and glow. OFF = the cheap path. Read by world.gd every frame.
-@export var gfx_high := true             # GRAPHICS: SSAO + glow ON (high) / OFF (low)
+# DEFAULT OFF since the 2026-11-17 fullscreen comparison: main held 60 fps at 2880x1800 where this
+# branch fell to 38-42, GPU-bound, all per-pixel cost - and SSAO + glow are full-screen passes.
+@export var gfx_high := false            # GRAPHICS: SSAO + glow ON (high) / OFF (low)
+# Sun shadow reach. Main used Godot's default 100 m; this branch tried 160 m (trees shading the road
+# further ahead) and went GPU-bound in fullscreen. A slider so the cost can be A/B'd on the drive.
+@export var gfx_shadow_m := 100.0        # GRAPHICS: sun shadow distance (m)
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;

@@ -311,6 +311,7 @@ func _setup_input() -> void:
 	_add_keys("ignition",   [KEY_I])      # A2: starter button - re-fires a stalled engine
 	_add_keys("hud_bigger",  [KEY_EQUAL, KEY_KP_ADD])
 	_add_keys("hud_smaller", [KEY_MINUS, KEY_KP_SUBTRACT])
+	_add_keys("hud_menu",    [KEY_H])          # HUD menu; rebindable from inside the menu (hud.gd)
 	_add_keys("drive_mode",  [KEY_T])
 	_add_keys("circuit_toggle", [KEY_B])
 	_add_keys("puncture_test", [KEY_P])   # debug: puncture a tyre to test the flat visual + vibration
@@ -383,6 +384,7 @@ func _add_button(action: String, button: JoyButton) -> void:
 ## it feeds) is re-baked only when a uniform changes - i.e. on a time-of-day switch, not per frame.
 const SKY_SHADER := """
 shader_type sky;
+render_mode use_half_res_pass;
 uniform vec3 top_col : source_color = vec3(0.34, 0.50, 0.86);
 uniform vec3 horizon_col : source_color = vec3(0.72, 0.82, 0.95);
 uniform vec3 ground_col : source_color = vec3(0.25, 0.27, 0.24);
@@ -407,28 +409,45 @@ float fbm(vec2 p) {
 	return v;
 }
 void sky() {
+	// The clouds are soft, so they are computed in the HALF-RESOLUTION sky pass (a quarter of the
+	// pixels) and the full-resolution pass only reads that back and adds the sharp sun disc. Per-pixel
+	// cost was what made the 2026-11-17 fullscreen drive GPU-bound, and the sky covers much of it.
 	vec3 d = EYEDIR;
 	float h = d.y;
-	vec3 col = mix(horizon_col, top_col, pow(clamp(h, 0.0, 1.0), 0.45));
-	if (h < 0.0) {
-		col = mix(horizon_col, ground_col, clamp(-h * 6.0, 0.0, 1.0));
-	}
 	vec3 sun_c = LIGHT0_COLOR * LIGHT0_ENERGY;
 	float sd = dot(d, LIGHT0_DIRECTION);
-	if (LIGHT0_ENABLED) {
-		col += sun_c * (smoothstep(0.99955, 0.99975, sd) * 12.0 + pow(max(sd, 0.0), 48.0) * 0.25);
+	if (AT_HALF_RES_PASS || AT_CUBEMAP_PASS) {
+		vec3 col = mix(horizon_col, top_col, pow(clamp(h, 0.0, 1.0), 0.45));
+		if (h < 0.0) {
+			col = mix(horizon_col, ground_col, clamp(-h * 6.0, 0.0, 1.0));
+		}
+		if (LIGHT0_ENABLED) {
+			col += sun_c * pow(max(sd, 0.0), 48.0) * 0.25;
+		}
+		float cov_out = 0.0;
+		if (h > 0.0) {
+			vec2 uv = d.xz / (h + 0.06);
+			float c = fbm(uv * 0.55 + vec2(3.7, 1.3));
+			float cov = smoothstep(1.0 - cloud_cover - 0.08, 1.0 - cloud_cover + 0.22, c);
+			// thicker cloud is darker underneath; the sun side of each cloud is brighter
+			float thick = smoothstep(0.4, 0.85, c);
+			vec3 lit = mix(horizon_col * 1.1, sun_c * 0.85 + horizon_col * 0.35, 0.65 - thick * 0.35);
+			lit += sun_c * pow(max(sd, 0.0), 6.0) * 0.35;
+			cov_out = cov * smoothstep(0.0, 0.12, h) * 0.92;
+			col = mix(col, lit * cloud_shade, cov_out);
+		}
+		COLOR = col;
+		ALPHA = 1.0 - cov_out;            // how much of the sun disc a cloud lets through
+		if (AT_CUBEMAP_PASS && LIGHT0_ENABLED) {
+			COLOR += sun_c * smoothstep(0.99955, 0.99975, sd) * 12.0 * ALPHA;
+			ALPHA = 1.0;
+		}
+	} else {
+		COLOR = HALF_RES_COLOR.rgb;
+		if (LIGHT0_ENABLED) {
+			COLOR += sun_c * smoothstep(0.99955, 0.99975, sd) * 12.0 * HALF_RES_COLOR.a;
+		}
 	}
-	if (h > 0.0) {
-		vec2 uv = d.xz / (h + 0.06);
-		float c = fbm(uv * 0.55 + vec2(3.7, 1.3));
-		float cov = smoothstep(1.0 - cloud_cover - 0.08, 1.0 - cloud_cover + 0.22, c);
-		// thicker cloud is darker underneath; the sun side of each cloud is brighter
-		float thick = smoothstep(0.4, 0.85, c);
-		vec3 lit = mix(horizon_col * 1.1, sun_c * 0.85 + horizon_col * 0.35, 0.65 - thick * 0.35);
-		lit += sun_c * pow(max(sd, 0.0), 6.0) * 0.35;
-		col = mix(col, lit * cloud_shade, cov * smoothstep(0.0, 0.12, h) * 0.92);
-	}
-	COLOR = col;
 }
 """
 
@@ -437,8 +456,10 @@ func _build_environment() -> void:
 	_sun.shadow_enabled = true
 	# Arc E: shadows reach far enough to lay the roadside spruces' shadows across the road ahead, and
 	# soft enough at the edge that the penumbra reads as sunlight rather than a stencil.
-	_sun.directional_shadow_max_distance = 160.0
-	_sun.shadow_blur = 1.5
+	# Back to 100 m (Godot's default, what main used) after the fullscreen comparison - see
+	# gfx_shadow_m on the car, which drives it live.
+	_sun.directional_shadow_max_distance = 100.0
+	_sun.shadow_blur = 1.0
 	add_child(_sun)
 
 	_env = Environment.new()
@@ -481,7 +502,7 @@ func _build_environment() -> void:
 	we.environment = _env
 	add_child(we)
 	_apply_tod(_tod)
-	_apply_gfx(true)
+	_apply_gfx(false)
 
 func _apply_gfx(high: bool) -> void:
 	_env.ssao_enabled = high
@@ -620,6 +641,9 @@ func _process(delta: float) -> void:
 		var hi := bool(_car.get("gfx_high"))
 		if hi != _env.ssao_enabled:
 			_apply_gfx(hi)
+		var sm := clampf(float(_car.get("gfx_shadow_m")), 20.0, 400.0)
+		if not is_equal_approx(sm, _sun.directional_shadow_max_distance):
+			_sun.directional_shadow_max_distance = sm
 	if Input.is_action_just_pressed("camera_toggle"):
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()

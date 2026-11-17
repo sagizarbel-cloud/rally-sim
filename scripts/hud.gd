@@ -25,14 +25,35 @@ var time_trial   # the TimeTrial node (owns lap timing for all circuits); wired 
 #    frame is level instead of spiking every third frame as a plain "update every N frames" would.
 # The G-meter's smoothing below still runs every frame, so its filter is unchanged.
 const REFRESH_GROUPS := 3
-const ROWS := ["title", "input", "gap0", "speed", "pedals", "steer_nm", "gear", "drive", "trial",
-	"gap1", "wheel_head", "w0", "w1", "w2", "w3", "gap2", "help"]
-const HELP_TEXT := "[W/S] gas/brake  [A/D] steer  [Q/E] gears (R-N-1..6)  [Shift] clutch  [I] ignition  [T] AWD/RWD/FWD  [1/2/3] diff open/visc/rally  [Space] handbrake  [C] cam  [V]/R3 look back  [R-stick] look around  [B] circuit  [L] time  [P] test puncture  [Tab] tune  [-/+] hud  [R] reset"
+# 2026-11-17 (drive request): the testing read-outs and the key help are collapsed behind a MENU
+# (default [H], rebindable from inside it). By default only the track + time line and fps show; the
+# menu cycles a DISPLAY MODE - minimal / all / key help only (bottom left) / test metrics only (top
+# left) - and has a tick box for each of the two default lines. Choices persist in user://hud.cfg.
+const ROWS := ["fps", "trial", "title", "input", "gap0", "speed", "pedals", "steer_nm", "gear", "drive",
+	"gap1", "wheel_head", "w0", "w1", "w2", "w3"]
+const METRIC_ROWS := ["title", "input", "gap0", "speed", "pedals", "steer_nm", "gear", "drive",
+	"gap1", "wheel_head", "w0", "w1", "w2", "w3"]
+const HELP_TEXT := "[W/S] gas/brake  [A/D] steer  [Q/E] gears (R-N-1..6)  [Shift] clutch  [I] ignition  [T] AWD/RWD/FWD  [1/2/3] diff open/visc/rally  [Space] handbrake  [C] cam  [V]/R3 look back  [R-stick] look around  [B] circuit  [L] time  [P] test puncture  [Tab] tune  [-/+] hud size  [R] reset  [%s] HUD menu"
+enum Mode { MINIMAL, ALL, KEYS, METRICS }
+const MODE_NAMES := ["Minimal (track + fps)", "All", "Key help only (bottom left)", "Test metrics only (top left)"]
+const CFG_PATH := "user://hud.cfg"
+var mode: int = Mode.MINIMAL
+var show_fps := true
+var show_trial := true
 var _box: VBoxContainer
+var _help: Label
 var _theme: Theme
 var _rows := {}          # row name -> Label
+var _has := {}           # rows the car has actually reported (some cars lack some read-outs)
 var _turn := 0
 var _filled := false     # the first frame writes every group, so the overlay never shows half empty
+# --- the menu ---
+var _menu: PanelContainer
+var _mode_btn: Button
+var _fps_box: CheckBox
+var _trial_box: CheckBox
+var _bind_btn: Button
+var _rebinding := false
 
 func _ready() -> void:
 	# one Theme on the box instead of four overrides on each Label: the font size is then changed
@@ -52,18 +73,194 @@ func _ready() -> void:
 	add_child(_box)
 	for key in ROWS:
 		var l := Label.new()
-		# rows that depend on what the car can report stay out of the column until first written
-		l.visible = key.begins_with("gap") or key == "wheel_head" or key == "help"
+		l.visible = false
 		_box.add_child(l)
 		_rows[key] = l
+		if key.begins_with("gap") or key == "wheel_head":
+			_has[key] = true
 	_rows["wheel_head"].text = "wheel  Fz(kN) slipR  slipA   temp wear  grip"
-	_rows["help"].text = HELP_TEXT
+	# the key help lives in the BOTTOM-LEFT corner, wrapped, so it never runs off the screen
+	_help = Label.new()
+	_help.theme = _theme
+	_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_help.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_help.anchor_left = 0.0
+	_help.anchor_right = 0.62
+	_help.anchor_top = 1.0
+	_help.anchor_bottom = 1.0
+	_help.offset_left = 16
+	_help.offset_bottom = -12
+	_help.offset_top = -12
+	_help.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_help.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_help)
+	_load_cfg()
+	_build_menu()
+	_apply_mode()
+
+# ---------------------------------------------------------------- display modes + the menu
+
+func _metrics_on() -> bool:
+	return mode == Mode.ALL or mode == Mode.METRICS
+
+func _keys_on() -> bool:
+	return mode == Mode.ALL or mode == Mode.KEYS
+
+func _apply_mode() -> void:
+	for key in ROWS:
+		var on: bool = _has.get(key, false)
+		if key == "fps":
+			on = on and show_fps
+		elif key == "trial":
+			on = on and show_trial
+		else:
+			on = on and _metrics_on()
+		_rows[key].visible = on
+	_help.text = HELP_TEXT % _binding_name()
+	_help.visible = _keys_on()
+	if _mode_btn != null:
+		_mode_btn.text = "Display: %s" % MODE_NAMES[mode]
+		_fps_box.button_pressed = show_fps
+		_trial_box.button_pressed = show_trial
+		_bind_btn.text = "Press a key or pad button..." if _rebinding else "Menu key: %s  (click to rebind)" % _binding_name()
+
+func _binding_name() -> String:
+	var evs := InputMap.action_get_events("hud_menu") if InputMap.has_action("hud_menu") else []
+	if evs.is_empty():
+		return "unbound"
+	var e: InputEvent = evs[0]
+	if e is InputEventKey:
+		var k: Key = (e as InputEventKey).physical_keycode
+		return OS.get_keycode_string(k) if k != KEY_NONE else e.as_text()
+	if e is InputEventJoypadButton:
+		return "pad button %d" % (e as InputEventJoypadButton).button_index
+	return e.as_text()
+
+func _build_menu() -> void:
+	_menu = PanelContainer.new()
+	_menu.anchor_left = 0.5
+	_menu.anchor_right = 0.5
+	_menu.anchor_top = 0.5
+	_menu.anchor_bottom = 0.5
+	_menu.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_menu.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_menu.visible = false
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.07, 0.06, 0.88)
+	sb.set_corner_radius_all(8)
+	sb.set_content_margin_all(16)
+	_menu.add_theme_stylebox_override("panel", sb)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	_menu.add_child(v)
+	var t := Label.new()
+	t.text = "HUD"
+	t.add_theme_font_size_override("font_size", 22)
+	v.add_child(t)
+	_mode_btn = Button.new()
+	_mode_btn.focus_mode = Control.FOCUS_NONE
+	_mode_btn.pressed.connect(func():
+		mode = (mode + 1) % MODE_NAMES.size()
+		_apply_mode()
+		_save_cfg())
+	v.add_child(_mode_btn)
+	_fps_box = CheckBox.new()
+	_fps_box.text = "Show fps"
+	_fps_box.focus_mode = Control.FOCUS_NONE
+	_fps_box.toggled.connect(func(on: bool):
+		show_fps = on
+		_apply_mode()
+		_save_cfg())
+	v.add_child(_fps_box)
+	_trial_box = CheckBox.new()
+	_trial_box.text = "Show track + time"
+	_trial_box.focus_mode = Control.FOCUS_NONE
+	_trial_box.toggled.connect(func(on: bool):
+		show_trial = on
+		_apply_mode()
+		_save_cfg())
+	v.add_child(_trial_box)
+	_bind_btn = Button.new()
+	_bind_btn.focus_mode = Control.FOCUS_NONE
+	_bind_btn.pressed.connect(func():
+		_rebinding = true
+		_apply_mode())
+	v.add_child(_bind_btn)
+	var close := Button.new()
+	close.text = "Close"
+	close.focus_mode = Control.FOCUS_NONE
+	close.pressed.connect(func(): _menu.visible = false)
+	v.add_child(close)
+	add_child(_menu)
+
+func _input(event: InputEvent) -> void:
+	## Rebinding: the next key or pad button pressed becomes the menu key. Escape cancels.
+	if not _rebinding:
+		return
+	var ev: InputEvent = null
+	if event is InputEventKey and event.pressed and not event.echo:
+		if (event as InputEventKey).physical_keycode == KEY_ESCAPE:
+			_rebinding = false
+			_apply_mode()
+			get_viewport().set_input_as_handled()
+			return
+		var k := InputEventKey.new()
+		k.physical_keycode = (event as InputEventKey).physical_keycode
+		ev = k
+	elif event is InputEventJoypadButton and event.pressed:
+		var b := InputEventJoypadButton.new()
+		b.button_index = (event as InputEventJoypadButton).button_index
+		ev = b
+	if ev == null:
+		return
+	_set_binding(ev)
+	_rebinding = false
+	_apply_mode()
+	_save_cfg()
+	get_viewport().set_input_as_handled()
+
+func _set_binding(ev: InputEvent) -> void:
+	if not InputMap.has_action("hud_menu"):
+		InputMap.add_action("hud_menu")
+	InputMap.action_erase_events("hud_menu")
+	InputMap.action_add_event("hud_menu", ev)
+
+func _save_cfg() -> void:
+	var c := ConfigFile.new()
+	c.set_value("hud", "mode", mode)
+	c.set_value("hud", "show_fps", show_fps)
+	c.set_value("hud", "show_trial", show_trial)
+	var evs := InputMap.action_get_events("hud_menu") if InputMap.has_action("hud_menu") else []
+	if not evs.is_empty():
+		var e: InputEvent = evs[0]
+		if e is InputEventKey:
+			c.set_value("hud", "menu_key", int((e as InputEventKey).physical_keycode))
+		elif e is InputEventJoypadButton:
+			c.set_value("hud", "menu_pad", int((e as InputEventJoypadButton).button_index))
+	c.save(CFG_PATH)
+
+func _load_cfg() -> void:
+	var c := ConfigFile.new()
+	if c.load(CFG_PATH) != OK:
+		return
+	mode = clampi(int(c.get_value("hud", "mode", mode)), 0, MODE_NAMES.size() - 1)
+	show_fps = bool(c.get_value("hud", "show_fps", show_fps))
+	show_trial = bool(c.get_value("hud", "show_trial", show_trial))
+	if c.has_section_key("hud", "menu_key"):
+		var k := InputEventKey.new()
+		k.physical_keycode = int(c.get_value("hud", "menu_key")) as Key
+		_set_binding(k)
+	elif c.has_section_key("hud", "menu_pad"):
+		var b := InputEventJoypadButton.new()
+		b.button_index = int(c.get_value("hud", "menu_pad")) as JoyButton
+		_set_binding(b)
 
 func _put(key: String, txt: String) -> void:
 	var l: Label = _rows[key]
 	l.text = txt             # a no-op inside Label when the text is the one it already shows
-	if not l.visible:
-		l.visible = true
+	if not _has.get(key, false):
+		_has[key] = true     # first report from the car: the row may now be shown
+		_apply_mode()
 
 func _set_fs(v: int) -> void:
 	_fs = clampi(v, 10, 48)
@@ -74,6 +271,9 @@ func _process(delta: float) -> void:
 		_set_fs(_fs + 2)
 	if Input.is_action_just_pressed("hud_smaller"):
 		_set_fs(_fs - 2)
+	if InputMap.has_action("hud_menu") and Input.is_action_just_pressed("hud_menu") and not _rebinding:
+		_menu.visible = not _menu.visible
+		_apply_mode()
 	if car == null:
 		return
 	var v: Vector3 = car.linear_velocity
@@ -95,11 +295,12 @@ func _process(delta: float) -> void:
 		var fwd_kmh: float = v.dot(fwd) * 3.6
 		var steer := Input.get_action_strength("steer_left") - Input.get_action_strength("steer_right")
 		var eng := {}
+		_put("fps", "fps %d" % Engine.get_frames_per_second())
 		if has_eng:
 			eng = car.get_engine()
-			_put("title", "RALLY SIM - M2  (slip-ratio drivetrain)     fps %d" % Engine.get_frames_per_second())
+			_put("title", "RALLY SIM - M2  (slip-ratio drivetrain)")
 		else:
-			_put("title", "RALLY SIM - M1  (raycast wheels + brush tire)     fps %d" % Engine.get_frames_per_second())
+			_put("title", "RALLY SIM - M1  (raycast wheels + brush tire)")
 		# which input device is actually live - a pad that Godot can't see simply won't be listed
 		var pads := Input.get_connected_joypads()
 		if pads.is_empty():
