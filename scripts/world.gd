@@ -684,6 +684,7 @@ func _apply_mirror() -> void:
 		_mirror_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
 
 func _process(delta: float) -> void:
+	_cull_legacy_map()
 	if _car != null and _env != null:
 		var hi := bool(_car.get("gfx_high"))
 		if hi != _env.ssao_enabled:
@@ -695,6 +696,27 @@ func _process(delta: float) -> void:
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()
 	_update_look(delta)
+
+## THE LEGACY MAP IS NOT DRAWN FROM DEEP INSIDE SHAKEDOWN. Measured 2026-11-18 (cloud probe, chase
+## cam 300 m into the stage, noon): of 589k primitives a frame, the legacy map 3 km away was 222k and
+## 88 draw calls - more than the whole stage ground (78k) - for a map hidden behind haze and forest.
+## Hiding it keeps its collision (visible is render-only) and it reappears before the car can reach
+## it. Kept visible within LEGACY_SHOW_DEPTH of the stage's edge, where the start clearing could
+## still look back toward it.
+const LEGACY_SHOW_DEPTH := 150.0
+var _legacy_shown := true
+func _cull_legacy_map() -> void:
+	if _car == null or _stage_area == null or _stage == null:
+		return
+	var p: Vector3 = _car.global_position
+	var show: bool = StageDef.depth_in(_stage_area._gb, p.x, p.z) < LEGACY_SHOW_DEPTH
+	if show == _legacy_shown:
+		return
+	_legacy_shown = show
+	(_stage as Node3D).visible = show
+	var patch := get_node_or_null("ReactivePatch") as Node3D
+	if patch != null:
+		patch.visible = show
 
 func _axis_shaped(v: float) -> float:
 	# deadzone, then rescale what is left to the full 0..1 range so the view starts moving

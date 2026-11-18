@@ -56,6 +56,24 @@ Grep words: *big dark green square*, *square with no hitbox*, *clips the start a
   Metal reports no GPU time, so the difference against the baseline is each system's cost. The
   repeated baseline catches thermal drift. A cloud run showed what the triangles are: trees are
   only ~160k of ~680k per frame. The ground chunks are the rest.
+- **Where the triangles go.** Measured with a cloud probe: chase cam, 300 m into SHAKEDOWN, noon, parked.
+  "Primitives" counts every pass, so the shadow map's share is included. Before the fix:
+
+  | Share | Primitives | Draw calls |
+  |---|---|---|
+  | Total | 589k | 559 |
+  | Legacy map, 3 km away and drawn for nothing | 222k | 88 |
+  | Trees | 159k | 119 |
+  | Shadow pass | 81k | 49 |
+  | Stage ground chunks | 78k | 123 |
+  | Other (gates, tunnel, marks) | 34k | 83 |
+  | Car | 13.5k | 94 |
+  | Backdrop | about 0 | |
+
+  **Fix: the legacy map and the reactive patch are hidden** while the car is more than 150 m
+  inside the stage ground. Their collision stays. After the fix: **365k primitives, 468 draw calls
+  (-38%)**. Main carried the same waste, so this was never a PR #4 regression. The car's 94 draw
+  calls for 13.5k triangles are separate meshes, worth merging later.
 - **Overheating confirmed** (sagi, 2026-11-18): "you hypothesis of the over heating causing
   performance loss is right - noticeably about 10-20% loss of fps". The frame log of a 14-minute
   run shows the slowest 5% of frames falling from about 50-57 fps to 38-41 in the last 2-3 minutes,
