@@ -93,6 +93,7 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	if _car == null:
 		return
+	_void_rescue()
 	if Input.is_action_just_pressed("time_of_day"):
 		_tod = (_tod + 1) % TOD.size()
 		_apply_tod(_tod)
@@ -746,6 +747,47 @@ func _process(delta: float) -> void:
 ## Hiding it keeps its collision (visible is render-only) and it reappears before the car can reach
 ## it. Kept visible within LEGACY_SHOW_DEPTH of the stage's edge, where the start clearing could
 ## still look back toward it.
+## FELL OUT OF THE WORLD (2026-11-18, sagi: "fell through the map on the last bit", ~155 km/h near
+## SHAKEDOWN's finish). Past the stage ground's edge the only ground is the 44 m transition pad and
+## the tunnel; off their sides there is nothing but the backdrop sheet, which has no collider, and
+## nothing ever caught a car that went over - it fell forever. A headless probe drove the finish,
+## the tunnel and the swap to the start at a steady 43 m/s and did NOT fall, so the likeliest route
+## out is leaving the pad sideways at speed. The fix that covers every such hole: a car that has
+## dropped VOID_DROP_M below the last height it stood at without free-falling is put back on the
+## nearest road. Nothing on a generated road falls 25 m, so this cannot fire in normal driving.
+const VOID_DROP_M := 25.0
+var _safe_y := 0.0
+var _safe_p := Vector3.ZERO
+var _have_safe := false
+
+func _void_rescue() -> void:
+	var p: Vector3 = _car.global_position
+	var vy: float = _car.linear_velocity.y
+	if not _have_safe or vy > -4.0:
+		# not falling: this is a height the car can legitimately be at
+		if not _have_safe or vy > -1.0:
+			_safe_y = p.y
+			_safe_p = p
+			_have_safe = true
+		return
+	if p.y > _safe_y - VOID_DROP_M:
+		return
+	print("VOID RESCUE: car fell from (%.1f, %.1f, %.1f) to y=%.1f at %.0f km/h" % [_safe_p.x, _safe_y, _safe_p.z, p.y, _car.linear_velocity.length() * 3.6])
+	_have_safe = false
+	if _stage_area != null and StageDef.depth_in(_stage_area._gb, _safe_p.x, _safe_p.z) > -1500.0:
+		var cl = _stage_area.gen.centreline
+		var np: Dictionary = cl.nearest_point(_safe_p.x, _safe_p.z)
+		var s: float = clampf(float(np["s"]), 0.0, cl.length() - 10.0)
+		var pt: Dictionary = cl.point_at(s)
+		var pos: Vector3 = pt["pos"]
+		var h: Vector2 = pt["heading"]
+		if StageDef.depth_in(_stage_area._gb, pos.x, pos.z) > 0.0:
+			var o := Vector3(pos.x, _stage_area.height_at(pos.x, pos.z) + 1.8, pos.z)
+			_car.respawn()   # resets engine, tyres and damage exactly as [R] does...
+			_car.global_transform = Transform3D(Basis(), o).looking_at(o + Vector3(h.x, 0.0, h.y), Vector3.UP)
+			return           # ...but on the road where you went off, not at the start
+	_car.respawn()
+
 const LEGACY_SHOW_DEPTH := 150.0
 var _legacy_shown := true
 func _cull_legacy_map() -> void:
