@@ -41,6 +41,7 @@ var _forest_mode := ""       # "", "noshadow", "hidden" - applied to tree nodes 
 var _flat_sky: ProceduralSkyMaterial
 var _sky_saved: Material
 var _vp_rid: RID
+var _glow_saved: Array = []
 
 func _ready() -> void:
 	process_priority = 1000
@@ -59,6 +60,23 @@ func _build_configs() -> void:
 		["no sun shadows",
 			func(): world._sun.shadow_enabled = false,
 			func(): world._sun.shadow_enabled = true],
+		# DIAGNOSTIC rows, not proposals: they split the 2.8 ms of "no sun shadows" into drawing the
+		# shadow map (atlas size, splits, range) and reading it per pixel (filter, blur), which
+		# decides whether baking the shadows can pay for itself.
+		["shadow map 2048 (diag)",
+			func(): RenderingServer.directional_shadow_atlas_set_size(2048, true),
+			func(): RenderingServer.directional_shadow_atlas_set_size(
+				int(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/size", 4096)), true)],
+		["shadow 1 split (diag)",
+			func(): world._sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL,
+			func(): world._sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS],
+		["shadow range 40 m (diag)",
+			func(): car.set("gfx_shadow_m", 40.0),
+			func(): car.set("gfx_shadow_m", 100.0)],
+		["shadow hard filter (diag)",
+			func(): RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD),
+			func(): RenderingServer.directional_soft_shadow_filter_set_quality(
+				int(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality", 2)) as RenderingServer.ShadowQuality)],
 		["trees cast no shadow",
 			func(): _set_forest("noshadow"),
 			func(): _set_forest("")],
@@ -85,6 +103,17 @@ func _build_configs() -> void:
 		["+ glow",
 			func(): world._env.glow_enabled = true,
 			func(): world._env.glow_enabled = false],
+		["+ glow, levels 4-7 only (diag)",
+			func():
+				world._env.glow_enabled = true
+				_glow_saved = []
+				for i in range(1, 8):
+					_glow_saved.append(world._env.get_glow_level(i - 1))
+					world._env.set_glow_level(i - 1, 1.0 if i >= 4 else 0.0),
+			func():
+				world._env.glow_enabled = false
+				for i in range(7):
+					world._env.set_glow_level(i, _glow_saved[i])],
 		["3D at 1600 lines", func(): _set_lines(1600), func(): _set_lines(0)],
 		["3D at 1080 lines", func(): _set_lines(1080), func(): _set_lines(0)],
 		["baseline (again: thermal check)", nop, nop],
