@@ -74,6 +74,30 @@ Grep words: *big dark green square*, *square with no hitbox*, *clips the start a
   inside the stage ground. Their collision stays. After the fix: **365k primitives, 468 draw calls
   (-38%)**. Main carried the same waste, so this was never a PR #4 regression. The car's 94 draw
   calls for 13.5k triangles are separate meshes, worth merging later.
+- **FIRST BENCH ON THE MAC** (c884130, before the legacy-map fix; fullscreen 2880x1800,
+  Forward+, noon, uncapped; file bench-2026-11-18T10-12-15.txt on the Mac). Baseline median
+  **15.48 ms (64.9 fps)**. Thermal drift -0.20 ms, so the run is clean. Each row changes one thing
+  against the baseline:
+
+  | Config | Median vs baseline |
+  |---|---|
+  | No sun shadows | -2.83 |
+  | Trees cast no shadow | -0.19 |
+  | No trees | -2.44 |
+  | No sway | -0.20 |
+  | Built-in sky | -0.32 |
+  | No fog | -0.89 |
+  | + SSAO | +3.04 |
+  | + glow | +2.58 |
+  | 1600 lines | -2.38 (13.10 ms) |
+  | 1080 lines | -7.14 (8.33 ms, 118 fps) |
+
+  Reading: the cost is per PIXEL, not per triangle. Removing 174k tree triangles saves 2.4 ms;
+  removing pixels saves far more. Shadows cost 2.8 ms, almost none of it the trees' casters, so it
+  is the per-pixel shadow lookup plus the ground in the shadow map. Baking the sky is dropped
+  (0.3 ms). The drives' 18-23 ms against this 15.5 ms is the dust plumes, heat and route. The bench
+  slides a frozen car, so it emits no plumes. Physics and scripts (~4-5 ms of CPU) run in parallel
+  with the GPU, so they do not add to the frame.
 - **Overheating confirmed** (sagi, 2026-11-18): "you hypothesis of the over heating causing
   performance loss is right - noticeably about 10-20% loss of fps". The frame log of a 14-minute
   run shows the slowest 5% of frames falling from about 50-57 fps to 38-41 in the last 2-3 minutes,
