@@ -20,6 +20,32 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-18, evening (bench 3: BAKED shadows save the whole shadow cost; HYBRID saves nothing)
+
+Grep words: *bench*, *baked shadows fps*, *hybrid no faster*, *shadow pass cost*, *bench ran
+windowed 1280x720*, *screen locked*.
+
+Bench on 367da4c, Mac fullscreen 2880x1800, noon, SHAKEDOWN from 369 m at 25 m/s, uncapped.
+Heat drift +0.00 ms (first vs last baseline). Rows shared with the 96f3d9c bench repeat within
+~0.3 ms. File on the Mac: `bench-2026-11-18T16-10-54.txt`.
+
+- **An earlier attempt was invalid:** the Mac was on the lock screen, so macOS refused fullscreen
+  and the game ran in a 1280x720 window. Always check the report's `window=` line is ~2880x1800.
+- baseline **15.00 ms** (66.9 fps avg), 369k tris, 481 draws.
+- **shadows BAKED: 12.50 ms (-2.50)**, p95 13.19, i.e. the same as no sun shadow at all (12.40,
+  -2.60). The bake recovers the whole shadow-pass cost.
+- **shadows HYBRID (live 40 m + baked): 15.19 ms (+0.19)**, and a 40 m live range alone is +0.28.
+  So the cost is in *running a shadow pass at all*, not in its reach or its caster count (trees
+  casting no shadow: -0.14).
+- Shadow diagnostics: 2048 map -1.11, hard filter -0.42, 1 split -0.19.
+- Glow levels 4-7 only: +3.52 vs full glow +2.71, so trimming levels is not the glow fix.
+- SSAO +3.18, glow +2.71, fog -0.83, plain sky -0.42, sway 0.00, no trees -2.50.
+- 1600 lines 12.71 ms (78.7 fps); 1080 lines 8.06 ms (124 fps).
+- After the re-bakes the scene draws 400k tris vs 369k at start (+31k) with no time cost; the bake
+  leaves something extra drawn - unexplained, to look at.
+
+---
+
 ## 2026-11-18, later (baked shadows: HYBRID and BAKED shadow modes; forest-floor AO)
 
 Grep words: *baked shadows*, *shadow mode*, *hybrid shadows*, *trees too pale/grey*, *no sun
