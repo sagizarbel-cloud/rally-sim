@@ -555,6 +555,40 @@ func _apply_gfx(high: bool) -> void:
 	_env.ssao_enabled = high
 	_env.glow_enabled = high
 
+## SHADOW MODES (2026-11-18): see StageChunks.shadow_mode. The bake lives in the stage ground; the
+## world owns the sun, so it switches the shadow map and tells the ground which way the sun is.
+var _shadow_mode := 0
+var _contact: Decal = null
+
+func _sun_toward() -> Vector3:
+	# A DirectionalLight3D shines along its -Z; the sun is therefore along +Z.
+	return _sun.global_transform.basis.z.normalized()
+
+func _apply_shadow_mode() -> void:
+	_sun.shadow_enabled = _shadow_mode != 2
+	if _stage_area != null and _stage_area.chunks != null:
+		_stage_area.chunks.set_shadow_bake(_shadow_mode, _sun_toward())
+	# BAKED has no shadow map, so nothing would put the car on the ground: a soft contact shadow
+	# under it, projected down (a Decal), stands in for the shadow it would cast.
+	if _shadow_mode == 2 and _contact == null and _car != null:
+		_contact = Decal.new()
+		_contact.name = "ContactShadow"
+		# A soft oval: dark under the middle of the car, gone at the edge of its footprint.
+		var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+		for y in range(64):
+			for x in range(64):
+				var dx: float = (float(x) + 0.5) / 32.0 - 1.0
+				var dy: float = (float(y) + 0.5) / 32.0 - 1.0
+				var r: float = sqrt(dx * dx + dy * dy)
+				img.set_pixel(x, y, Color(0.0, 0.0, 0.0, 0.95 * (1.0 - smoothstep(0.45, 1.0, r))))
+		_contact.texture_albedo = ImageTexture.create_from_image(img)
+		_contact.size = Vector3(2.4, 3.0, 4.9)
+		_contact.position = Vector3(0, -0.2, 0)
+		_contact.cull_mask = 1
+		_car.add_child(_contact)
+	if _contact != null:
+		_contact.visible = _shadow_mode == 2
+
 func _apply_tod(i: int) -> void:
 	var p: Dictionary = TOD[i]
 	_sun.rotation_degrees = p["rot"]
@@ -578,6 +612,9 @@ func _apply_tod(i: int) -> void:
 	# the haze takes the horizon's colour, so morning haze is warm and night haze is dark blue
 	_env.fog_light_color = p["horizon"]
 	_env.fog_light_energy = clampf(float(p["energy"]), 0.15, 1.0)
+	if _stage_area != null and _stage_area.chunks != null:
+		_stage_area.chunks.set_bake_strength(_sun.shadow_opacity)
+		_stage_area.chunks.set_shadow_bake(_shadow_mode, _sun_toward())
 
 func _build_ground() -> void:
 	var body := StaticBody3D.new()
@@ -689,7 +726,13 @@ func _process(delta: float) -> void:
 		var hi := bool(_car.get("gfx_high"))
 		if hi != _env.ssao_enabled:
 			_apply_gfx(hi)
+		var mode := int(_car.get("gfx_shadow_mode")) if _car.get("gfx_shadow_mode") != null else 0
+		if mode != _shadow_mode:
+			_shadow_mode = mode
+			_apply_shadow_mode()
 		var sm := clampf(float(_car.get("gfx_shadow_m")), 20.0, 400.0)
+		if _shadow_mode == 1:
+			sm = clampf(float(_car.get("gfx_shadow_live_m")), 10.0, sm)
 		if not is_equal_approx(sm, _sun.directional_shadow_max_distance):
 			_sun.directional_shadow_max_distance = sm
 	if Input.is_action_just_pressed("camera_toggle"):

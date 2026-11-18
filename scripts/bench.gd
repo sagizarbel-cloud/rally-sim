@@ -42,6 +42,8 @@ var _flat_sky: ProceduralSkyMaterial
 var _sky_saved: Material
 var _vp_rid: RID
 var _glow_saved: Array = []
+var _budget_saved := 1.0
+const HOLD_MAX_S := 25.0
 
 func _ready() -> void:
 	process_priority = 1000
@@ -117,6 +119,16 @@ func _build_configs() -> void:
 		["3D at 1600 lines", func(): _set_lines(1600), func(): _set_lines(0)],
 		["3D at 1080 lines", func(): _set_lines(1080), func(): _set_lines(0)],
 		["baseline (again: thermal check)", nop, nop],
+		# Re-baking rows LAST: a re-bake rebuilds the ground from scratch, so what follows is not the
+		# same resident set as the rows above. The thermal check above compares like with like; the
+		# baseline below re-measures LIVE after the re-bakes, for the shadow rows to compare against.
+		["shadows HYBRID (live 40 m + baked)",
+			func(): car.set("gfx_shadow_mode", 1),
+			func(): car.set("gfx_shadow_mode", 0), "rebake"],
+		["shadows BAKED (no shadow map)",
+			func(): car.set("gfx_shadow_mode", 2),
+			func(): car.set("gfx_shadow_mode", 0), "rebake"],
+		["baseline (after re-bakes: compare shadow rows to this)", nop, nop],
 	]
 
 func _physics_process(delta: float) -> void:
@@ -128,10 +140,21 @@ func _physics_process(delta: float) -> void:
 			return
 		_begin()
 		return
+	if _phase == 4:
+		_place(_s0)                # parked while the ground re-bakes; see _next_config()
+		return
 	_s += SPEED * delta
 	_place(_s)
 
 func _process(delta: float) -> void:
+	if _phase == 4:
+		_t += delta
+		var busy: bool = area.chunks._needs_prime or int(area.chunks.stats()["queued"]) > 0 or not area.chunks._job.is_empty()
+		if _t >= HOLD_MAX_S or (_t >= 1.0 and not busy):
+			car.set("stage_chunk_budget_ms", _budget_saved)
+			_phase = 1
+			_t = 0.0
+		return
 	if _phase == 1:
 		_t += delta
 		if _t >= settle_s:
@@ -179,6 +202,15 @@ func _next_config() -> void:
 	_place(_s)
 	_phase = 1
 	_t = 0.0
+	# A row that switches the shadow mode re-bakes the whole stage ground - and so does the row after
+	# it, which switches back. Those rows first HOLD the car parked at the start of the path, with a
+	# raised build budget, until the ground is rebuilt; then the usual moving settle and measurement.
+	# Every row therefore measures the same stretch of road from the same moving start.
+	var rebakes: bool = _configs[_ci].size() > 3 or (_ci > 0 and _configs[_ci - 1].size() > 3)
+	if rebakes:
+		_budget_saved = float(car.get("stage_chunk_budget_ms"))
+		car.set("stage_chunk_budget_ms", 8.0)
+		_phase = 4
 
 func _finish_config() -> void:
 	var f := _frames.duplicate()
@@ -214,7 +246,11 @@ func _report() -> void:
 		lines.append("%-32s %7.2fms %7.2fms %8.1f %+8.2fms %6.2fms %6.0fk %5.0f  %s" % [
 			r["name"], r["median_ms"], r["p95_ms"], r["avg_fps"], float(r["median_ms"]) - base,
 			r["cpu_ms"], r["prims_k"], r["draws"], r["render"]])
-	var drift: float = float(_results[-1]["median_ms"]) - base
+	var again: Dictionary = _results[-1]
+	for r in _results:
+		if str(r["name"]).begins_with("baseline (again"):
+			again = r
+	var drift: float = float(again["median_ms"]) - base
 	lines.append("thermal drift (last baseline - first): %+.2f ms%s" % [drift,
 		"  <- the machine slowed during the run; treat small deltas as noise" if absf(drift) > 0.5 else ""])
 	var txt := "\n".join(lines)

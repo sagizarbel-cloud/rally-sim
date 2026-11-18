@@ -132,6 +132,8 @@ class_name VehicleM2
 # Sun shadow reach. Main used Godot's default 100 m; this branch tried 160 m (trees shading the road
 # further ahead) and went GPU-bound in fullscreen. A slider so the cost can be A/B'd on the drive.
 @export var gfx_shadow_m := 100.0        # GRAPHICS: sun shadow distance (m)
+@export var gfx_shadow_mode := 0         # GRAPHICS: sun shadows 0 LIVE / 1 HYBRID (live near, baked far) / 2 BAKED
+@export var gfx_shadow_live_m := 40.0    # GRAPHICS: HYBRID - how far the live shadows reach before the baked ones take over
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;

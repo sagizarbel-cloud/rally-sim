@@ -239,6 +239,32 @@ void fragment() {
 }
 """
 
+## The light() function of the baked-shadow ground material: Lambert diffuse and a soft highlight,
+## with the sun's visibility the DARKER of the live shadow (ATTENUATION, 1 where there is none) and
+## the baked one. Ambient light - sky and fog - is the engine's, darkened by the baked AO.
+const BAKED_LIGHT := """
+uniform float bake_strength = 1.0;   // the sun's shadow_opacity: night shadows are softer
+void light() {
+	float a = ATTENUATION;
+	if (LIGHT_IS_DIRECTIONAL) {
+		a = min(a, mix(1.0, sunvis, bake_strength));
+	}
+	// Burley diffuse, as Godot's own default lighting computes it (scene_forward_lights_inc), so
+	// the baked modes light a surface exactly as the live mode does. Plain Lambert lost most of a low
+	// evening sun on rough ground, where Burley's grazing-angle term is ~1.7x.
+	float ndl = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
+	float ndv = clamp(dot(NORMAL, VIEW), 0.0, 1.0);
+	float ldh = clamp(dot(LIGHT, normalize(VIEW + LIGHT)), 0.0, 1.0);
+	float fd90m1 = 2.0 * ldh * ldh * ROUGHNESS - 0.5;
+	float fdv = 1.0 + fd90m1 * pow(1.0 - ndv, 5.0);
+	float fdl = 1.0 + fd90m1 * pow(1.0 - ndl, 5.0);
+	DIFFUSE_LIGHT += fdv * fdl * ndl * a * LIGHT_COLOR / PI;
+	vec3 hv = normalize(VIEW + LIGHT);
+	float shine = exp2(9.0 * (1.0 - ROUGHNESS) + 1.0);
+	SPECULAR_LIGHT += pow(max(dot(NORMAL, hv), 0.0), shine) * (shine + 2.0) / 8.0 * 0.04 * a * LIGHT_COLOR / PI * SPECULAR_AMOUNT;
+}
+"""
+
 ## ARC E - THE BACKDROP. The road window ends a couple of chunks from the road, and past it there was
 ## nothing: from a crest, or from the chase camera over a rise, the world stopped at a ragged forest
 ## edge with the sky's ground colour below it. One coarse mesh of the base terrain under the whole
@@ -274,6 +300,34 @@ void fragment() {
 }
 """
 var _backdrop: MeshInstance3D
+
+## BAKED SHADOWS (2026-11-18, the perf plan's step 4/5). The 2026-11-18 bench measured the live sun
+## shadow at 2.8 ms of a 15.3 ms frame on the M1, almost none of it the trees' casters - it is the
+## shadow map and its per-pixel lookup. The forest does not move and the sun is fixed per time of
+## day, so the shadows the trees cast can be computed ONCE per chunk, when it is built, and carried
+## in the mesh: per-vertex sun visibility on the ground, per-tree visibility on the trees.
+##   0 LIVE   - Godot's shadow map only (what the game had).
+##   1 HYBRID - live shadows close to the camera (car, near trees: crisp, moving), baked beyond.
+##   2 BAKED  - no shadow map at all; the car gets a contact shadow of its own (world.gd).
+## The same bake also carries AMBIENT OCCLUSION for the forest floor - the darkening under crowns
+## that SSAO was being paid 2.9 ms a frame to approximate from the screen.
+var shadow_mode := 0
+var sun_dir := Vector3(0.0, 1.0, 0.0)     ## unit vector TOWARD the sun (or moon)
+var shadow_reach_max := 60.0              ## m: a shadow longer than this is cut (evening sun)
+var tree_opacity := 0.85                  ## how much sun one pass through a spruce crown stops: the
+                                          ## mesh's crown is star-shaped tiers with gaps, not a solid
+                                          ## cone, and the live shadow map shows light between them
+var crown_fill := 0.82                    ## the solid-cone radius that matches the star crown (its
+                                          ## points alternate 1.0 and 0.62 of the radius)
+var _mat_baked: ShaderMaterial
+var _needs_prime := false
+func _set_u(name: String, v: Variant) -> void:
+	_mat.set_shader_parameter(name, v)
+	if _mat_baked != null:
+		_mat_baked.set_shader_parameter(name, v)
+
+var _bake_us := 0                         ## cumulative bake time, for probes and the bench
+var _baked := 0
 
 func _build_backdrop() -> void:
 	var t0 := Time.get_ticks_usec()
@@ -340,11 +394,17 @@ func _ready() -> void:
 	sh.code = EDGE_SHADER
 	_mat = ShaderMaterial.new()
 	_mat.shader = sh
+	var shb := Shader.new()
+	shb.code = EDGE_SHADER.replace("varying vec3 wpos;", "varying vec3 wpos;\nvarying float sunvis;\nvarying float bao;") \
+			.replace("\tmix_t = UV.y;", "\tmix_t = UV.y;\n\tsunvis = COLOR.a;\n\tbao = COLOR.r;") \
+			.replace("\tSPECULAR = 0.35;\n}", "\tSPECULAR = 0.35;\n\tAO = bao;\n\tAO_LIGHT_AFFECT = 0.0;\n}") + BAKED_LIGHT
+	_mat_baked = ShaderMaterial.new()
+	_mat_baked.shader = shb
 	# Passed as COLOR, not Vector3: a `source_color` uniform is converted from sRGB only when it is
 	# given a Color. A Vector3 goes in raw - the second half of why the stage was washed out.
-	_mat.set_shader_parameter("grass_col", area.grass_color)
-	_mat.set_shader_parameter("road_col", area.road_color)
-	_mat.set_shader_parameter("seal_col", area.seal_color)
+	_set_u("grass_col", area.grass_color)
+	_set_u("road_col", area.road_color)
+	_set_u("seal_col", area.seal_color)
 
 # ---------------------------------------------------------------- derived sizes
 
@@ -359,10 +419,10 @@ func configure() -> void:
 	if forest == null and area.gen != null and (car == null or bool(car.get("stage_forest") != false)):
 		forest = StageForest.new(area)
 	if forest != null:
-		_mat.set_shader_parameter("forest_edge", forest.clearance)
+		_set_u("forest_edge", forest.clearance)
 	else:
-		_mat.set_shader_parameter("forest_edge", 1e6)       # no forest: no needle-litter floor
-	_mat.set_shader_parameter("rut_pos", area.rut_pos)
+		_set_u("forest_edge", 1e6)       # no forest: no needle-litter floor
+	_set_u("rut_pos", area.rut_pos)
 	if _backdrop == null:
 		_build_backdrop()
 	if car != null and car.has_method("top_speed_kmh"):
@@ -588,11 +648,20 @@ func update(p: Vector3) -> void:
 		# clips the starting area, and has no hitbox" (2026-11-18). It is only ever needed from
 		# inside the stage, so it is drawn only while the car is on (or just off) the stage ground.
 		_backdrop.visible = StageDef.depth_in(area._gb, p.x, p.z) > -2.0 * span
+	if _needs_prime:
+		_needs_prime = false
+		_drain_task()
+		_job = {}
+		prime(p)
+		_prev_p = p
+		_have_prev = true
+		return
 	# A RESPAWN is a teleport, not driving: pressing [B] for SHAKEDOWN moves the car 3 km in one
 	# tick, and the budgeted path would take seconds to lay a solid shell under it - the car would
 	# fall through the world while it built. A jump further than the shell itself means none of the
 	# shell can be reused, which is exactly the condition for priming again.
 	if _have_prev and p.distance_to(_prev_p) > r_solid:
+		_drain_task()
 		_job = {}
 		prime(p)
 		_prev_p = p
@@ -852,6 +921,9 @@ func _build_chunk(k: Vector2i, lod: int) -> void:
 func _step_job(budget_us: int = -1) -> void:
 	if budget_us < 0:
 		budget_us = int(build_budget_ms * 1000.0)
+	if _job.has("bake"):
+		_bake_step(budget_us)
+		return
 	var t0 := Time.get_ticks_usec()
 	var k: Vector2i = _job["k"]
 	var lod: int = _job["lod"]
@@ -884,7 +956,345 @@ func _step_job(budget_us: int = -1) -> void:
 	_job["i"] = i
 	_job["us"] = int(_job["us"]) + (Time.get_ticks_usec() - t0)
 	if i >= total:
-		_finalise()
+		if shadow_mode > 0 and forest != null:
+			_bake_begin()
+			_bake_step(maxi(budget_us - (Time.get_ticks_usec() - t0), 0))
+		else:
+			_finalise()
+
+# ---------------------------------------------------------------- the shadow + AO bake (resumable)
+
+func _bake_begin() -> void:
+	var k: Vector2i = _job["k"]
+	var n: int = _job["n"]
+	var o := chunk_origin(k)
+	var L := sun_dir
+	if L.y < 0.05:
+		L = Vector3(L.x, 0.05, L.z).normalized()
+	# Horizontal metres a shadow travels per metre of height: the shadow of a point h above the
+	# ground lands h * u away from it, AWAY from the sun.
+	var u := Vector2(L.x, L.z) / L.y
+	var ul: float = u.length()
+	var hmax: float = forest.max_h + 6.0
+	if ul > 1e-4:
+		hmax = minf(hmax, shadow_reach_max / ul)
+	# The trees that can shade this chunk stand TOWARD the sun from it, up to hmax * u away, plus a
+	# crown radius and the AO reach all round.
+	var pad: float = forest.max_h * 1.2 * 0.17 + 4.0
+	var x0: float = o.x - pad + minf(0.0, u.x * hmax)
+	var x1: float = o.x + span + pad + maxf(0.0, u.x * hmax)
+	var z0: float = o.z - pad + minf(0.0, u.y * hmax)
+	var z1: float = o.z + span + pad + maxf(0.0, u.y * hmax)
+	var keys: Array = []
+	for kz in range(int(floor(z0 / span)), int(floor(z1 / span)) + 1):
+		for kx in range(int(floor(x0 / span)), int(floor(x1 / span)) + 1):
+			keys.append(Vector2i(kx, kz))
+	var vis := PackedFloat32Array(); vis.resize(n * n); vis.fill(1.0)
+	var ao := PackedFloat32Array(); ao.resize(n * n); ao.fill(1.0)
+	_job["bake"] = {"phase": 0, "keys": keys, "ki": 0, "occ": PackedFloat32Array(), "ti": 0,
+		"u": u, "hmax": hmax, "rect": Rect2(x0, z0, x1 - x0, z1 - z0), "vis": vis, "ao": ao,
+		"tvis": PackedFloat32Array(), "us": 0}
+
+func _bake_step(budget_us: int) -> void:
+	var t0 := Time.get_ticks_usec()
+	var bk: Dictionary = _job["bake"]
+	var k: Vector2i = _job["k"]
+	var n: int = _job["n"]
+	var ax: int = _job["ax"]
+	var lod: int = _job["lod"]
+	var step: float = cell * float(lod)
+	var o := chunk_origin(k)
+	var h: PackedFloat32Array = _job["h"]
+	var u: Vector2 = bk["u"]
+	var uu: float = u.dot(u)
+	var occ: PackedFloat32Array = bk["occ"]
+	# --- phase 0: gather every tree that can shade this chunk (pure, cached per chunk) -------------
+	if int(bk["phase"]) == 0:
+		var keys: Array = bk["keys"]
+		var rect: Rect2 = bk["rect"]
+		var ki: int = bk["ki"]
+		while ki < keys.size():
+			var kk: Vector2i = keys[ki]
+			var rec: Dictionary = forest.chunk_trees(kk, chunk_origin(kk), span)
+			var oc: PackedFloat32Array = rec["occ"]
+			var t := 0
+			while t < oc.size():
+				if rect.has_point(Vector2(oc[t], oc[t + 2])):
+					occ.append_array(oc.slice(t, t + 5))
+				t += 5
+			ki += 1
+			if Time.get_ticks_usec() - t0 >= budget_us:
+				break
+		bk["ki"] = ki
+		bk["occ"] = occ
+		if ki < keys.size():
+			_bake_yield(bk, t0)
+			return
+		# NEAREST-TO-THE-CHUNK FIRST along the sun direction: the trees closest to the ground they
+		# shade do most of the shading, and a vertex already in full shade skips every tree after.
+		# Under a low sun most forest vertices are dark after the first few trees.
+		var cxz := Vector2(o.x + span * 0.5, o.z + span * 0.5)
+		var nt0: int = occ.size() / 5
+		var order: Array = []
+		for t in range(nt0):
+			order.append(Vector2((Vector2(occ[t * 5], occ[t * 5 + 2]) - cxz).dot(u), float(t)))
+		order.sort_custom(func(p, q): return p.x < q.x)
+		var sorted := PackedFloat32Array(); sorted.resize(occ.size())
+		for m in range(nt0):
+			var t: int = int(order[m].y)
+			for c in range(5):
+				sorted[m * 5 + c] = occ[t * 5 + c]
+		occ = sorted
+		bk["occ"] = occ
+		bk["phase"] = 1
+		# The rest runs on a worker thread; see _bake_work().
+		bk["oo"] = (forest.chunk_trees(k, o, span)["occ"] as PackedFloat32Array)
+		bk["max_h"] = forest.max_h
+		bk["n"] = n
+		bk["ax"] = ax
+		bk["step"] = step
+		bk["o"] = o
+		bk["h"] = h
+		if budget_us >= (1 << 29):
+			# prime(): the car is about to stand on this chunk, so it is built NOW, inline.
+			_bake_work(bk)
+			bk["us"] = int(bk["us"]) + int(bk.get("work_us", 0))
+		else:
+			bk["task"] = WorkerThreadPool.add_task(_bake_work.bind(bk), false, "bake chunk")
+			_bake_yield(bk, t0)
+			return
+	if bk.has("task"):
+		var tid: int = bk["task"]
+		if not WorkerThreadPool.is_task_completed(tid):
+			_bake_yield(bk, t0)
+			return
+		WorkerThreadPool.wait_for_task_completion(tid)
+		bk.erase("task")
+		bk["us"] = int(bk["us"]) + int(bk.get("work_us", 0))
+	_bake_us += int(bk["us"]) + (Time.get_ticks_usec() - t0)
+	_baked += 1
+	# (Not added to the job's own time: that feeds the per-VERTEX sampling cost the lead distance
+	# is derived from, and the bake is per tree, not per vertex. See stats()["bake_ms_avg"].)
+	_finalise()
+
+func _bake_work(bk: Dictionary) -> void:
+	## Phases 1 and 2, on a WORKER THREAD (WorkerThreadPool). They read only `bk` - the gathered
+	## trees, the chunk's heights and the sun - and write only `bk`, so they need nothing from the
+	## scene and nothing on the main thread touches `bk` until the task is done. Under a low sun a
+	## chunk's bake measured 33-100 ms in the cloud; on the main thread that was either a hitch or,
+	## at the 1 ms/tick build budget, streaming that fell behind the car.
+	var t0 := Time.get_ticks_usec()
+	var budget_us: int = 1 << 60
+	var n: int = bk["n"]
+	var ax: int = bk["ax"]
+	var step: float = bk["step"]
+	var o: Vector3 = bk["o"]
+	var h: PackedFloat32Array = bk["h"]
+	var u: Vector2 = bk["u"]
+	var uu: float = u.dot(u)
+	var occ: PackedFloat32Array = bk["occ"]
+	# --- phase 1: lay each tree's shadow and crown AO onto the chunk's vertices -------------------
+	if int(bk["phase"]) == 1:
+		var vis: PackedFloat32Array = bk["vis"]
+		var ao: PackedFloat32Array = bk["ao"]
+		var hmax_all: float = bk["hmax"]
+		var ti: int = bk["ti"]
+		var nt: int = occ.size() / 5
+		var span_n: float = float(n - 1)
+		while ti < nt:
+			var b5: int = ti * 5
+			var tx: float = occ[b5]
+			var ty: float = occ[b5 + 1]
+			var tz: float = occ[b5 + 2]
+			var H: float = occ[b5 + 3]
+			var rb: float = 0.17 * crown_fill * occ[b5 + 4]
+			var y0: float = ty + 0.1 * H
+			var top: float = ty + H
+			ti += 1
+			# AO: the crown hides part of the sky from the ground beneath and around it.
+			var ra: float = rb * 1.6 + 1.0
+			var ai0: int = clampi(int(floor((tx - ra - o.x) / step)), 0, n - 1)
+			var ai1: int = clampi(int(ceil((tx + ra - o.x) / step)), 0, n - 1)
+			var aj0: int = clampi(int(floor((tz - ra - o.z) / step)), 0, n - 1)
+			var aj1: int = clampi(int(ceil((tz + ra - o.z) / step)), 0, n - 1)
+			if tx + ra >= o.x and tx - ra <= o.x + span and tz + ra >= o.z and tz - ra <= o.z + span:
+				for j in range(aj0, aj1 + 1):
+					for i in range(ai0, ai1 + 1):
+						var dx: float = o.x + float(i) * step - tx
+						var dz: float = o.z + float(j) * step - tz
+						var d: float = sqrt(dx * dx + dz * dz)
+						if d < ra:
+							ao[j * n + i] *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, ra, d))
+			# SHADOW: the vertex P is shaded if the ray from P toward the sun passes through the
+			# crown - a cone from y0 (radius rb) to the tip. q(y) = P.xz + (y - P.y) u is where that
+			# ray is at height y, so q(y) - T.xz = A + y u with A = P.xz - T.xz - P.y u, and the
+			# closest approach to the trunk axis is at y* = -A.u / u.u, clamped to the crown.
+			var hh: float = minf(H + 6.0, hmax_all)
+			var e1 := Vector2(tx, tz) - u * (0.1 * H - 6.0)
+			var e2 := Vector2(tx, tz) - u * hh
+			var bx0: float = minf(e1.x, e2.x) - rb - step
+			var bx1: float = maxf(e1.x, e2.x) + rb + step
+			var bz0: float = minf(e1.y, e2.y) - rb - step
+			var bz1: float = maxf(e1.y, e2.y) + rb + step
+			if bx1 < o.x or bx0 > o.x + span or bz1 < o.z or bz0 > o.z + span:
+				continue
+			var i0: int = clampi(int(floor((bx0 - o.x) / step)), 0, n - 1)
+			var i1: int = clampi(int(ceil((bx1 - o.x) / step)), 0, n - 1)
+			var j0: int = clampi(int(floor((bz0 - o.z) / step)), 0, n - 1)
+			var j1: int = clampi(int(ceil((bz1 - o.z) / step)), 0, n - 1)
+			for j in range(j0, j1 + 1):
+				for i in range(i0, i1 + 1):
+					if vis[j * n + i] < 0.03:
+						continue                   # already in full shade: nothing left to take
+					var py: float = h[(j + 1) * ax + i + 1]
+					var axx: float = o.x + float(i) * step - tx - py * u.x
+					var azz: float = o.z + float(j) * step - tz - py * u.y
+					# The crown is widest at the bottom, so the ray's closest approach to the AXIS is
+					# not where it comes closest to the SURFACE: test that point and three heights in
+					# the wide lower half, and keep the deepest.
+					var ys: float = y0
+					if uu > 1e-6:
+						ys = clampf(-(axx * u.x + azz * u.y) / uu, y0, top)
+					var oc := 0.0
+					for f in [-1.0, 0.0, 0.3]:
+						var yy: float = ys if f < 0.0 else y0 + f * (top - y0)
+						var qx: float = axx + yy * u.x
+						var qz: float = azz + yy * u.y
+						var r: float = rb * (1.0 - (yy - y0) / (top - y0))
+						var d2: float = qx * qx + qz * qz
+						if d2 < (1.05 * r + 0.05) * (1.05 * r + 0.05):
+							oc = maxf(oc, 1.0 - smoothstep(0.65 * r, 1.05 * r + 0.05, sqrt(d2)))
+					if oc > 0.0:
+						vis[j * n + i] *= 1.0 - tree_opacity * oc
+			if (ti & 7) == 0 and Time.get_ticks_usec() - t0 >= budget_us:
+				break
+		bk["ti"] = ti
+		if ti < nt:
+			return
+		bk["phase"] = 2
+		bk["ti"] = 0
+	# --- phase 2: how much sun each of this chunk's own trees gets from its neighbours ------------
+	# Each tree's crown point walks TOWARD the sun through a bucket grid of the occluders, testing
+	# only the trees it passes - testing every occluder made a low-sun chunk cost ~100 ms.
+	if int(bk["phase"]) == 2:
+		var oo: PackedFloat32Array = bk["oo"]
+		var no: int = oo.size() / 5
+		var tvis: PackedFloat32Array = bk["tvis"]
+		if tvis.size() != no:
+			tvis.resize(no)
+			tvis.fill(1.0)
+		var nt: int = occ.size() / 5
+		const BK := 6.0
+		if not bk.has("grid"):
+			var grid := {}
+			for t in range(nt):
+				var key := Vector2i(int(floor(occ[t * 5] / BK)), int(floor(occ[t * 5 + 2] / BK)))
+				if grid.has(key):
+					(grid[key] as PackedInt32Array).append(t)
+				else:
+					grid[key] = PackedInt32Array([t])
+			bk["grid"] = grid
+		var grid2: Dictionary = bk["grid"]
+		var ti: int = bk["ti"]
+		var ud := u.normalized() if uu > 1e-8 else Vector2.ZERO
+		var hmx: float = float(bk["max_h"])
+		while ti < no:
+			var c5: int = ti * 5
+			var H0: float = oo[c5 + 3]
+			# a point on the crown's sunny side at 45% of the height
+			var cx: float = oo[c5] + ud.x * 0.17 * oo[c5 + 4] * 0.5
+			var cz: float = oo[c5 + 2] + ud.y * 0.17 * oo[c5 + 4] * 0.5
+			var cy: float = oo[c5 + 1] + 0.45 * H0
+			var v: float = 1.0
+			# how far toward the sun a crown above this point can stand: (tallest - our height) * |u|
+			var reach: float = minf(maxf(hmx - 0.45 * H0, 0.0) * sqrt(uu), shadow_reach_max) + 4.0
+			var seen := {}
+			var dist := 0.0
+			while dist <= reach and v > 0.02:
+				var px: float = cx + ud.x * dist
+				var pz: float = cz + ud.y * dist
+				var gx: int = int(floor(px / BK))
+				var gz: int = int(floor(pz / BK))
+				for dz in range(-1, 2):
+					for dx in range(-1, 2):
+						var key := Vector2i(gx + dx, gz + dz)
+						if seen.has(key) or not grid2.has(key):
+							continue
+						seen[key] = true
+						for t in (grid2[key] as PackedInt32Array):
+							var b5: int = t * 5
+							var tx: float = occ[b5]
+							var tz: float = occ[b5 + 2]
+							if absf(tx - oo[c5]) < 0.01 and absf(tz - oo[c5 + 2]) < 0.01:
+								continue                       # itself
+							var H: float = occ[b5 + 3]
+							var rb: float = 0.17 * crown_fill * occ[b5 + 4]
+							var y0: float = occ[b5 + 1] + 0.1 * H
+							var top: float = occ[b5 + 1] + H
+							if top <= cy:
+								continue
+							var axx: float = cx - tx - cy * u.x
+							var azz: float = cz - tz - cy * u.y
+							var ys: float = maxf(y0, cy)
+							if uu > 1e-6:
+								ys = clampf(-(axx * u.x + azz * u.y) / uu, maxf(y0, cy), top)
+							var qx: float = axx + ys * u.x
+							var qz: float = azz + ys * u.y
+							var r: float = rb * (1.0 - (ys - y0) / (top - y0))
+							var d: float = sqrt(qx * qx + qz * qz)
+							v *= 1.0 - tree_opacity * (1.0 - smoothstep(0.65 * r, 1.05 * r + 0.05, d))
+				if uu <= 1e-8:
+					break                              # sun overhead: only the buckets around us
+				dist += BK
+			tvis[ti] = v
+			ti += 1
+			if (ti & 3) == 0 and Time.get_ticks_usec() - t0 >= budget_us:
+				break
+		bk["ti"] = ti
+		bk["tvis"] = tvis
+		if ti < no:
+			return
+	bk["work_us"] = Time.get_ticks_usec() - t0
+
+func _exit_tree() -> void:
+	_drain_task()
+
+func _drain_task() -> void:
+	## A bake running on a worker must be waited for before its job is thrown away.
+	if _job.has("bake") and (_job["bake"] as Dictionary).has("task"):
+		WorkerThreadPool.wait_for_task_completion(int(_job["bake"]["task"]))
+		(_job["bake"] as Dictionary).erase("task")
+
+func _bake_yield(bk: Dictionary, t0: int) -> void:
+	bk["us"] = int(bk["us"]) + (Time.get_ticks_usec() - t0)
+
+func set_shadow_bake(mode: int, dir: Vector3) -> void:
+	## world.gd calls this on a mode change and on every time-of-day change. A change re-bakes the
+	## whole stage ground (a short rebuild: the car's shell first, then the window streams back).
+	var d := dir.normalized()
+	var changed: bool = mode != shadow_mode or (mode > 0 and d.distance_to(sun_dir) > 1e-3)
+	sun_dir = d
+	shadow_mode = mode
+	if changed:
+		rebake()
+
+func set_bake_strength(f: float) -> void:
+	if _mat_baked != null:
+		_mat_baked.set_shader_parameter("bake_strength", f)
+	if forest != null and forest.mat_baked != null:
+		forest.mat_baked.set_shader_parameter("bake_strength", f)
+
+func rebake() -> void:
+	_drain_task()
+	_job = {}
+	for k in _live.keys():
+		_unload(k)
+	for ck in _cache.keys():
+		_evict(ck)
+	_cache_order.clear()
+	_scan_valid = false
+	_win_q = -(1 << 40)
+	_needs_prime = true
 
 func _finalise() -> void:
 	var t0 := Time.get_ticks_usec()
@@ -907,6 +1317,9 @@ func _finalise() -> void:
 	var bx: int = k.x * chunk_cells
 	var bz: int = k.y * chunk_cells
 
+	var baked: bool = _job.has("bake")
+	var bvis: PackedFloat32Array = _job["bake"]["vis"] if baked else PackedFloat32Array()
+	var bao: PackedFloat32Array = _job["bake"]["ao"] if baked else PackedFloat32Array()
 	var verts := PackedVector3Array(); verts.resize(n * n)
 	var norms := PackedVector3Array(); norms.resize(n * n)
 	var cols := PackedColorArray(); cols.resize(n * n)
@@ -921,6 +1334,9 @@ func _finalise() -> void:
 			verts[idx] = Vector3(float(bx + i * lod) * cell, hh, float(bz + j * lod) * cell)
 			heights[idx] = hh
 			cols[idx] = area.grass_color.lerp(area.road_color, b[aj * ax + ai])
+			if baked:
+				# the baked material reads AO from red and sun visibility from alpha
+				cols[idx] = Color(clampf(bao[idx], 0.3, 1.0), 0.0, 0.0, bvis[idx])
 			# the edge distance field and the D6 surface mix, both thresholded per pixel
 			uvs[idx] = Vector2(e[aj * ax + ai], m[aj * ax + ai])
 			# TRUE central difference at every vertex INCLUDING the border, because the apron
@@ -955,7 +1371,7 @@ func _finalise() -> void:
 	arr[Mesh.ARRAY_INDEX] = idxs
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-	mesh.surface_set_material(0, _mat)
+	mesh.surface_set_material(0, _mat_baked if baked else _mat)
 	var mi := MeshInstance3D.new()
 	mi.name = "C%d_%d" % [k.x, k.y]
 	mi.mesh = mesh
@@ -964,6 +1380,9 @@ func _finalise() -> void:
 	var trunks := PackedVector4Array()
 	if forest != null:
 		var g: Dictionary = forest.grow(k, lod, h, e, ax, step, o, span)
+		if baked:
+			g = g.duplicate()          # the cached tree list is sun-independent; vis is not
+			g["vis"] = _job["bake"]["tvis"]
 		forest.attach(mi, g, lod)
 		trunks = g["trunks"]
 
@@ -1061,7 +1480,9 @@ func stats() -> Dictionary:
 		"colliders": _collider_count(), "cached": _cache.size(), "cache_hits": _cache_hits,
 		"scans": _scans, "queued": _q_keys.size() - _q_at, "scan_us": _scan_us,
 		"band_marks": _band_marks, "finalise_us": _finalise_us, "window": _win.size(),
-		"road_ahead": road_ahead, "road_behind": road_behind, "band_chunks": band_chunks}
+		"road_ahead": road_ahead, "road_behind": road_behind, "band_chunks": band_chunks,
+		"shadow_mode": shadow_mode, "baked": _baked,
+		"bake_ms_avg": float(_bake_us) / 1000.0 / float(maxi(_baked, 1))}
 
 func _collider_count() -> int:
 	var c := 0

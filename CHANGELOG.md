@@ -20,6 +20,44 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-18, later (baked shadows: HYBRID and BAKED shadow modes; forest-floor AO)
+
+Grep words: *baked shadows*, *shadow mode*, *hybrid shadows*, *trees too pale/grey*, *no sun
+through the trees*, *evening all in shade*, *contact shadow*, *stutter when switching time of day*.
+
+The perf plan's step 4/5 (sagi: "lets have two options- one with completely baked and one with
+what you suggested"). Tab panel "Graphics shadow mode": LIVE (unchanged, still the default) /
+HYBRID / BAKED.
+- **What is baked.** When a ground chunk is built, every spruce that can shade it is tested
+  against each vertex for the current sun direction:
+  - **Trees:** cones of the crown's size. The trees come from the new pure, cached
+    `StageForest.chunk_trees()`, so trees in chunks not yet built still cast. Each tree also gets
+    a per-instance sun visibility from its neighbours.
+  - **Forest-floor AO:** the darkening under crowns, carried to the engine as `AO`. That is the
+    job SSAO was paid 2.9 ms a frame to approximate.
+  - **The look:** the ground and the trees use a `light()` with Godot's own Burley diffuse, and
+    take the darker of the live and the baked shadow.
+- **HYBRID:** the live shadow map reaches only `gfx_shadow_live_m` (40 m): the car and the
+  nearest trees, crisp and moving. Beyond that, the bake.
+- **BAKED:** no shadow map at all. The car gets a soft Decal contact shadow.
+- **Bugs met on the way, so a regression is recognisable:**
+  - **Baked trees came out pale grey.** Cause: a hand-written specular term. Fix: removed. Also,
+    without the shadow map's self-shadowing the inner boughs were lit, so a radial self-shadow
+    from the unit-height mesh now darkens them.
+  - **Evening was all shade.** Cause: Lambert instead of Burley lost the grazing sun, and solid
+    cones over-occluded. Fix: a 0.82 crown fill and 0.85 opacity per crown.
+  - **Pixel checks** against LIVE match within a few levels on lit and shaded ground at noon and
+    evening. Baked shadows are softer: one value per 1.4 m vertex.
+- **Cost of the bake (cloud CPU, per chunk):** noon ~8 ms, morning ~23, evening ~38. It runs on a
+  **WorkerThreadPool** thread, so it cannot hitch a frame. On the main thread it was 33-100 ms at
+  low sun. prime() bakes inline, because the car stands on those chunks.
+- A time-of-day change in HYBRID or BAKED re-bakes the stage ground: the car's shell at once, the
+  window streams back over a second or two.
+- The bench has two new rows, "shadows HYBRID" and "shadows BAKED". They park the car while the
+  ground re-bakes, so every row still measures the same stretch.
+
+---
+
 ## 2026-11-18 (dark green square fixed; 3D resolution option; a benchmark that measures each system)
 
 Grep words: *big dark green square*, *square with no hitbox*, *clips the start area*, *backdrop*,
