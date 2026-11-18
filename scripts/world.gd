@@ -83,6 +83,12 @@ func _ready() -> void:
 	_build_area_manager(car, stage)               # D5: the tunnel between the two areas
 	_build_sound(car, stage)
 	_warm_shaders()
+	if OS.get_cmdline_user_args().has("--bench"):
+		# GPU cost benchmark: replays a fixed forest path once per configuration and quits.
+		var bench: Node = load("res://scripts/bench.gd").new()
+		bench.name = "Bench"
+		bench.world = self
+		add_child(bench)
 
 func _physics_process(delta: float) -> void:
 	if _car == null:

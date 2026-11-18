@@ -20,6 +20,53 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-18 (dark green square fixed; 3D resolution option; a benchmark that measures each system)
+
+Grep words: *big dark green square*, *square with no hitbox*, *clips the start area*, *backdrop*,
+*resolution*, *1080p*, *2560x1600*, *benchmark*, *--bench*, *overheating*, *throttling*,
+*engine damage power loss*, *steering pull*.
+
+- **"A big square with dark green color all over the map, which sometimes clips the starting area,
+  and has no hitbox"** (sagi). It was Arc E's backdrop, the distant-forest sheet under SHAKEDOWN. It
+  is 1.6x the 4 km area, so it reached z = +200 and lay over the legacy map's south half, at
+  SHAKEDOWN's elevation, with no collider. Checked along the whole stage: it never pokes through
+  SHAKEDOWN's own ground (18,711 samples, worst 2.8 m below). Fix: it is drawn only while the car
+  is on, or within two chunks of, the stage ground. Before/after screenshots from 400 m over the
+  legacy map show the sheet gone.
+- **3D resolution option** in the HUD menu (H): window (native), 1600 lines, 1080 lines. It is saved,
+  and the fps line shows the 3D render size. Fullscreen on the MacBook Air renders 2880x1800 (the
+  macOS scaled backing size), but the panel is 2560x1600. This is the user's request (step 2 of
+  the perf plan), not a hidden render-scale default: the default stays native.
+- **`--bench`** (`scripts/bench.gd`, launch with `Godot --path . -- --bench`). It replays one fixed
+  path through the forest (noon, chase cam, uncapped, fullscreen) once per configuration, changing
+  one thing each time, and writes `user://bench-<time>.txt`. The configurations are:
+  - baseline
+  - no sun shadows
+  - trees cast no shadow
+  - no trees
+  - no sway
+  - built-in sky
+  - no fog
+  - + SSAO
+  - + glow
+  - 1600 lines
+  - 1080 lines
+  - baseline again
+
+  Metal reports no GPU time, so the difference against the baseline is each system's cost. The
+  repeated baseline catches thermal drift. A cloud run showed what the triangles are: trees are
+  only ~160k of ~680k per frame. The ground chunks are the rest.
+- **Overheating confirmed** (sagi, 2026-11-18): "you hypothesis of the over heating causing
+  performance loss is right - noticeably about 10-20% loss of fps". The frame log of a 14-minute
+  run shows the slowest 5% of frames falling from about 50-57 fps to 38-41 in the last 2-3 minutes,
+  in light scenes of only about 450k triangles. Compare builds only from a cool Mac, over the same
+  length of run.
+- **Engine damage power loss and steering pull default to 0** ("they get in the way and annoy me
+  when testing"): `damage_power_loss` 0.45 -> 0, `damage_steer_pull` 0.22 -> 0. Both are still in the
+  Tab panel. Damage grip loss is unchanged.
+
+---
+
 ## 2026-11-17, late (toward a 120 fps GPU baseline; first-30-seconds stutter; pace-note height)
 
 Grep words: *stutter on entering SHAKEDOWN*, *first 30 seconds slow*, *shader compile hitch*,

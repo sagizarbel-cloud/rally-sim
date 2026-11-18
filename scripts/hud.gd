@@ -57,6 +57,14 @@ var _rebinding := false
 var _notes_slider: HSlider
 var note_height := 0.85                  # pace notes' vertical position (fraction of screen height)
 var _vp_rid: RID
+# RESOLUTION the 3D world renders at (2026-11-18, sagi: "for 2 - lets also have 1920x1080").
+# Fullscreen on the MacBook Air rendered at 2880x1800 - the macOS "scaled" backing size - while the
+# panel itself is 2560x1600, so 27% of the pixels were drawn only to be thrown away by the window
+# server's downscale. A choice is a number of LINES; the width follows the window's own aspect, so
+# nothing is stretched. The HUD stays at the window's full resolution either way.
+const RES_NAMES := ["Window (native)", "1600 lines (Air panel, 2560x1600)", "1080 lines (1920x1080)"]
+const RES_LINES := [0, 1600, 1080]
+var res_choice := 0
 
 func _ready() -> void:
 	# one Theme on the box instead of four overrides on each Label: the font size is then changed
@@ -105,6 +113,22 @@ func _ready() -> void:
 	_build_menu()
 	_apply_mode()
 	_apply_notes.call_deferred()
+	get_tree().root.size_changed.connect(_apply_res)
+	_apply_res.call_deferred()
+
+func _apply_res() -> void:
+	var vp := get_tree().root
+	var h: int = vp.size.y
+	var lines: int = RES_LINES[res_choice]
+	var sc := 1.0
+	if lines > 0 and h > 0:
+		sc = clampf(float(lines) / float(h), 0.25, 1.0)
+	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	vp.scaling_3d_scale = sc
+
+func _render_size() -> Vector2i:
+	var vp := get_tree().root
+	return Vector2i(int(round(vp.size.x * vp.scaling_3d_scale)), int(round(vp.size.y * vp.scaling_3d_scale)))
 
 func _apply_notes() -> void:
 	var pn := get_parent().get_node_or_null("PaceNotes") if get_parent() != null else null
@@ -208,6 +232,19 @@ func _build_menu() -> void:
 		_apply_notes()
 		_save_cfg())
 	v.add_child(_notes_slider)
+	var rl := Label.new()
+	rl.text = "3D resolution"
+	v.add_child(rl)
+	var ro := OptionButton.new()
+	ro.focus_mode = Control.FOCUS_NONE
+	for nm in RES_NAMES:
+		ro.add_item(nm)
+	ro.select(res_choice)
+	ro.item_selected.connect(func(i: int):
+		res_choice = i
+		_apply_res()
+		_save_cfg())
+	v.add_child(ro)
 	var unc := CheckBox.new()
 	unc.text = "Uncapped fps (vsync off) - to measure headroom"
 	unc.focus_mode = Control.FOCUS_NONE
@@ -269,6 +306,7 @@ func _save_cfg() -> void:
 	c.set_value("hud", "show_fps", show_fps)
 	c.set_value("hud", "show_trial", show_trial)
 	c.set_value("hud", "note_height", note_height)
+	c.set_value("hud", "res_choice", res_choice)
 	var evs := InputMap.action_get_events("hud_menu") if InputMap.has_action("hud_menu") else []
 	if not evs.is_empty():
 		var e: InputEvent = evs[0]
@@ -286,6 +324,7 @@ func _load_cfg() -> void:
 	show_fps = bool(c.get_value("hud", "show_fps", show_fps))
 	show_trial = bool(c.get_value("hud", "show_trial", show_trial))
 	note_height = clampf(float(c.get_value("hud", "note_height", note_height)), 0.05, 0.95)
+	res_choice = clampi(int(c.get_value("hud", "res_choice", res_choice)), 0, RES_NAMES.size() - 1)
 	if c.has_section_key("hud", "menu_key"):
 		var k := InputEventKey.new()
 		k.physical_keycode = int(c.get_value("hud", "menu_key")) as Key
@@ -339,7 +378,8 @@ func _process(delta: float) -> void:
 		if gpu_ms > 0.0:
 			_put("fps", "fps %d   gpu %.1f ms (%d fps headroom)" % [Engine.get_frames_per_second(), gpu_ms, int(1000.0 / gpu_ms)])
 		else:
-			_put("fps", "fps %d" % Engine.get_frames_per_second())
+			var rs := _render_size()
+			_put("fps", "fps %d   3D %dx%d" % [Engine.get_frames_per_second(), rs.x, rs.y])
 		if has_eng:
 			eng = car.get_engine()
 			_put("title", "RALLY SIM - M2  (slip-ratio drivetrain)")

@@ -329,6 +329,7 @@ func _build_backdrop() -> void:
 	_backdrop.name = "Backdrop"
 	_backdrop.mesh = mesh
 	_backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_backdrop.visible = false            # _scan() shows it once the car is on the stage
 	add_child(_backdrop)
 	_backdrop_info = {"drop": drop, "ms": float(Time.get_ticks_usec() - t0) / 1000.0}
 
@@ -580,6 +581,13 @@ func prime(p: Vector3) -> void:
 
 func update(p: Vector3) -> void:
 	## One resumable job at a time, nearest-first, within a hard per-tick budget.
+	if _backdrop != null:
+		# The backdrop is 1.6x the area, so it reaches 800 m past the stage's ground on every side -
+		# which puts its northern strip over the legacy map's south half, at SHAKEDOWN's elevation,
+		# with no collider: "a big square with dark green color all over the map, which sometimes
+		# clips the starting area, and has no hitbox" (2026-11-18). It is only ever needed from
+		# inside the stage, so it is drawn only while the car is on (or just off) the stage ground.
+		_backdrop.visible = StageDef.depth_in(area._gb, p.x, p.z) > -2.0 * span
 	# A RESPAWN is a teleport, not driving: pressing [B] for SHAKEDOWN moves the car 3 km in one
 	# tick, and the budgeted path would take seconds to lay a solid shell under it - the car would
 	# fall through the world while it built. A jump further than the shell itself means none of the

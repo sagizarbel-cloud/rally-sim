@@ -185,9 +185,9 @@ class_name VehicleM2
 @export var impact_threshold := 45.0         # horizontal decel (m/s^2) above which a hit counts as a crash (braking/cornering stay below)
 @export var impact_scale := 250.0            # decel over the threshold that equals a full-severity hit
 @export var damage_gain := 0.30              # damage added by one full-severity impact (0..1)
-@export var damage_power_loss := 0.45        # fraction of engine power lost at full damage
+@export var damage_power_loss := 0.0        # fraction of engine power lost at full damage
 @export var damage_grip_loss := 0.20         # fraction of tyre grip lost at full damage
-@export var damage_steer_pull := 0.22        # steering bias (fraction of full lock) at full damage - the car pulls to one side
+@export var damage_steer_pull := 0.0        # steering bias (fraction of full lock) at full damage - the car pulls to one side
 @export var impact_punctures := false        # OFF by default: the Fz spike is unreliable (anti-roll bars inflate it past 20000, so respawn landings punctured). Wear-blowout punctures still apply.
 @export var puncture_load := 30000.0         # Fz spike (N) that punctures a tyre WHEN impact_punctures is on (post-ARB Fz can reach ~40000)
 # Longitudinal slip curve: the physical handle is WHERE grip peaks, not the raw Pacejka B.
