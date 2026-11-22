@@ -133,3 +133,20 @@ and unblocked today).
 
 Step 1 is done. Open step 2: put the bug list to the driver and agree an order, starting with the
 tyre audio so D6 can close.
+
+## UPDATE 2026-11-17: the D4 confirmation drive was made (log framelog-2026-11-16T22-30-36.csv)
+
+110 s, 2.1 km on SHAKEDOWN. Run it again with `python3 tools/framelog_report.py "<that log>"`.
+- **The streamer is clean while driving.** No late frame is blamed on it after arrival. Typical
+  physics 4.0 ms/frame. Band re-marked 2 times. r_solid 77-92 m.
+- **What remains:** (1) the known `prime()` freeze when arriving on the stage: 198 ms, 16 chunks
+  (already on the fix list). (2) ONE NEW stall: 0.7 s at t=16.7 s, 6.6 s after arriving, about 65 m
+  driven, 44 km/h. The whole stall is inside the **Jolt step** (150 ms steps x3), and it starts the
+  same frame as the **co-driver's second spoken note** (TTS start 16.38, stop 17.37). The other 15
+  notes caused nothing. Suspects, not proven: Jolt meeting new chunk colliders for the first time,
+  or the macOS TTS call blocking. It is NOT the streamer's scan.
+  (3) Older v1 logs show similar 200-320 ms stalls at low speed after minutes of driving. These are
+  unexplained.
+- **Next:** ask the driver whether the drive FELT smooth. If yes, tick D4 and file the 0.7 s
+  Jolt/TTS stall as its own bug in the bug run. Reproduce it first with the logger kept in place.
+  Do not remove the instrumentation until that stall is understood.
