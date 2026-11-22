@@ -43,8 +43,12 @@ The confirmation drive happened: *"i think it looks better"*, and the frame log 
 the verdict is in `CHANGELOG.md`, and the frame logger, its report script and the equivalence
 probe were removed. **They are in git at commit c7b5a3d** if a before/after is wanted around the
 Godot 4.6 migration - restore `scripts/probe_framelog.gd`, `tools/framelog_report.py` and the
-six-line block at the end of `world.gd _ready()`. The log's one new finding, a 150 ms Jolt step
+six-line block at the end of `world.gd _ready()`. The log's one new finding, a 0.7 s Jolt step
 stall ~6.6 s after arriving on the stage, is on the after-arc fix list beside the arrival freeze.
+It starts in the same frame as the co-driver's SECOND spoken note (TTS start 16.38 s, stop 17.37 s;
+the other 15 notes caused nothing), so suspect the macOS TTS call as well as new colliders.
+**Restore the logger before chasing it**, and reproduce it before changing anything. Older v1 logs
+also show 200-320 ms stalls at low speed after minutes of driving, still unexplained.
 
 The streamer's do-not-retry list (no LOD cut, no rescan timer, no wider re-derive band, no more
 LOD hysteresis, no spreading `prime()` over ticks) lives in §9's D4 entry.
