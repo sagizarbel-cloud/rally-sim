@@ -20,6 +20,32 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-22, evening (fell through again in BAKED at 150-170 km/h - the car's own ground was queued last; pad sides walled)
+
+Grep words: *fell through the map*, *fell through the ground*, *VOID RESCUE*, *baked shadows*,
+*coarse chunk under the car*, *off the transition pad*, *tunnel approach edge*.
+
+sagi, after bb20a76: **"on about 150-170kmh in baked mode i succeeded in replicating the map fall
+through"**. Four `VOID RESCUE` lines (godot2026-11-22T16.59.55.log):
+`(-2068.4, 3.1, -1749.7) 80 km/h`, `(-2024.9, -7.0, -4276.5) 84 km/h`,
+`(-480.0, 5.3, -3346.0) 158 km/h`, `(-251.4, -5.3, -3224.9) 175 km/h`. Live chunks were a healthy
+203-222 before the fast falls and no shadow/time-of-day change was near either.
+
+1. **The fast falls, reproduced headless (BAKED, 170 km/h, s~800): the car's own chunk was coarse
+   (lod 2, no collider) with NO job open for it.** `_consider` adds `r_view` to the priority of any
+   chunk that exists but is too coarse ("can wait behind one that does not exist at all") - which
+   put the car's own ground behind every missing chunk out to the horizon. LIVE built fast enough
+   to get there anyway; BAKED did not. A healthy live count does NOT rule this out. Fix: the penalty
+   applies only outside `r_solid`. Verified: 4 parallel full-stage runs at 158-180 km/h, BAKED, no
+   holes under the car, no falls (before: fell at s~800 in 2 of 3 runs).
+2. **The slow falls were off the side of the start and finish tunnel approaches** (both points are
+   at the map's west edge, x ~ -2025..-2068). `area_manager.gd` now gives each pad invisible side
+   walls from the mouth to past the map edge, plus corner walls beside the tube mouth. Probe: drove
+   off the pad sideways at 155 km/h - stopped by the wall, no fall; straight through the tunnel and
+   the swap back to the start still works.
+
+---
+
 ## 2026-11-22 (fell through the ground mid-stage: shadow bakes held up the car's ground - fixed)
 
 Grep words: *fell through the map*, *fell through the ground*, *fell through the world*, *no

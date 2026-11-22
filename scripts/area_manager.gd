@@ -211,6 +211,29 @@ func _make_portal(edge_xz: Vector3, inward: Vector3, pname: String, height_fn: C
 	# The pad's REAL reach and width, recorded rather than left to be guessed. A probe that assumed a
 	# generic footprint reported 245 m of road buried under a pad that had already been shortened.
 	var reach: float = _build_pad(body, origin, inward, height_fn, d_in, pad_mat)
+	# THE PAD'S SIDES ARE THE EDGE OF THE WORLD. Off them there is nothing but the backdrop sheet,
+	# which has no collider. Measured 2026-11-22 on the Mac (VOID RESCUE log): two falls at 80 and
+	# 84 km/h from (-2068, -1750) and (-2025, -4277), i.e. off the finish pad and the start pad. So
+	# each side of the pad gets an invisible wall, from below the lowest shoulder to well above the
+	# highest, from the mouth to past where the pad meets the map.
+	var wall_len: float = reach + 6.0
+	for sgn in [-1.0, 1.0]:
+		var cs := CollisionShape3D.new()
+		var bs := BoxShape3D.new()
+		bs.size = Vector3(1.0, 14.0, wall_len)
+		cs.shape = bs
+		cs.position = Vector3(sgn * (pad_w * 0.5 + 0.5), 2.0, wall_len * 0.5 - 2.0)
+		body.add_child(cs)       # DIRECTLY on the body: nested shapes are silently not registered
+		# ...and close the pad's corners beside the tunnel mouth, or a car sliding along a side wall
+		# runs off past the mouth, beside the tube, into the same void.
+		var hw := CollisionShape3D.new()
+		var hb := BoxShape3D.new()
+		var w_in: float = tube_w * 0.5 + 0.3
+		var w_out: float = pad_w * 0.5 + 1.0
+		hb.size = Vector3(w_out - w_in, 14.0, 1.0)
+		hw.shape = hb
+		hw.position = Vector3(sgn * (w_in + w_out) * 0.5, 2.0, -0.5)
+		body.add_child(hw)
 	return {"frame": body.transform, "name": pname, "body": body, "pad_y": pad_y, "links_to": 0,
 		"area": 0, "pad_reach": reach, "pad_half_w": pad_w * 0.5, "d_in": d_in}
 

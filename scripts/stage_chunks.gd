@@ -785,8 +785,13 @@ func _consider(k: Vector2i, p: Vector3) -> void:
 	var pri: float = d
 	if d > r_detail:
 		pri = maxf(d, float(_win.get(k, d)))
-	# A chunk that is merely too COARSE can wait behind one that does not exist at all.
-	if have != 0:
+	# A chunk that is merely too COARSE can wait behind one that does not exist at all - but NOT
+	# inside the solid shell, where "too coarse" means "no collider": a car can drive onto it. This
+	# penalty put the car's own lod-2 chunk behind every missing chunk out to r_view, and with the
+	# slower baked build it was still coarse when the car arrived. MEASURED 2026-11-22 (headless,
+	# BAKED, 170 km/h): car on (-30,-86) at lod 2 with no job open for it, fell through; sagi
+	# reproduced it on the Mac at 150-170 km/h in BAKED.
+	if have != 0 and d > r_solid:
 		pri += r_view
 	# Sorted natively: the priority in micrometres above the scan index, so equal
 	# priorities keep scan order - the same chunk the old first-minimum search picked.
