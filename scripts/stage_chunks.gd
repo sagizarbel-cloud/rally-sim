@@ -666,10 +666,20 @@ func update(p: Vector3) -> void:
 		prime(p)
 		_prev_p = p
 		return
+	var step_v: Vector3 = p - _prev_p if _have_prev else Vector3.ZERO
 	_prev_p = p
 	_have_prev = true
+	_reap_orphans()
+	_preempt_cool -= 1
+	if _preempt_cool <= 0 and not _job.is_empty() and _job.has("bake") and _solid_shell_short(p, step_v):
+		_preempt_job()
 	if not _job.is_empty():
-		_step_job()
+		# The car is about to run out of solid ground and this job is (by the check above) its
+		# shell: finish it now rather than a slice a tick. A worse frame beats falling through.
+		var urgent: bool = int(_job["lod"]) == 1 and not _solid_ahead(p, step_v, URGENT_AHEAD_S)
+		_step_job(int(urgent_budget_ms * 1000.0) if urgent else -1)
+		if urgent:
+			_urgent_steps += 1
 		return
 	# Ask again only if the answer can have changed: the car is in a different lattice cell, or
 	# something the last scan read has moved under it (a re-derive, a prime). See `_scan_q`.
@@ -957,6 +967,8 @@ func _step_job(budget_us: int = -1) -> void:
 	_job["us"] = int(_job["us"]) + (Time.get_ticks_usec() - t0)
 	if i >= total:
 		if shadow_mode > 0 and forest != null:
+			if lod == 1:
+				_early_collider()
 			_bake_begin()
 			_bake_step(maxi(budget_us - (Time.get_ticks_usec() - t0), 0))
 		else:
@@ -1258,12 +1270,115 @@ func _bake_work(bk: Dictionary) -> void:
 
 func _exit_tree() -> void:
 	_drain_task()
+	for tid in _orphans:
+		WorkerThreadPool.wait_for_task_completion(int(tid))
+	_orphans.clear()
+
+## A BAKED JOB MUST NOT HOLD THE CAR'S GROUND HOSTAGE. A bake keeps one chunk's job open for many
+## ticks (the tree gather on the main thread, then the worker), and no new job - and no re-scan -
+## starts until it ends. In LIVE mode a job is a few ticks and that never mattered; with the bake,
+## a far-field chunk's job could still be open while the car arrived on a chunk standing at coarse
+## detail with no collider. Measured 2026-11-22 (headless, BAKED, 155 km/h): car on chunk (-19,-79)
+## at lod 4, col = null, while the open job was (-9,-72), ~450 m away; the car fell through. So when
+## the ground under or just ahead of the car is not solid and the open job is not that ground, the
+## job is dropped (its worker, if any, finishes on its own and is reaped) and the streamer re-scans.
+const SHELL_AHEAD_S := 2.0                ## seconds of travel ahead that must already be solid
+var _orphans: Array = []                  ## worker tasks of dropped jobs, waited for once finished
+var _preempts := 0
+var _preempt_cool := 0                    ## ticks; one drop per quarter second at most, so a hole the
+                                          ## scan cannot fill can never starve every bake job in turn
+
+func _solid_at(x: float, z: float) -> bool:
+	var k := key_at(x, z)
+	if not _in_area(k):
+		return true                       # no stage ground there to build
+	return _live.has(k) and _live[k]["col"] != null
+
+const URGENT_AHEAD_S := 1.0               ## ...and inside this, the shell job runs at urgent_budget_ms
+var urgent_budget_ms := 8.0
+var _urgent_steps := 0
+
+func _solid_ahead(p: Vector3, step_v: Vector3, secs: float) -> bool:
+	## Is the ground solid under the car and along its current motion for `secs` of travel?
+	var ticks: float = secs / maxf(_tick, 1e-4)
+	var ahead: Vector3 = Vector3(step_v.x, 0.0, step_v.z) * ticks
+	for f in [0.0, 0.25, 0.5, 0.75, 1.0]:
+		var q: Vector3 = p + ahead * f
+		if not _solid_at(q.x, q.z):
+			return false
+	return true
+
+func _solid_shell_short(p: Vector3, step_v: Vector3) -> bool:
+	var jk: Vector2i = _job["k"]
+	if int(_job["lod"]) == 1 and _dist_to_chunk(jk, p) <= r_solid:
+		return false                      # the open job IS the car's shell: let it finish
+	return not _solid_ahead(p, step_v, SHELL_AHEAD_S)
+
+func _preempt_job() -> void:
+	if _job.has("bake") and (_job["bake"] as Dictionary).has("task"):
+		_orphans.append(int(_job["bake"]["task"]))
+		(_job["bake"] as Dictionary).erase("task")
+	_free_early_collider()
+	_job = {}
+	_scan_valid = false
+	_preempts += 1
+	_preempt_cool = int(0.25 / maxf(_tick, 1e-4))
+
+func _reap_orphans() -> void:
+	var i := 0
+	while i < _orphans.size():
+		var tid: int = _orphans[i]
+		if WorkerThreadPool.is_task_completed(tid):
+			WorkerThreadPool.wait_for_task_completion(tid)
+			_orphans.remove_at(i)
+		else:
+			i += 1
 
 func _drain_task() -> void:
 	## A bake running on a worker must be waited for before its job is thrown away.
 	if _job.has("bake") and (_job["bake"] as Dictionary).has("task"):
 		WorkerThreadPool.wait_for_task_completion(int(_job["bake"]["task"]))
 		(_job["bake"] as Dictionary).erase("task")
+	_free_early_collider()
+
+func _early_collider() -> void:
+	## SOLID BEFORE BAKED. A baked chunk spends several ticks in its shadow bake after its heights
+	## are known, and its collider used to wait for _finalise - so a fast car could drive onto a
+	## chunk still standing at coarse detail, with no collider, while the full-detail rebuild sat in
+	## its bake. Measured 2026-11-22 (headless, BAKED, 155 km/h): the car fell through at s = 788 on
+	## unbroken road, onto chunk (-31,-86) at lod 2 with col = null and its lod-1 job in "bake".
+	## sagi: "it was in the middle of the map on a random spot where the road was unbroken". The
+	## heights are final the moment sampling ends, so the ground is made solid THEN; _finalise
+	## swaps in the chunk's own collider (and its trunks) and drops this one.
+	var k: Vector2i = _job["k"]
+	if _dist_to_chunk(k, _pq) > r_solid + span:
+		return
+	var n: int = _job["n"]
+	var ax: int = _job["ax"]
+	var h: PackedFloat32Array = _job["h"]
+	var hh := PackedFloat32Array(); hh.resize(n * n)
+	for j in range(n):
+		for i in range(n):
+			hh[j * n + i] = h[(j + 1) * ax + i + 1]
+	var o := chunk_origin(k)
+	var shape := HeightMapShape3D.new()
+	shape.map_width = n
+	shape.map_depth = n
+	shape.map_data = hh
+	var col := CollisionShape3D.new()
+	col.name = "E%d_%d" % [k.x, k.y]
+	col.shape = shape
+	col.scale = Vector3(cell, 1.0, cell)
+	col.position = Vector3(o.x + span * 0.5, 0.0, o.z + span * 0.5)
+	area.add_child(col)
+	_job["early_col"] = col
+
+func _free_early_collider() -> void:
+	if _job.has("early_col"):
+		var c: Node = _job["early_col"]
+		if is_instance_valid(c):
+			c.queue_free()
+		_job.erase("early_col")
 
 func _bake_yield(bk: Dictionary, t0: int) -> void:
 	bk["us"] = int(bk["us"]) + (Time.get_ticks_usec() - t0)
@@ -1397,6 +1512,9 @@ func _finalise() -> void:
 		"trunks": trunks if lod == 1 else PackedVector4Array(), "tcol": null}
 	if lod == 1:
 		_sync_collider(k)
+	# The chunk's own collider (if it is in reach) was added just above, in the same frame, so the
+	# ground is never without one between the two.
+	_free_early_collider()
 	_peak_chunks = maxi(_peak_chunks, _live.size())
 
 	# Feed the MEASURED cost straight back into the lead distance, so r_solid tracks what a chunk
@@ -1476,7 +1594,7 @@ func _add_skirt(verts: PackedVector3Array, norms: PackedVector3Array, cols: Pack
 func stats() -> Dictionary:
 	return {"live": _live.size(), "peak": _peak_chunks, "built": _built, "budget": chunk_budget,
 		"us_per_vertex": _us_per_vertex, "worst_finalise_ms": _worst_build_ms,
-		"r_solid": r_solid, "r_detail": r_detail, "r_view": r_view, "span": span,
+		"r_solid": r_solid, "r_detail": r_detail, "r_view": r_view, "span": span, "preempts": _preempts, "urgent": _urgent_steps,
 		"colliders": _collider_count(), "cached": _cache.size(), "cache_hits": _cache_hits,
 		"scans": _scans, "queued": _q_keys.size() - _q_at, "scan_us": _scan_us,
 		"band_marks": _band_marks, "finalise_us": _finalise_us, "window": _win.size(),

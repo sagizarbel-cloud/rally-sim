@@ -20,6 +20,39 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-22 (fell through the ground mid-stage: shadow bakes held up the car's ground - fixed)
+
+Grep words: *fell through the map*, *fell through the ground*, *fell through the world*, *no
+collider under the car*, *coarse chunk*, *baked shadows*, *hybrid shadows*, *streamer falls behind*.
+
+sagi corrected the 2026-11-18 report: the fall was **"in the middle of the map on a random spot where
+the road was unbroken"**. Frame log (19:18 drive): at 120-160 km/h the streamer built 6-9 chunks/s
+while releasing 1.5-2x that, live chunks 210 -> 120 by the fall. No job stuck, no re-bake nearby.
+
+**Reproduced headless** (real car physics, held at 43 m/s along the road from s = 420): LIVE never
+falls; **BAKED fell at s = 788 on unbroken road**, and HYBRID intermittently at the same place.
+Two mechanisms, both from the shadow bake added 2026-11-18:
+1. **The collider waited for the bake.** A chunk's full-detail rebuild kept its old coarse (lod 2,
+   no collider) self until `_finalise`, which in a baked mode comes after the tree gather and the
+   worker bake. Caught: car on (-31,-86) at lod 2, `col = null`, its own lod-1 job sitting in "bake".
+2. **A far bake blocked the near ground.** Only one job runs at a time and no re-scan happens while
+   it is open; a bake keeps a job open for many ticks. Caught: car on (-19,-79) at **lod 4, no
+   collider**, while the open job was (-9,-72), ~450 m away.
+
+Fixes, `stage_chunks.gd`:
+- `_early_collider()`: the moment a lod-1 job's heights are sampled, its collider goes in; the bake
+  runs after. `_finalise` swaps in the chunk's own collider (and trunks) in the same frame.
+- `_solid_shell_short()` / `_preempt_job()`: if the ground under the car or 2 s along its motion is
+  not solid and the open job is a bake for something else, that job is dropped (its worker finishes
+  alone and is reaped by `_reap_orphans`) and the streamer re-scans. At most one drop per 0.25 s.
+- Urgent budget: if solid ground runs out within 1 s and the open job is the car's shell, it runs
+  at `urgent_budget_ms` (8 ms) per tick instead of a 1 ms slice. A worse frame beats a fall.
+- Verified: 4 full-stage runs (HYBRID x2, BAKED x2) run in parallel to slow the build like the Mac:
+  **no falls, no holes under the car**; LIVE unchanged (0 drops, 0 urgent steps). Drops per run
+  15-53, urgent steps 6-249 - watch for hitches on the Mac in the baked modes.
+
+---
+
 ## 2026-11-18, night (fell through the ground mid-stage at 155 km/h - cause open; void rescue)
 
 Grep words: *fell through the map*, *fell through the world*, *falls forever*, *void*, *off the
