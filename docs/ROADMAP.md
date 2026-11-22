@@ -108,6 +108,8 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   `[B]`, at 44 km/h: two physics ticks each ~150 ms over normal (worst tick 152.3 ms), 9 late frames,
   **710 ms lost - the largest single burst of the run**, bigger than the `prime()` freeze. The
   logger put it in the **Jolt step itself**, not in `vehicle_m2` or the streamer's scripts.
+  **It starts the same frame as the co-driver's SECOND spoken note** (TTS start 16.38 s, stop
+  17.37 s; the other 15 notes caused nothing), so the macOS TTS call blocking is a suspect too.
   **Unproven guess:** Jolt digesting the many static colliders the streamer adds during the initial
   fill (broad-phase rebuild, or first contact with freshly cooked shapes) - which would make it a
   streaming side-effect and a sibling of the arrival freeze above. First move: reproduce it with

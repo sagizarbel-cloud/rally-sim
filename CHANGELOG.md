@@ -389,7 +389,8 @@ What the late frames WERE, by ms lost:
   ~150 ms over normal, worst tick 152.3 ms, 9 late frames. In the Jolt step itself, not
   `vehicle_m2` or the streamer's scripts. **New; on the after-arc fix list.** The driver did not
   feel it: *"no i dont think i felt a freeze after pressing B"* - probably hidden inside the
-  arrival. Unproven guess: Jolt digesting the colliders added during the initial fill.
+  arrival. It starts the same frame as the co-driver's second spoken note (TTS 16.38-17.37 s; the
+  other 15 notes caused nothing), so the TTS call is a suspect too. Unproven guess: Jolt digesting the colliders added during the initial fill.
 - 276 ms in 5 bursts - "after draw", the OS event pump (one was Cmd on quitting).
 - 261 ms - the window opening (WINMODE).
 - **254 ms - the known `prime()` freeze on arriving** (worst tick 198.3 ms, finalise 17.5 ms for
