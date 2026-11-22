@@ -20,6 +20,40 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-16, evening (D4 closed on the drive - the hiccups are gone)
+
+Grep words: *hiccups*, *stutter after [B]*, *freeze a few seconds after arriving on the stage*,
+*physics stall*, *jolt step spike*, *late frame*, *GPU-bound with lots of dust*.
+
+**D4 is done.** The confirmation drive for the streamer fix (entry below): driver, *"i think it
+looks better"*. The frame log agrees: 110 s logged, 107 s on SHAKEDOWN at up to 120 km/h, **27
+late frames (>25 ms) in 6536, 4.1 per 1000, and none blamed on the streamer's scan or finalise.**
+At 70-120 km/h it was 1.3 late frames per 1000.
+
+What the late frames WERE, by ms lost:
+- **710 ms - one Jolt step stall, 6.6 s after `[B]`** (t=16.7 s, 44 km/h): two physics ticks each
+  ~150 ms over normal, worst tick 152.3 ms, 9 late frames. In the Jolt step itself, not
+  `vehicle_m2` or the streamer's scripts. **New; on the after-arc fix list.** The driver did not
+  feel it: *"no i dont think i felt a freeze after pressing B"* - probably hidden inside the
+  arrival. It starts the same frame as the co-driver's second spoken note (TTS 16.38-17.37 s; the
+  other 15 notes caused nothing), so the TTS call is a suspect too. Unproven guess: Jolt digesting the colliders added during the initial fill.
+- 276 ms in 5 bursts - "after draw", the OS event pump (one was Cmd on quitting).
+- 261 ms - the window opening (WINMODE).
+- **254 ms - the known `prime()` freeze on arriving** (worst tick 198.3 ms, finalise 17.5 ms for
+  16 chunks). Already on the fix list.
+- 64 ms in 5 bursts - draw blocked in present, GPU-bound, each with 300-700 particles on screen
+  (dirt/dust plumes most likely), 6-14 ms over. Minor.
+
+Streamer while driving: 15.2 chunks built/s, 17.6 scans/s at **2.04 ms typical, 8.07 worst**,
+finalise 0.43 ms/frame typical, **band re-marked 2 times in 107 s** (was ~2/s), r_solid 77-92 m.
+**A normal SHAKEDOWN frame:** physics 4.01 ms in 2 ticks (vehicle_m2 2.42, effects 0.51, jolt
+0.33, stage_area 0.04), idle 1.08 (pace_notes 0.45), render CPU 1.36. Legacy map: physics 2.39.
+That is the "before" for the Godot 4.6 migration. If any of these numbers drift back up, the
+streamer's bookkeeping is the first suspect - see the entry below.
+
+The frame logger, `tools/framelog_report.py` and `tools/probe_streamer_equivalence.gd` were
+removed; **restore them from commit c7b5a3d** for a before/after around the engine change.
+
 ## 2026-11-16 (the hiccups were the streamer's own bookkeeping - and D6's drive verdicts)
 
 Grep words: *hiccups*, *micro-stutter with no fps drop*, *stutter worst in the first 20 seconds

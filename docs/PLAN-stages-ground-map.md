@@ -857,8 +857,15 @@ Extends §6 of the drivetrain plan. At minimum, and verified in D9:
   **Open for a later phase:** corner severity clusters at the constraint boundary (2 bands, not a
   road book's 1-6). The lever is a design speed that VARIES along the stage, which is what real
   roads have. Full numbers in `CHANGELOG.md` 2026-08-28.
-- [ ] D4 — Chunked terrain, streaming and LOD — **BUILT AND PROBE-VERIFIED 2026-08-30. ONE ITEM
-  OPEN: the hiccups — ROOT CAUSES FOUND AND FIXED 2026-11-16, AWAITING ONE DRIVE TO CONFIRM.**
+- [x] D4 — Chunked terrain, streaming and LOD — **BUILT AND PROBE-VERIFIED 2026-08-30, DRIVE-ACCEPTED
+  2026-08-31, LAST ITEM (the hiccups) CLOSED ON THE DRIVE 2026-11-16.** Driver: *"i think it looks
+  better"*. The logged drive (110 s, 107 s on SHAKEDOWN at up to 120 km/h) had 27 late frames in
+  6536 and **blamed none on the streamer's scan or finalise**; the only streamer burst was the known
+  `prime()` freeze on arrival. Streamer while driving: 15.2 chunks/s, 17.6 scans/s at 2.04 ms
+  typical / 8.07 worst, band re-marked 2 times, r_solid 77–92 m. One new finding went to the
+  after-arc fix list: a **150 ms Jolt step stall ~6.6 s after arriving**. The frame logger was
+  removed the same day; restore it from commit c7b5a3d for a before/after around Godot 4.6.
+  The history of the item follows.
   **WHAT THE HICCUPS WERE** (measured in the running game with a per-system frame logger, not
   inferred): not GPU upload of new meshes and not the number of LOD levels. They were the
   streamer's own BOOKKEEPING, on the main thread, inside the physics tick:
