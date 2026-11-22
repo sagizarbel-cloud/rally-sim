@@ -747,12 +747,10 @@ func _process(delta: float) -> void:
 ## Hiding it keeps its collision (visible is render-only) and it reappears before the car can reach
 ## it. Kept visible within LEGACY_SHOW_DEPTH of the stage's edge, where the start clearing could
 ## still look back toward it.
-## FELL OUT OF THE WORLD (2026-11-18, sagi: "fell through the map on the last bit", ~155 km/h near
-## SHAKEDOWN's finish). Past the stage ground's edge the only ground is the 44 m transition pad and
-## the tunnel; off their sides there is nothing but the backdrop sheet, which has no collider, and
-## nothing ever caught a car that went over - it fell forever. A headless probe drove the finish,
-## the tunnel and the swap to the start at a steady 43 m/s and did NOT fall, so the likeliest route
-## out is leaving the pad sideways at speed. The fix that covers every such hole: a car that has
+## FELL OUT OF THE WORLD (2026-11-18, sagi: fell through at ~155 km/h, mid-stage on unbroken road -
+## cause still open, see CHANGELOG). Also, off the sides of the 44 m transition pad past the stage
+## edge there is nothing but the collider-less backdrop. Nothing ever caught a car that went through
+## - it fell forever. The net that covers every such hole, and logs WHERE it happened: a car that has
 ## dropped VOID_DROP_M below the last height it stood at without free-falling is put back on the
 ## nearest road. Nothing on a generated road falls 25 m, so this cannot fire in normal driving.
 const VOID_DROP_M := 25.0

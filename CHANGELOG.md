@@ -20,7 +20,7 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
-## 2026-11-18, night (fell out of the world past SHAKEDOWN's finish; void rescue)
+## 2026-11-18, night (fell through the ground mid-stage at 155 km/h - cause open; void rescue)
 
 Grep words: *fell through the map*, *fell through the world*, *falls forever*, *void*, *off the
 transition pad*, *finish tunnel*.
@@ -29,11 +29,15 @@ sagi: **"fell through the map on the last bit"**, at ~155 km/h near the end of S
 19:18 run, t~634 s: dust stops, speed bleeds ~4 km/h/s on drag alone, never recovers). Not the
 shadow re-bake: the last one was 76 s earlier and the ground had fully reloaded.
 
-- **Cause (reproduced in a headless probe):** past the stage ground's west edge the road becomes the
-  44 m transition pad and the finish tunnel. Off the pad's SIDE there is nothing but the backdrop
-  sheet, which has no collider - leaving the pad sideways at 155 km/h dropped the car into the void,
-  and nothing ever caught it. Driving the finish, the tunnel and the swap back to the start straight
-  at 43 m/s did NOT fall (arrives 0.0 m above every floor), so it is the pad's edge, not the tunnel.
+- **CORRECTED 2026-11-22 (sagi): the fall was "in the middle of the map on a random spot where the
+  road was unbroken"** - not at the finish. The cause is still OPEN. The frame log has no car
+  position, but it shows detailed ground chunks ("live") falling steadily from ~210 to ~71 in the
+  ~20 s before the fall, mid-stage, which points at the ground streamer (colliders not built ahead
+  of the car), not at the map's edge.
+- A separate, real hole found while chasing it (headless probe): past the stage ground's west edge
+  the road becomes the 44 m transition pad and the finish tunnel, and off the pad's SIDE there is
+  nothing but the collider-less backdrop - leaving it sideways at 155 km/h falls forever. Driving
+  the finish, the tunnel and the swap straight at 43 m/s does not fall.
 - **Fix:** `world.gd _void_rescue()`. A car that drops `VOID_DROP_M` (25 m) below the last height it
   held without free-falling is put back on the nearest road point (engine/tyres reset as [R]) and
   prints `VOID RESCUE: car fell from (x, y, z) ...` to the log, so the next fall names its spot.
