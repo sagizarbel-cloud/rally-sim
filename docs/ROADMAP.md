@@ -121,6 +121,21 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   the legacy map), `pace_notes` 0.43 in `_process` on every frame on either map, and 1.7 between
   scripts and draw on the legacy map (HUD redraw). The mirror renders the scene a second time.
   Worth a pass before Arc E adds foliage and textures to the same budget.
+- **Trees, and tree shadows, pop in close to the car after a shadow-mode switch** (sagi,
+  2026-11-23, driving 23a7965 on the Mac): after switching LIVE / HYBRID / BAKED, a very few trees
+  "seem to spawn only when really close to the vehicle", and the same happens to more than a few
+  trees' SHADOWS. Not diagnosed. Suspects, in order: the in-place re-bake (`rebake()`, `_bake_gen`)
+  swapping each stale chunk for its re-baked self - a chunk's tree nodes (`TreesShadow`,
+  `TreesFar`, near-LOD trees) may be dropped with the stale mesh and not regrown until the near
+  ring re-scans it; the LIVE shadow map's caster set changing with the mode
+  (`cast_shadow` on the far/shadow MultiMesh); and in BAKED, the sun cache (`sun_cache.gd`) only
+  mirroring a chunk's trees in `_finalise` / `_restore`, so a chunk kept across the switch would
+  have none. Deferred by sagi: fix after the Godot 4.6 migration.
+- **The tunnel's transition point can be driven out of backwards** (sagi, 2026-11-23): on reaching
+  the swap point in the tunnel, the car can turn around, drive back the way it came and fall out
+  of the world. The pad's side walls (2026-11-22, `area_manager.gd _make_portal`) close the sides
+  only. Deferred by sagi: fix after the Godot 4.6 migration. NB the map EDGE stays open by sagi's
+  decision (VOID RESCUE only); this is the tunnel, a different place - ask before walling it.
 
 ---
 

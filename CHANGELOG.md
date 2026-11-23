@@ -20,6 +20,17 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-23, later still (two bugs logged, not fixed: trees pop in after a shadow-mode switch; tunnel exit backwards)
+
+Grep words: *trees spawn close to the car*, *trees pop in*, *tree shadows pop in*, *after switching
+shadow mode*, *turn around in the tunnel*, *fell out of the tunnel*, *drive back through the swap*.
+
+sagi, driving 23a7965 on the Mac: "when switching between shadow modes ... the trees (very few)
+sometime seem to spawn only when really close to the vehicle and also the behavior seems to extend
+to the some random shadows of the trees (more then a few). also when reaching the transition point
+of the tunnel, the user can just circle back and fall out of it." Both are on the after-arc fix list
+in `docs/ROADMAP.md` with suspects. sagi's order: **migrate to Godot 4.6 first, then fix these.**
+
 ## 2026-11-23, late (BAKED car shadow verdict: right; under-car darkening added to LIVE and HYBRID)
 
 Grep words: *car shadow verdict*, *under-car darkening*, *contact shadow in live*, *sky occlusion under the car*.
