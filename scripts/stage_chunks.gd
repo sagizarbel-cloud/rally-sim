@@ -247,7 +247,8 @@ void fragment() {
 ## and a soft sky occlusion under the footprint. Box sizes from vehicle_m2.gd: body_size 1.8 x 0.55 x
 ## 4.2, roof top 1.03 above the origin over the cabin.
 const CAR_GLSL := """
-uniform float car_on = 0.0;
+uniform float car_on = 0.0;          // the car's SUN shadow: BAKED only (LIVE/HYBRID have the shadow map)
+uniform float car_ao_on = 1.0;       // the sky occlusion under it: every mode (car_inv is set every frame)
 uniform mat4 car_inv;
 uniform vec3 sun_toward = vec3(0.0, 1.0, 0.0);
 float car_box(vec3 o, vec3 d, vec3 lo, vec3 hi) {
@@ -272,7 +273,7 @@ float car_sun(vec3 p) {
 	return 1.0 - smoothstep(-0.03, 0.12, inside);
 }
 float car_ao(vec3 p) {
-	if (car_on < 0.5) { return 1.0; }
+	if (car_ao_on < 0.5) { return 1.0; }
 	vec3 o = (car_inv * vec4(p, 1.0)).xyz;
 	vec2 q = abs(o.xz) - vec2(0.9, 2.1);
 	float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);   // metres outside the footprint
@@ -436,7 +437,10 @@ var _backdrop_info := {}
 
 func _ready() -> void:
 	var sh := Shader.new()
-	sh.code = EDGE_SHADER
+	# LIVE's ground gets the car's sky occlusion too (sagi, 2026-11-23: "add it for the live shadows
+	# too"); its sun shadow comes from the shadow map, so only car_ao is used here.
+	sh.code = EDGE_SHADER.replace("void fragment() {", CAR_GLSL + "void fragment() {") \
+			.replace("\tSPECULAR = 0.35;\n}", "\tSPECULAR = 0.35;\n\tAO = car_ao(wpos);\n\tAO_LIGHT_AFFECT = 0.0;\n}")
 	_mat = ShaderMaterial.new()
 	_mat.shader = sh
 	var shb := Shader.new()

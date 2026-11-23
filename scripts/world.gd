@@ -569,9 +569,18 @@ func _apply_shadow_mode() -> void:
 	if _stage_area != null and _stage_area.chunks != null:
 		_stage_area.chunks.set_shadow_bake(_shadow_mode, _sun_toward())
 	# BAKED has no shadow map, so the car's shadow is computed by the GROUND itself: see
-	# _update_car_shadow() and StageChunks.CAR_GLSL.
-	if _stage_area != null and _stage_area.chunks != null and _stage_area.chunks._mat_baked != null:
-		_stage_area.chunks._mat_baked.set_shader_parameter("car_on", 1.0 if _shadow_mode == 2 else 0.0)
+	# _update_car_shadow() and StageChunks.CAR_GLSL. The sky occlusion under the car is in every mode.
+	for m in _car_ground_mats():
+		m.set_shader_parameter("car_on", 1.0 if _shadow_mode == 2 else 0.0)
+		m.set_shader_parameter("car_ao_on", 1.0)
+
+func _car_ground_mats() -> Array:
+	var out := []
+	if _stage_area != null and _stage_area.chunks != null:
+		for m in [_stage_area.chunks._mat, _stage_area.chunks._mat_baked]:
+			if m != null:
+				out.append(m)
+	return out
 
 ## THE CAR'S SHADOW IN BAKED MODE (2026-11-23). First a fixed 2.4 x 4.9 m oval (sagi: "the under
 ## shadow for the car is too small"), then a sun-shaped Decal - which sagi found "much darker then
@@ -581,14 +590,14 @@ func _apply_shadow_mode() -> void:
 ## the car's two boxes (body and cabin) and loses the sun where it hits - min() with the trees'
 ## shadow, so an overlap is no darker than either. The sky light is dimmed only right under the
 ## car, where the car really hides the sky (a soft contact occlusion). All this frame needs from
-## here is the car's inverse transform.
+## here is the car's inverse transform. sagi liked the under-car darkening and asked for it in LIVE
+## too, so the sky occlusion runs in every mode (LIVE's ground material as well as the baked one).
 func _update_car_shadow() -> void:
-	if _shadow_mode != 2 or _car == null or _stage_area == null or _stage_area.chunks == null:
+	if _car == null:
 		return
-	var m: ShaderMaterial = _stage_area.chunks._mat_baked
-	if m == null:
-		return
-	m.set_shader_parameter("car_inv", Projection(_car.global_transform.affine_inverse()))
+	var inv := Projection(_car.global_transform.affine_inverse())
+	for m in _car_ground_mats():
+		m.set_shader_parameter("car_inv", inv)
 
 func _apply_tod(i: int) -> void:
 	var p: Dictionary = TOD[i]

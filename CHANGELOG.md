@@ -20,6 +20,23 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-23, late (BAKED car shadow verdict: right; under-car darkening added to LIVE and HYBRID)
+
+Grep words: *car shadow verdict*, *under-car darkening*, *contact shadow in live*, *sky occlusion under the car*.
+
+sagi drove 072bbe4 on the Mac in BAKED: "the shadow is the same darkness as the trees shadow / it
+stay that darkness wherever it crosses / slight extra darkness is there- add it for the live shadows
+too / on morning or evening sun it looks fine- same as the live but with the added darkness straight
+below". So the sun-only car shadow is accepted as it is.
+
+Change: the sky occlusion under the car (`car_ao` in `StageChunks.CAR_GLSL`) now runs in every
+shadow mode. LIVE's ground material carries the same CAR_GLSL and writes `AO = car_ao(wpos)`; HYBRID
+already used the baked material. `car_ao_on` (default on) is separate from `car_on` (the car's SUN
+shadow, BAKED only - LIVE and HYBRID get that from the shadow map). `world.gd _update_car_shadow()`
+sets `car_inv` on both ground materials every frame. Stage ground only: the legacy map's terrain
+does not have it. Cloud side views (LIVE without, LIVE with, BAKED): a soft extra darkening right
+under the body and between the wheels, the same in LIVE and BAKED.
+
 ## 2026-11-23, evening (BAKED car shadow too dark, darker again over tree shade - now takes only the sun)
 
 Grep words: *car shadow too dark*, *car shadow darker than the trees' shadows*, *double-dark overlap*,
