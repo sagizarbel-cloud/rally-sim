@@ -29,6 +29,8 @@ Grep words: *time of day freeze*, *[L] stutter*, *shadow mode switch freeze*, *g
   150+ km/h, longest 10.8 s, top 218 km/h; framelog-2026-11-23T10-43-17.csv). One `VOID RESCUE`,
   `(949.5, -0.7, -989.9) 80 km/h`: that is 0.3 m past the stage ground's NORTH edge (z1 = -990.2),
   where sagi was looking for the end of the map - the edge itself is open to the void.
+  **Decision (sagi, 2026-11-23): keep the map edge open; the VOID RESCUE is the edge's only
+  handling** - no wall, no barrier. Don't add one without asking.
 - **The [L] / shadow-mode switch was the worst thing left.** `rebake()` unloaded every chunk and
   primed from nothing: freezes of 1.20-1.77 s (182, 442, 497, 1022, 1107 s), and at 140-214 km/h
   live chunks fell to 7-57 for seconds. **Now it re-bakes IN PLACE**: chunks stay (colliders too),
