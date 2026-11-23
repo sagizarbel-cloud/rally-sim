@@ -569,26 +569,102 @@ func _apply_shadow_mode() -> void:
 	_sun.shadow_enabled = _shadow_mode != 2
 	if _stage_area != null and _stage_area.chunks != null:
 		_stage_area.chunks.set_shadow_bake(_shadow_mode, _sun_toward())
-	# BAKED has no shadow map, so nothing would put the car on the ground: a soft contact shadow
-	# under it, projected down (a Decal), stands in for the shadow it would cast.
+	# BAKED has no shadow map, so nothing would put the car on the ground. A Decal stands in for the
+	# shadow it would cast - shaped and placed from the SUN each frame; see _update_car_shadow().
 	if _shadow_mode == 2 and _contact == null and _car != null:
 		_contact = Decal.new()
 		_contact.name = "ContactShadow"
-		# A soft oval: dark under the middle of the car, gone at the edge of its footprint.
-		var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
-		for y in range(64):
-			for x in range(64):
-				var dx: float = (float(x) + 0.5) / 32.0 - 1.0
-				var dy: float = (float(y) + 0.5) / 32.0 - 1.0
-				var r: float = sqrt(dx * dx + dy * dy)
-				img.set_pixel(x, y, Color(0.0, 0.0, 0.0, 0.95 * (1.0 - smoothstep(0.45, 1.0, r))))
-		_contact.texture_albedo = ImageTexture.create_from_image(img)
-		_contact.size = Vector3(2.4, 3.0, 4.9)
-		_contact.position = Vector3(0, -0.2, 0)
-		_contact.cull_mask = 1
+		_contact.cull_mask = StageChunks.GROUND_LAYER   # the ground only - never the car itself
 		_car.add_child(_contact)
+		_contact.top_level = true          # placed in world space: the sun's offset is not the car's
 	if _contact != null:
 		_contact.visible = _shadow_mode == 2
+
+## THE CAR'S SHADOW IN BAKED MODE (2026-11-23). sagi: "the under shadow for the car is too small".
+## It was a fixed 2.4 x 4.9 m oval, dark only inside 45% of its radius (~1.1 x 2.2 m - smaller than
+## the car) and straight down whatever the sun did, while the live shadow at a 13-28 deg sun is
+## several metres long and thrown away from the sun. Now the shadow is the car's own silhouette
+## projected along the sun: the hull of the body box and the cabin box, each corner moved by its
+## height above the ground times u = -L.xz / L.y. The hull depends on the sun only through the angle
+## between the car and the sun, so images are cached per 4-degree bucket of that angle (and dropped
+## when the sun moves); one costs ~3 ms to draw, once.
+const CAR_SHADOW_BOXES := [
+	# [half width, z min, z max, bottom height, top height] above the ground, car frame (fwd = -Z)
+	[0.90, -2.10, 2.10, 0.20, 0.85],        # body, body_size 1.8 x 4.2
+	[0.70, -0.65, 0.55, 0.85, 1.58],        # cabin up to the roof (roof at 0.98 above the origin)
+]
+const CAR_SHADOW_RES := 12.0              # pixels per metre
+var _cs_cache := {}
+var _cs_sun := Vector3.ZERO
+
+func _car_shadow_hull(u: Vector2) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for bx in CAR_SHADOW_BOXES:
+		for x in [-float(bx[0]), float(bx[0])]:
+			for z in [float(bx[1]), float(bx[2])]:
+				for y in [float(bx[3]), float(bx[4])]:
+					pts.append(Vector2(x, z) + u * y)
+	return Geometry2D.convex_hull(pts)
+
+func _update_car_shadow() -> void:
+	if _contact == null or not _contact.visible or _car == null:
+		return
+	var L: Vector3 = _sun_toward()
+	if L.y < 0.05:
+		L = Vector3(L.x, 0.05, L.z).normalized()
+	if L.distance_to(_cs_sun) > 1e-3:
+		_cs_sun = L
+		_cs_cache.clear()
+	var b: Basis = _car.global_transform.basis
+	var fwd := Vector3(-b.z.x, 0.0, -b.z.z)
+	if fwd.length_squared() < 1e-6:
+		return
+	fwd = fwd.normalized()
+	var right := Vector3(-fwd.z, 0.0, fwd.x)
+	# the shadow offset per metre of height, world -> car frame (x = right, z = back)
+	var uw := Vector2(-L.x, -L.z) / L.y
+	var u := Vector2(uw.dot(Vector2(right.x, right.z)), -uw.dot(Vector2(fwd.x, fwd.z)))
+	var bucket: int = int(round(rad_to_deg(u.angle()) / 4.0))
+	if not _cs_cache.has(bucket):
+		_cs_cache[bucket] = _draw_car_shadow(Vector2.from_angle(deg_to_rad(float(bucket) * 4.0)) * u.length())
+	var e: Dictionary = _cs_cache[bucket]
+	_contact.texture_albedo = e["tex"]
+	var c: Vector2 = e["centre"]
+	var sz: Vector2 = e["size"]
+	_contact.size = Vector3(sz.x, 4.0, sz.y)
+	var p: Vector3 = _car.global_position + right * c.x - fwd * c.y
+	_contact.global_transform = Transform3D(Basis(right, Vector3.UP, -fwd), p + Vector3(0.0, -0.3, 0.0))
+	_contact.modulate = Color(1, 1, 1, 0.92 * _sun.shadow_opacity)
+
+func _draw_car_shadow(u: Vector2) -> Dictionary:
+	var hull := _car_shadow_hull(u)
+	var lo := Vector2(1e9, 1e9)
+	var hi := Vector2(-1e9, -1e9)
+	for q in hull:
+		lo = lo.min(q)
+		hi = hi.max(q)
+	var soft := 0.25                       # m of penumbra: a car's shadow edge is close and sharp
+	lo -= Vector2(soft, soft)
+	hi += Vector2(soft, soft)
+	var w := int(ceil((hi.x - lo.x) * CAR_SHADOW_RES))
+	var hgt := int(ceil((hi.y - lo.y) * CAR_SHADOW_RES))
+	var img := Image.create(w, hgt, false, Image.FORMAT_LA8)
+	var n := hull.size() - 1               # convex_hull repeats the first point at the end
+	var flip: float = -1.0 if Geometry2D.is_polygon_clockwise(hull) else 1.0
+	for py in range(hgt):
+		for px in range(w):
+			var q := lo + Vector2((float(px) + 0.5) / CAR_SHADOW_RES, (float(py) + 0.5) / CAR_SHADOW_RES)
+			# signed distance to the hull: max over the edges of the outward distance
+			var dmax := -1e9
+			for i in range(n):
+				var a: Vector2 = hull[i]
+				var ed: Vector2 = hull[i + 1] - a
+				var nrm := Vector2(ed.y, -ed.x).normalized() * flip
+				dmax = maxf(dmax, (q - a).dot(nrm))
+			var al: float = 1.0 - smoothstep(-soft, soft, dmax)
+			img.set_pixel(px, py, Color(0.0, 0.0, 0.0, al))
+	# a Decal's texture runs +X right and +Z toward the bottom of the image
+	return {"tex": ImageTexture.create_from_image(img), "centre": (lo + hi) * 0.5, "size": hi - lo}
 
 func _apply_tod(i: int) -> void:
 	var p: Dictionary = TOD[i]
@@ -736,6 +812,7 @@ func _process(delta: float) -> void:
 			sm = clampf(float(_car.get("gfx_shadow_live_m")), 10.0, sm)
 		if not is_equal_approx(sm, _sun.directional_shadow_max_distance):
 			_sun.directional_shadow_max_distance = sm
+	_update_car_shadow()
 	if Input.is_action_just_pressed("camera_toggle"):
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()

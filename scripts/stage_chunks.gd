@@ -1416,6 +1416,7 @@ func set_bake_strength(f: float) -> void:
 ## penalty - so the new light sweeps outward from the car and each chunk is swapped for its
 ## re-baked self in one frame. The cache is emptied: everything in it was baked for the old light.
 var _bake_gen := 0
+const GROUND_LAYER := 2                   ## render layer bit for "stage ground" (decal targets)
 
 func _have(k: Vector2i) -> int:
 	## The detail a chunk has, for the work list: 0 when absent OR stale (baked for an old light).
@@ -1515,6 +1516,7 @@ func _finalise() -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = "C%d_%d" % [k.x, k.y]
 	mi.mesh = mesh
+	mi.layers = 1 | GROUND_LAYER      # layer 2: what the car's BAKED-mode shadow decal may land on
 	add_child(mi)
 	# Arc E: the chunk's trees, read off the same sample arrays - no extra road search.
 	var trunks := PackedVector4Array()
