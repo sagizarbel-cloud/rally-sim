@@ -170,6 +170,16 @@ func grip_at(x: float, z: float) -> float:
 		return base
 	return base * (1.0 + wear_grip * (_wear[idx] / wear_full))
 
+func grip_from_base(x: float, z: float, base: float) -> float:
+	## grip_at() for a caller that ALREADY holds stage.grip_at(x, z) and passes it as `base`: the
+	## same worn-line factor applied to the same number, without resolving the ground a second time.
+	## effects.gd uses it to recover the wear fraction for dust colour. The car's own grip goes
+	## through grip_at() above, untouched.
+	var idx := _cell(x, z)
+	if idx < 0:
+		return base
+	return base * (1.0 + wear_grip * (_wear[idx] / wear_full))
+
 func _cell(x: float, z: float) -> int:
 	# map a world point to a tracked (arc, lateral) wear cell, or -1 if outside the tracked corridor
 	var dx := x - _center.x

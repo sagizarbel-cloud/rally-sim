@@ -20,6 +20,490 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-23, later still (two bugs logged, not fixed: trees pop in after a shadow-mode switch; tunnel exit backwards)
+
+Grep words: *trees spawn close to the car*, *trees pop in*, *tree shadows pop in*, *after switching
+shadow mode*, *turn around in the tunnel*, *fell out of the tunnel*, *drive back through the swap*.
+
+sagi, driving 23a7965 on the Mac: "when switching between shadow modes ... the trees (very few)
+sometime seem to spawn only when really close to the vehicle and also the behavior seems to extend
+to the some random shadows of the trees (more then a few). also when reaching the transition point
+of the tunnel, the user can just circle back and fall out of it." Both are on the after-arc fix list
+in `docs/ROADMAP.md` with suspects. sagi's order: **migrate to Godot 4.6 first, then fix these.**
+
+## 2026-11-23, late (BAKED car shadow verdict: right; under-car darkening added to LIVE and HYBRID)
+
+Grep words: *car shadow verdict*, *under-car darkening*, *contact shadow in live*, *sky occlusion under the car*.
+
+sagi drove 072bbe4 on the Mac in BAKED: "the shadow is the same darkness as the trees shadow / it
+stay that darkness wherever it crosses / slight extra darkness is there- add it for the live shadows
+too / on morning or evening sun it looks fine- same as the live but with the added darkness straight
+below". So the sun-only car shadow is accepted as it is.
+
+Change: the sky occlusion under the car (`car_ao` in `StageChunks.CAR_GLSL`) now runs in every
+shadow mode. LIVE's ground material carries the same CAR_GLSL and writes `AO = car_ao(wpos)`; HYBRID
+already used the baked material. `car_ao_on` (default on) is separate from `car_on` (the car's SUN
+shadow, BAKED only - LIVE and HYBRID get that from the shadow map). `world.gd _update_car_shadow()`
+sets `car_inv` on both ground materials every frame. Stage ground only: the legacy map's terrain
+does not have it. Cloud side views (LIVE without, LIVE with, BAKED): a soft extra darkening right
+under the body and between the wheels, the same in LIVE and BAKED.
+
+## 2026-11-23, evening (BAKED car shadow too dark, darker again over tree shade - now takes only the sun)
+
+Grep words: *car shadow too dark*, *car shadow darker than the trees' shadows*, *double-dark overlap*,
+*decal shadow*, *contact shadow*.
+
+sagi on the decal car shadow from the entry below: "on the car shadow tho its much darker then the
+other shadows and also make an even darker overlap- an overlap should be mostly where the global
+illumination (sky diffusing) is hidden by the car and not on every shadow". Both are what a Decal
+does: it blends black over the ground's colour, so it takes the SKY light away as well as the sun
+(darker than a real shadow, which only loses the sun), and over a tree shadow it darkens ground that
+has no sun left to lose.
+
+Fix: no decal. The BAKED ground shader (`StageChunks.CAR_GLSL`) computes the car's shadow itself.
+Each ground pixel near the car (within 30 m) casts a ray toward the sun through the car's body box
+and cabin box, in the car's own frame (`car_inv`, set each frame by `world.gd _update_car_shadow()`),
+and loses the sun where the ray hits: `sv = min(tree shadow, car_sun)`. Same path as the trees'
+shadows, so the same darkness, and min() means an overlap is no darker than either shadow. Sky
+light is dimmed only right under the car (`car_ao`: a soft footprint, 45% at most, fading out within
+~1.2 m below the body), written to AO so it affects ambient light only. Cloud stills at three times of
+day: the car's shadow has the same tone as the trees' beside it, overlaps show no extra darkening,
+and at a low evening sun it is thrown ahead along the road as in LIVE. Cost: two box tests per
+ground pixel within 30 m of the car; the decal pass is gone. Not yet checked on the Mac.
+
+## 2026-11-23, later (BAKED shadows now match the live ones: a cached sun shadow map; car shadow from the sun)
+
+Grep words: *baked shadows wonky*, *christmas tree shadows*, *shadows stretch at low sun*, *baked
+shadow shape does not match*, *car shadow too small*, *sun cache*, *cached shadow map*.
+
+sagi on BAKED: **"when having an extreme angle- such as on afternoon or other sharp angles, the
+shadows start to stretch into a Christmas tree shape where every cell stretches horizontally to its
+length. they usually don't seem to match the cast on shadow in shape and boundaries at all ... also
+the under shadow for the car is too small"**. Side-by-side shots confirmed: live = long sharp
+stripes, baked = soft blobs in other places. Causes: (1) shade stored only per ground VERTEX (1.4 m
+grid, blended across triangles) - a long thin low-sun shadow became stacked grid bars; (2) trees
+modelled as smooth cones with an invented soft edge, not the mesh the live shadow uses; (3) the car
+got a fixed 2.4 x 4.9 m oval, dark only inside ~1.1 x 2.2 m, straight down whatever the sun.
+
+- **`sun_cache.gd`: a REAL shadow map, drawn once and kept.** An orthographic camera along the sun
+  renders the trees' depth (the same 24-triangle silhouettes the live shadow map uses, sharing the
+  chunks' MultiMesh resources) into its own world: 2048^2 RGBA16F over 320 m (0.16 m/texel), depth
+  split into coarse+fine channels. The baked ground shader compares against it with a 2x2 PCF;
+  beyond the region the per-vertex bake still applies, blended at the edge. Redrawn only when the car
+  is 40 m off centre (centred 1.5 s ahead), when new trees stream in (at most every 0.5 s), or when
+  the sun changes - not every frame like the live map (~2.6 ms/frame). Centre snapped to whole
+  texels so edges do not crawl. Cloud shots: baked now shows the same stripes as live, evening and
+  morning (/mnt/project-files/perf/baked-shadows-before-after.png). **Mac cost not measured yet.**
+- **Car shadow (world.gd `_update_car_shadow`)**: the hull of the body and cabin boxes projected
+  along the sun, as a Decal on the ground layer only (render layer 2 on stage chunks - it used to
+  darken the car itself), cached per 4-degree bucket of car-vs-sun angle; alpha 0.6 x shadow opacity
+  since a decal also darkens ambient light.
+
+---
+
+## 2026-11-23 (retest clean; [L] / shadow-mode change re-bakes in place - no freeze, no thin ground)
+
+Grep words: *time of day freeze*, *[L] stutter*, *shadow mode switch freeze*, *ground reload*,
+*thin ground after switching*, *map edge*, *VOID RESCUE*.
+
+- **sagi's retest of aef8259, BAKED: no mid-stage fall** in 19 min (1043 s on SHAKEDOWN, 38 s at
+  150+ km/h, longest 10.8 s, top 218 km/h; framelog-2026-11-23T10-43-17.csv). One `VOID RESCUE`,
+  `(949.5, -0.7, -989.9) 80 km/h`: that is 0.3 m past the stage ground's NORTH edge (z1 = -990.2),
+  where sagi was looking for the end of the map - the edge itself is open to the void.
+  **Decision (sagi, 2026-11-23): keep the map edge open; the VOID RESCUE is the edge's only
+  handling** - no wall, no barrier. Don't add one without asking.
+- **The [L] / shadow-mode switch was the worst thing left.** `rebake()` unloaded every chunk and
+  primed from nothing: freezes of 1.20-1.77 s (182, 442, 497, 1022, 1107 s), and at 140-214 km/h
+  live chunks fell to 7-57 for seconds. **Now it re-bakes IN PLACE**: chunks stay (colliders too),
+  are only marked stale (`_bake_gen`), and are rebuilt nearest-first; `_have()` treats a stale chunk
+  as missing. Headless, BAKED, 170 km/h, three [L] presses: worst frame unchanged (14-24 ms), no
+  holes under the car.
+- **Measured on the way: a low sun halves the baked build rate.** BAKED at MORNING (28 deg sun)
+  holds ~90 live chunks at 170 km/h against ~195 at NOON - longer shadows reach more trees per
+  vertex. The ground under the car stays solid (shell first); it is the far field that thins.
+
+---
+
+## 2026-11-22, evening (fell through again in BAKED at 150-170 km/h - the car's own ground was queued last; pad sides walled)
+
+Grep words: *fell through the map*, *fell through the ground*, *VOID RESCUE*, *baked shadows*,
+*coarse chunk under the car*, *off the transition pad*, *tunnel approach edge*.
+
+sagi, after bb20a76: **"on about 150-170kmh in baked mode i succeeded in replicating the map fall
+through"**. Four `VOID RESCUE` lines (godot2026-11-22T16.59.55.log):
+`(-2068.4, 3.1, -1749.7) 80 km/h`, `(-2024.9, -7.0, -4276.5) 84 km/h`,
+`(-480.0, 5.3, -3346.0) 158 km/h`, `(-251.4, -5.3, -3224.9) 175 km/h`. Live chunks were a healthy
+203-222 before the fast falls and no shadow/time-of-day change was near either.
+
+1. **The fast falls, reproduced headless (BAKED, 170 km/h, s~800): the car's own chunk was coarse
+   (lod 2, no collider) with NO job open for it.** `_consider` adds `r_view` to the priority of any
+   chunk that exists but is too coarse ("can wait behind one that does not exist at all") - which
+   put the car's own ground behind every missing chunk out to the horizon. LIVE built fast enough
+   to get there anyway; BAKED did not. A healthy live count does NOT rule this out. Fix: the penalty
+   applies only outside `r_solid`. Verified: 4 parallel full-stage runs at 158-180 km/h, BAKED, no
+   holes under the car, no falls (before: fell at s~800 in 2 of 3 runs).
+2. **The slow falls were off the side of the start and finish tunnel approaches** (both points are
+   at the map's west edge, x ~ -2025..-2068). `area_manager.gd` now gives each pad invisible side
+   walls from the mouth to past the map edge, plus corner walls beside the tube mouth. Probe: drove
+   off the pad sideways at 155 km/h - stopped by the wall, no fall; straight through the tunnel and
+   the swap back to the start still works.
+
+---
+
+## 2026-11-22 (fell through the ground mid-stage: shadow bakes held up the car's ground - fixed)
+
+Grep words: *fell through the map*, *fell through the ground*, *fell through the world*, *no
+collider under the car*, *coarse chunk*, *baked shadows*, *hybrid shadows*, *streamer falls behind*.
+
+sagi corrected the 2026-11-18 report: the fall was **"in the middle of the map on a random spot where
+the road was unbroken"**. Frame log (19:18 drive): at 120-160 km/h the streamer built 6-9 chunks/s
+while releasing 1.5-2x that, live chunks 210 -> 120 by the fall. No job stuck, no re-bake nearby.
+
+**Reproduced headless** (real car physics, held at 43 m/s along the road from s = 420): LIVE never
+falls; **BAKED fell at s = 788 on unbroken road**, and HYBRID intermittently at the same place.
+Two mechanisms, both from the shadow bake added 2026-11-18:
+1. **The collider waited for the bake.** A chunk's full-detail rebuild kept its old coarse (lod 2,
+   no collider) self until `_finalise`, which in a baked mode comes after the tree gather and the
+   worker bake. Caught: car on (-31,-86) at lod 2, `col = null`, its own lod-1 job sitting in "bake".
+2. **A far bake blocked the near ground.** Only one job runs at a time and no re-scan happens while
+   it is open; a bake keeps a job open for many ticks. Caught: car on (-19,-79) at **lod 4, no
+   collider**, while the open job was (-9,-72), ~450 m away.
+
+Fixes, `stage_chunks.gd`:
+- `_early_collider()`: the moment a lod-1 job's heights are sampled, its collider goes in; the bake
+  runs after. `_finalise` swaps in the chunk's own collider (and trunks) in the same frame.
+- `_solid_shell_short()` / `_preempt_job()`: if the ground under the car or 2 s along its motion is
+  not solid and the open job is a bake for something else, that job is dropped (its worker finishes
+  alone and is reaped by `_reap_orphans`) and the streamer re-scans. At most one drop per 0.25 s.
+- Urgent budget: if solid ground runs out within 1 s and the open job is the car's shell, it runs
+  at `urgent_budget_ms` (8 ms) per tick instead of a 1 ms slice. A worse frame beats a fall.
+- Verified: 4 full-stage runs (HYBRID x2, BAKED x2) run in parallel to slow the build like the Mac:
+  **no falls, no holes under the car**; LIVE unchanged (0 drops, 0 urgent steps). Drops per run
+  15-53, urgent steps 6-249 - watch for hitches on the Mac in the baked modes.
+
+---
+
+## 2026-11-18, night (fell through the ground mid-stage at 155 km/h - cause open; void rescue)
+
+Grep words: *fell through the map*, *fell through the world*, *falls forever*, *void*, *off the
+transition pad*, *finish tunnel*.
+
+sagi: **"fell through the map on the last bit"**, at ~155 km/h near the end of SHAKEDOWN (frame log
+19:18 run, t~634 s: dust stops, speed bleeds ~4 km/h/s on drag alone, never recovers). Not the
+shadow re-bake: the last one was 76 s earlier and the ground had fully reloaded.
+
+- **CORRECTED 2026-11-22 (sagi): the fall was "in the middle of the map on a random spot where the
+  road was unbroken"** - not at the finish. The cause is still OPEN. The frame log has no car
+  position, but it shows detailed ground chunks ("live") falling steadily from ~210 to ~71 in the
+  ~20 s before the fall, mid-stage, which points at the ground streamer (colliders not built ahead
+  of the car), not at the map's edge.
+- A separate, real hole found while chasing it (headless probe): past the stage ground's west edge
+  the road becomes the 44 m transition pad and the finish tunnel, and off the pad's SIDE there is
+  nothing but the collider-less backdrop - leaving it sideways at 155 km/h falls forever. Driving
+  the finish, the tunnel and the swap straight at 43 m/s does not fall.
+- **Fix:** `world.gd _void_rescue()`. A car that drops `VOID_DROP_M` (25 m) below the last height it
+  held without free-falling is put back on the nearest road point (engine/tyres reset as [R]) and
+  prints `VOID RESCUE: car fell from (x, y, z) ...` to the log, so the next fall names its spot.
+  Probe: drove off the pad at 155 km/h, rescued 1.1 s later at s = 5092 on the road.
+- Still open: the pad edge itself could get a physical bank or barrier so you can't leave it.
+
+---
+
+## 2026-11-18, evening (bench 3: BAKED shadows save the whole shadow cost; HYBRID saves nothing)
+
+Grep words: *bench*, *baked shadows fps*, *hybrid no faster*, *shadow pass cost*, *bench ran
+windowed 1280x720*, *screen locked*.
+
+Bench on 367da4c, Mac fullscreen 2880x1800, noon, SHAKEDOWN from 369 m at 25 m/s, uncapped.
+Heat drift +0.00 ms (first vs last baseline). Rows shared with the 96f3d9c bench repeat within
+~0.3 ms. File on the Mac: `bench-2026-11-18T16-10-54.txt`.
+
+- **An earlier attempt was invalid:** the Mac was on the lock screen, so macOS refused fullscreen
+  and the game ran in a 1280x720 window. Always check the report's `window=` line is ~2880x1800.
+- baseline **15.00 ms** (66.9 fps avg), 369k tris, 481 draws.
+- **shadows BAKED: 12.50 ms (-2.50)**, p95 13.19, i.e. the same as no sun shadow at all (12.40,
+  -2.60). The bake recovers the whole shadow-pass cost.
+- **shadows HYBRID (live 40 m + baked): 15.19 ms (+0.19)**, and a 40 m live range alone is +0.28.
+  So the cost is in *running a shadow pass at all*, not in its reach or its caster count (trees
+  casting no shadow: -0.14).
+- Shadow diagnostics: 2048 map -1.11, hard filter -0.42, 1 split -0.19.
+- Glow levels 4-7 only: +3.52 vs full glow +2.71, so trimming levels is not the glow fix.
+- SSAO +3.18, glow +2.71, fog -0.83, plain sky -0.42, sway 0.00, no trees -2.50.
+- 1600 lines 12.71 ms (78.7 fps); 1080 lines 8.06 ms (124 fps).
+- After the re-bakes the scene draws 400k tris vs 369k at start (+31k) with no time cost; the bake
+  leaves something extra drawn - unexplained, to look at.
+
+---
+
+## 2026-11-18, later (baked shadows: HYBRID and BAKED shadow modes; forest-floor AO)
+
+Grep words: *baked shadows*, *shadow mode*, *hybrid shadows*, *trees too pale/grey*, *no sun
+through the trees*, *evening all in shade*, *contact shadow*, *stutter when switching time of day*.
+
+The perf plan's step 4/5 (sagi: "lets have two options- one with completely baked and one with
+what you suggested"). Tab panel "Graphics shadow mode": LIVE (unchanged, still the default) /
+HYBRID / BAKED.
+- **What is baked.** When a ground chunk is built, every spruce that can shade it is tested
+  against each vertex for the current sun direction:
+  - **Trees:** cones of the crown's size. The trees come from the new pure, cached
+    `StageForest.chunk_trees()`, so trees in chunks not yet built still cast. Each tree also gets
+    a per-instance sun visibility from its neighbours.
+  - **Forest-floor AO:** the darkening under crowns, carried to the engine as `AO`. That is the
+    job SSAO was paid 2.9 ms a frame to approximate.
+  - **The look:** the ground and the trees use a `light()` with Godot's own Burley diffuse, and
+    take the darker of the live and the baked shadow.
+- **HYBRID:** the live shadow map reaches only `gfx_shadow_live_m` (40 m): the car and the
+  nearest trees, crisp and moving. Beyond that, the bake.
+- **BAKED:** no shadow map at all. The car gets a soft Decal contact shadow.
+- **Bugs met on the way, so a regression is recognisable:**
+  - **Baked trees came out pale grey.** Cause: a hand-written specular term. Fix: removed. Also,
+    without the shadow map's self-shadowing the inner boughs were lit, so a radial self-shadow
+    from the unit-height mesh now darkens them.
+  - **Evening was all shade.** Cause: Lambert instead of Burley lost the grazing sun, and solid
+    cones over-occluded. Fix: a 0.82 crown fill and 0.85 opacity per crown.
+  - **Pixel checks** against LIVE match within a few levels on lit and shaded ground at noon and
+    evening. Baked shadows are softer: one value per 1.4 m vertex.
+- **Cost of the bake (cloud CPU, per chunk):** noon ~8 ms, morning ~23, evening ~38. It runs on a
+  **WorkerThreadPool** thread, so it cannot hitch a frame. On the main thread it was 33-100 ms at
+  low sun. prime() bakes inline, because the car stands on those chunks.
+- A time-of-day change in HYBRID or BAKED re-bakes the stage ground: the car's shell at once, the
+  window streams back over a second or two.
+- The bench has two new rows, "shadows HYBRID" and "shadows BAKED". They park the car while the
+  ground re-bakes, so every row still measures the same stretch.
+
+---
+
+## 2026-11-18 (dark green square fixed; 3D resolution option; a benchmark that measures each system)
+
+Grep words: *big dark green square*, *square with no hitbox*, *clips the start area*, *backdrop*,
+*resolution*, *1080p*, *2560x1600*, *benchmark*, *--bench*, *overheating*, *throttling*,
+*engine damage power loss*, *steering pull*.
+
+- **"A big square with dark green color all over the map, which sometimes clips the starting area,
+  and has no hitbox"** (sagi). It was Arc E's backdrop, the distant-forest sheet under SHAKEDOWN. It
+  is 1.6x the 4 km area, so it reached z = +200 and lay over the legacy map's south half, at
+  SHAKEDOWN's elevation, with no collider. Checked along the whole stage: it never pokes through
+  SHAKEDOWN's own ground (18,711 samples, worst 2.8 m below). Fix: it is drawn only while the car
+  is on, or within two chunks of, the stage ground. Before/after screenshots from 400 m over the
+  legacy map show the sheet gone.
+- **3D resolution option** in the HUD menu (H): window (native), 1600 lines, 1080 lines. It is saved,
+  and the fps line shows the 3D render size. Fullscreen on the MacBook Air renders 2880x1800 (the
+  macOS scaled backing size), but the panel is 2560x1600. This is the user's request (step 2 of
+  the perf plan), not a hidden render-scale default: the default stays native.
+- **`--bench`** (`scripts/bench.gd`, launch with `Godot --path . -- --bench`). It replays one fixed
+  path through the forest (noon, chase cam, uncapped, fullscreen) once per configuration, changing
+  one thing each time, and writes `user://bench-<time>.txt`. The configurations are:
+  - baseline
+  - no sun shadows
+  - trees cast no shadow
+  - no trees
+  - no sway
+  - built-in sky
+  - no fog
+  - + SSAO
+  - + glow
+  - 1600 lines
+  - 1080 lines
+  - baseline again
+
+  Metal reports no GPU time, so the difference against the baseline is each system's cost. The
+  repeated baseline catches thermal drift. A cloud run showed what the triangles are: trees are
+  only ~160k of ~680k per frame. The ground chunks are the rest.
+- **Where the triangles go.** Measured with a cloud probe: chase cam, 300 m into SHAKEDOWN, noon, parked.
+  "Primitives" counts every pass, so the shadow map's share is included. Before the fix:
+
+  | Share | Primitives | Draw calls |
+  |---|---|---|
+  | Total | 589k | 559 |
+  | Legacy map, 3 km away and drawn for nothing | 222k | 88 |
+  | Trees | 159k | 119 |
+  | Shadow pass | 81k | 49 |
+  | Stage ground chunks | 78k | 123 |
+  | Other (gates, tunnel, marks) | 34k | 83 |
+  | Car | 13.5k | 94 |
+  | Backdrop | about 0 | |
+
+  **Fix: the legacy map and the reactive patch are hidden** while the car is more than 150 m
+  inside the stage ground. Their collision stays. After the fix: **365k primitives, 468 draw calls
+  (-38%)**. Main carried the same waste, so this was never a PR #4 regression. The car's 94 draw
+  calls for 13.5k triangles are separate meshes, worth merging later.
+- **FIRST BENCH ON THE MAC** (c884130, before the legacy-map fix; fullscreen 2880x1800,
+  Forward+, noon, uncapped; file bench-2026-11-18T10-12-15.txt on the Mac). Baseline median
+  **15.48 ms (64.9 fps)**. Thermal drift -0.20 ms, so the run is clean. Each row changes one thing
+  against the baseline:
+
+  | Config | Median vs baseline |
+  |---|---|
+  | No sun shadows | -2.83 |
+  | Trees cast no shadow | -0.19 |
+  | No trees | -2.44 |
+  | No sway | -0.20 |
+  | Built-in sky | -0.32 |
+  | No fog | -0.89 |
+  | + SSAO | +3.04 |
+  | + glow | +2.58 |
+  | 1600 lines | -2.38 (13.10 ms) |
+  | 1080 lines | -7.14 (8.33 ms, 118 fps) |
+
+  Reading: the cost is per PIXEL, not per triangle. Removing 174k tree triangles saves 2.4 ms;
+  removing pixels saves far more. Shadows cost 2.8 ms, almost none of it the trees' casters, so it
+  is the per-pixel shadow lookup plus the ground in the shadow map. Baking the sky is dropped
+  (0.3 ms). The drives' 18-23 ms against this 15.5 ms is the dust plumes, heat and route. The bench
+  slides a frozen car, so it emits no plumes. Physics and scripts (~4-5 ms of CPU) run in parallel
+  with the GPU, so they do not add to the frame.
+- **Overheating confirmed** (sagi, 2026-11-18): "you hypothesis of the over heating causing
+  performance loss is right - noticeably about 10-20% loss of fps". The frame log of a 14-minute
+  run shows the slowest 5% of frames falling from about 50-57 fps to 38-41 in the last 2-3 minutes,
+  in light scenes of only about 450k triangles. Compare builds only from a cool Mac, over the same
+  length of run.
+- **Engine damage power loss and steering pull default to 0** ("they get in the way and annoy me
+  when testing"): `damage_power_loss` 0.45 -> 0, `damage_steer_pull` 0.22 -> 0. Both are still in the
+  Tab panel. Damage grip loss is unchanged.
+
+---
+
+## 2026-11-17, late (toward a 120 fps GPU baseline; first-30-seconds stutter; pace-note height)
+
+Grep words: *stutter on entering SHAKEDOWN*, *first 30 seconds slow*, *shader compile hitch*,
+*120 fps*, *vsync hides headroom*, *GPU ms*, *SSAO and glow are the cost*, *notes too high/low*.
+
+Drive 3 (fullscreen 2880x1800, commit 05221be, framelog-2026-11-17T15-51-04.csv on the Mac),
+fps by time of day with SSAO+glow toggled during the run: noon 47, morning 52, evening 59,
+night 56. User verdict: "seems the ssao+glow are the main things causing the performance
+issues". 160 m shadows measured about +4 ms over 100 m. The first-30-seconds slowness after
+[B] coincided with shader compilation at 80-83 s into the log (first time the chunk, backdrop and
+forest materials are drawn), partly overlapping the noon segment.
+
+Changes (not yet driven):
+- **Shader warm-up**: `world.gd _warm_shaders()` draws tiny copies of the chunk, backdrop and
+  forest near/far materials in front of the chase cam for 0.5 s at boot, so their pipelines
+  compile before the stage is entered rather than during the first seconds of the run.
+- **Cheaper per-pixel cost**: the value-noise hash in the ground/backdrop/sky shaders is now an
+  arithmetic hash (no `sin()`); the forest BACKLIGHT term is gone; the near-tree detail range is
+  80 m (was 110); the sun uses 2 shadow splits (was 4). Cloud probe at 300 m: 528 -> 487 draw
+  calls, 676k -> 587k primitives, look unchanged.
+- **Measuring tools**: HUD menu (H) gets a GPU ms readout beside fps (shown only where the driver
+  reports it; Metal may report 0) and an "Uncapped fps (vsync off)" toggle, because a 60 Hz
+  vsync cap hides any headroom toward the 120 fps target. Not saved between runs.
+- **Pace-note height**: slider in the HUD menu, saved in user://hud.cfg.
+
+Plan: reach a 120 fps baseline fullscreen with SSAO+glow off, then add them back on top.
+
+---
+
+## 2026-11-17 (Arc E opens: roadside spruces, a road-window streamer, and the washed-out look fixed)
+
+Grep words: *washed out*, *road looks white*, *pale grass*, *flat colours*, *low poly look*,
+*trees*, *spruces*, *forest*, *hit a tree*, *void past the trees*, *dark ground at the horizon*,
+*too many chunks loaded*, *chunks behind me still loaded*, *fog*, *haze*, *clouds*, *SSAO*.
+
+Not yet driven. Everything below was verified by compile gate, headless probes and Forward+
+screenshots in the cloud (lavapipe); feel, real-GPU frame time and the look on the Mac's screen
+still need the drive.
+
+**Why the stage looked washed out - it was a bug, not a missing feature.** The chunk shader's
+grass/road/seal colours were declared without `source_color` AND passed as `Vector3`, so the sRGB
+colours were used as linear light: the gravel (0.58 sRGB) drew as ~0.79 on screen, near white,
+and the grass went pale. Fixed both halves (hint + pass a `Color`; a `Vector3` skips the sRGB
+conversion even with the hint). The legacy ground's `StandardMaterial3D` read its vertex colours as
+linear too; it now sets `vertex_color_is_srgb`. MEASURED pixels in the same chase view: road
+0.80 -> 0.67, verge 0.73 -> 0.49. If the stage goes pale again, check these two first.
+
+**The look (`world.gd`, `stage_chunks.gd`).** Filmic tonemapping (the linear mapper clipped sunlit
+surfaces to white); ambient cut to 0.55 of each time-of-day preset so the sun can shade; exponential
+haze tinted by the horizon colour (~60% at the 800 m road horizon); a sky SHADER with sun disc and
+fbm clouds lit by the sun colour (no TIME, so its radiance only re-bakes on [L]); sun shadows out to
+160 m; the ground shader gained value-noise detail at 0.4 / 5 / 30 m, darker compacted WHEEL LINES
+`rut_pos` inside each edge, a noisy verge edge, and needle litter and moss under the trees. SSAO and
+a soft glow sit behind a new Tab checkbox, `gfx_high` (default ON) - the one item whose GPU cost
+could not be priced off the Mac.
+
+**Spruces (`stage_forest.gd`, new).** Tall Norway spruces, 16-29 m, one per 33 m^2 before clearings,
+from 5 m outside the carriageway edge, thickening over 7 m, with ~100 m-scale clearings from a
+seeded noise field and no trees within 70 m of either road end (the tunnel mouths). Each tree's
+position, height, lean, yaw and tint is a hash of a GLOBAL lattice cell and the stage seed, so the
+same seed always grows the same forest and chunks partition it exactly at any LOD. Trees are grown
+from the chunk's own height and edge-distance samples (no extra road search) and hang off the chunk's
+mesh, so they hide, cache and free with it. Full-detail chunks carry a ~180-triangle spruce to 110 m
+and a 24-triangle silhouette beyond (visibility ranges); the shadow map is drawn from the silhouette
+only. Trunks are solid wherever the chunk has its height collider: one StaticBody per chunk with all
+its trunks (22 bodies / 857 trunks at a typical spot), built complete before it enters the tree so
+Jolt assembles it once. A gentle wind sway in the vertex shader. Tab: `stage_forest` (on rebuild).
+
+**The streamer is a ROAD WINDOW (`stage_chunks.gd`).** Beyond the full-detail disc, only chunks within
+`stage_band_chunks` (new Tab slider, default 2 = 90 m of forest) of the road between `road_behind`
+and `road_ahead` metres of ROAD from the car are wanted; both lengths derive from the chunk budget,
+which now buys road length (default: 791 m ahead, 198 m behind). Work is ordered by metres of road to
+reach it, so forward road is built first. A coarse 96x96 backdrop of the base terrain, shaded as
+distant canopy and dropped below the true ground by its measured worst over-shoot (9.7 m on the
+default seed), fills everything outside the window (build 17 ms). MEASURED, default seed, 1500 m at
+30 m/s from the start line:
+
+|                       | before | after |
+|---|---|---|
+| chunks resident       | ~600 (peak 637) | ~190 (peak 197) |
+| chunk builds          | 1909   | 881   |
+| scan cost, mean       | 2.28 ms | ~1.0 ms |
+
+Render, chase view 300 m into the stage, exact lavapipe counts: before 520 draw calls / 473 k
+triangles (bare grass); after 544 / 700 k with the forest (976 k before the shadow-silhouette trick).
+
+**The earlier half of this pass (6 commits by the previous session, golden probe byte-identical):**
+grip resolved once per wheel per tick; SHAKEDOWN gravel answers road class without a road search
+(roughness 738 -> 199 us a tick); the four surface effects ask the ground only for what they use;
+pace notes find the nearest route point on a grid (354 -> 6 us); the hidden rear-view mirror no
+longer renders the world a second time in chase view; HUD text one Label per line; the car merged
+into a few meshes (569 -> 127 draw calls) and the legacy ground cut into 4x4 render tiles. Legacy
+chase view: 1,213 draw calls / 2.55 M triangles -> 448 / 0.60 M.
+
+**DRIVE VERDICT (2026-11-17, PR #4 build, frame logger armed; log
+`framelog-2026-11-17T14-06-42.csv`, 675 s, 34,211 frames):** *"trees solid, rally loop feels the
+same, time of day all look very good - maybe the night shadows are too strong"*. SSAO not toggled
+(it defaults ON, so it was on throughout). *"performance do seem to suffer"* - which the log pins to
+FULLSCREEN, not to this branch:
+
+| 1280x720 window | middle frame | late (>25 ms) per 1000 | draw calls | physics scripts |
+|---|---|---|---|---|
+| before (Nov 16, main), SHAKEDOWN | 16.66 ms | 3.0 | 1364 | 4.01 ms |
+| PR #4, SHAKEDOWN | 16.66 ms | 5.4 | 619 | 3.45 ms |
+| PR #4, legacy map | 16.67 ms | 1.4 | 497 | - |
+
+After going fullscreen at t=305 s (2880x1800, 5.6x the pixels): legacy map still ~60 fps (22 late
+per 1000); **SHAKEDOWN GPU-bound at ~38 fps** (middle frame 26 ms, 635 late per 1000, 1.19 M
+triangles vs 0.61 M windowed). No fullscreen "before" exists, so pixels vs the 160 m shadows vs SSAO
+is not yet separated. [B] arrival still freezes 0.2-0.4 s (known prime() item); one 35 ms physics
+stall at t=22 s.
+
+**Follow-ups the same day (not yet driven):** a render-scale (FSR upscale) slider was added and then
+REMOVED on the user's call - *"just swiping optimization problems under the rug"*; resolution
+scaling is for much later, at much higher fidelity. The fullscreen cost is to be found and fixed
+instead: first a fullscreen drive on main for the missing "before", then shadows/SSAO. NIGHT
+shadows lightened: the ambient cut now scales with sun strength (night
+keeps 0.95 of its fill, day 0.55) and the sun's `shadow_opacity` is 0.6 at night. If night looks
+flat or day looks pale, those two lines in `world.gd` `_apply_tod()` are where to look.
+
+**FULLSCREEN COMPARISON (2026-11-17, second drive, main at 2880x1800; log
+`framelog-2026-11-17T15-34-52.csv`):** main held a steady 60 fps on SHAKEDOWN at every time of day
+(1.68 late frames per 1000 over 478 s). PR #4 at the same size ran 38-42 fps, GPU-bound: noon
+26.4 ms middle frame, 712 late per 1000, 70% of late frames waiting on the GPU - with FEWER draw
+calls than main (974 vs 1244). So the cost is PER PIXEL, and only shows at Retina fullscreen. Night
+was no worse than the other times, so it is not the night shadows. Response (B, not yet driven):
+SSAO + glow now default OFF (full-screen passes); sun shadow range back to main's 100 m and softer
+blur 1.0, with a Tab slider `gfx_shadow_m` (40-200 m) to A/B it; the cloud sky computes in the
+half-resolution sky pass (a quarter of the pixels) with only the sun disc at full resolution. The
+user ruled out render-scale upscaling as a fix. If fullscreen is still under 60, the next suspects
+are the ground shader's per-pixel noise and tree overdraw.
+
+**HUD menu (drive request, same day):** the test read-outs and the key help are folded behind a
+menu on `[H]` (rebindable inside it, keys or pad buttons). Default shows only fps and the
+track + time line, each with a tick box; a button cycles Minimal / All / key help only (bottom
+left, wrapped) / test metrics only (top left). Saved in `user://hud.cfg`.
+
+**If something regresses:** trees floating or sunk = the bilinear read in `StageForest.grow()` (apron
+index is +1); a tree on the road = `clearance` vs the edge-distance field; ground popping in ahead =
+`road_ahead` or the `_consider()` priority; the dark plane at the horizon back = the backdrop not
+built (`_build_backdrop` runs from `configure()`).
+
 ## 2026-11-16, evening (D4 closed on the drive - the hiccups are gone)
 
 Grep words: *hiccups*, *stutter after [B]*, *freeze a few seconds after arriving on the stage*,

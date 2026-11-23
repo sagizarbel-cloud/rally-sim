@@ -45,6 +45,9 @@ var def: StageDef
 # instant to minutes. Most of the area is nowhere near the road, and this says so in one hash lookup.
 var _corridor: Dictionary = {}
 var _corridor_cell := 24.0
+# Corridor cells in which the road MIGHT be sealed; every other cell of this area is certainly the
+# stage's own gravel (or off the road). Built by _mark_sealed(), which carries the proof.
+var _maybe_sealed: Dictionary = {}
 var _cs := 0.0
 var _n := 0
 var _size := 0.0
@@ -106,6 +109,7 @@ func _regenerate(p: Array) -> void:
 	for c in get_children():
 		c.queue_free()
 	_mark_corridor()
+	_mark_sealed()
 	_build()
 	_build_markers()
 	emit_signal("regenerated")
@@ -121,6 +125,7 @@ func _ready() -> void:
 	_origin = def.origin
 	_gb = def.ground_bounds()
 	_mark_corridor()
+	_mark_sealed()
 	_build()
 	_build_markers()
 
@@ -141,6 +146,59 @@ func _mark_corridor() -> void:
 			for dz in range(-1, 2):
 				_corridor[Vector2i(k.x + dx, k.y + dz)] = true
 		s += stepm
+
+func _mark_sealed() -> void:
+	## WHERE THE ROAD COULD POSSIBLY BE SEALED, as a set of corridor cells - so that everywhere else
+	## "is this sealed?" is one hash lookup instead of a nearest-road search.
+	##
+	## Why it is worth having: 87% of a stage is plain gravel, yet every ground question on it paid
+	## for nearest_point() just to learn that the mix is zero. The roughness field asks 36 times a
+	## tick (nine samples under each wheel); measured, that was 670 us a tick on gravel - half of
+	## everything the car's physics costs on SHAKEDOWN, against 300 us on the legacy map.
+	##
+	## WHY A CELL OUTSIDE THIS SET IS EXACTLY ZERO, not approximately. surface_mix() returns 0.0
+	## whenever `s` lies in no sealed section's open interval (a0, a1), so it is enough to show that
+	## a point whose nearest_point() `s` IS in such an interval always lands in a marked cell:
+	##   1. A point p that passes near_road() sits in a cell touching the cell of some corridor walk
+	##      point w, which is ON the centreline, so |p - w| < 2*sqrt(2) cells.
+	##   2. nearest_point() starts from the nearest SAMPLE b, and w lies on a segment whose nearer
+	##      end is at most half a segment away, so |p - b| <= |p - w| + seg/2.
+	##   3. The `s` it returns is on one of the two segments touching b, so if that `s` is inside
+	##      (a0, a1) then b's own arc length is inside (a0 - seg, a1 + seg).
+	##   4. This walk covers exactly that range in steps of `stepm`, so some walk point u is within
+	##      stepm/2 of b along the road, and therefore |p - u| < 2*sqrt(2) cells + seg/2 + stepm/2.
+	## Marking every cell within that distance of each u therefore covers p. `reach` is that distance
+	## in cells, DERIVED from the three lengths - `seg` is read off the centreline, not assumed.
+	## Conservative by construction: it over-marks a ring of plain gravel around each sealed stretch
+	## (which then takes the old, slower path and gets the same answer) and can never under-mark.
+	_maybe_sealed.clear()
+	if gen == null or gen.centreline == null:
+		return
+	var cl := gen.centreline
+	var seg: float = cl.max_segment_length()
+	var stepm: float = _corridor_cell * 0.1
+	var reach_m: float = 2.0 * sqrt(2.0) * _corridor_cell + seg * 0.5 + stepm * 0.5
+	var reach: int = int(ceil(reach_m / _corridor_cell))
+	for sec in gen.sealed_sections():
+		var s: float = maxf(float(sec["s0"]) - seg, 0.0)
+		var s_end: float = minf(float(sec["s1"]) + seg, cl.length())
+		while true:
+			var p: Dictionary = cl.point_at(minf(s, s_end))
+			var pos: Vector3 = p["pos"]
+			var k := _ckey(pos.x, pos.z)
+			for dx in range(-reach, reach + 1):
+				for dz in range(-reach, reach + 1):
+					_maybe_sealed[Vector2i(k.x + dx, k.y + dz)] = true
+			if s >= s_end:
+				break
+			s += stepm
+
+func road_is_gravel_at(x: float, z: float) -> bool:
+	## TRUE only where this area's ground is CERTAINLY not sealed: road_mix_at() would return
+	## exactly 0.0 here, on the road or off it. FALSE means "might be sealed - ask properly", never
+	## "is sealed". The ground map uses it to answer road class and tarmac-or-not without the
+	## nearest-road search (see _mark_sealed for the proof that makes that exact).
+	return not _maybe_sealed.has(_ckey(x, z))
 
 func _ckey(x: float, z: float) -> Vector2i:
 	return Vector2i(int(floor(x / _corridor_cell)), int(floor(z / _corridor_cell)))
@@ -270,7 +328,12 @@ func road_mix_at(x: float, z: float) -> float:
 	## D6: 0 = the stage's own gravel, 1 = sealed. The ground map interpolates grip, road class,
 	## colour and audio from this ONE number, which is what makes it impossible for the tyre to grip
 	## one surface while the audio plays another. Off the road there is nothing to mix.
-	if gen == null or gen.centreline == null or not near_road(x, z):
+	if gen == null or gen.centreline == null:
+		return 0.0
+	# Off the corridor there is nothing to mix; and in a cell that cannot hold sealed road the
+	# answer is exactly 0.0 without asking where the road is (see _mark_sealed).
+	var k := _ckey(x, z)
+	if not _maybe_sealed.has(k) or not _corridor.has(k):
 		return 0.0
 	var np := _nearest(x, z)
 	return gen.surface_mix(float(np["s"]), float(np["lateral"]), float(np["curvature"]),
@@ -368,7 +431,11 @@ func _physics_process(_d: float) -> void:
 	var n: float = float(car.stage_max_chunks)
 	if not is_equal_approx(n, chunks.chunk_budget):
 		chunks.chunk_budget = n
-		chunks._derive()                     # band_w derives from it, and _derive re-marks the band
+		chunks._derive()                     # the road window's length derives from it
+	var bc: int = int(car.stage_band_chunks)
+	if bc != chunks.band_chunks:
+		chunks.band_chunks = bc
+		chunks._derive()                     # ...and its price per metre from this
 	chunks.update(car.global_position)
 
 

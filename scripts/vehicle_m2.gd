@@ -120,6 +120,20 @@ class_name VehicleM2
 # that says how much ground exists around you. The far field's width derives from it. Exposed for
 # performance runs: sweep it and watch the streaming line on the HUD and the frame cost move.
 @export var stage_max_chunks := 256.0    # STAGE: resident chunk budget on SHAKEDOWN
+# ARC E: the far field is a ROAD WINDOW this many chunks either side of the road, made safe by the
+# roadside forest that hides everything behind it. See StageChunks._mark_window.
+@export var stage_band_chunks := 2.0     # STAGE: road window half-width, whole chunks (45 m each)
+@export var stage_forest := true         # STAGE: roadside spruces on SHAKEDOWN (applies on rebuild)
+# ARC E: the screen-space extras whose GPU cost cannot be priced from the cloud machine: ambient
+# occlusion (contact shading) and glow. OFF = the cheap path. Read by world.gd every frame.
+# DEFAULT OFF since the 2026-11-17 fullscreen comparison: main held 60 fps at 2880x1800 where this
+# branch fell to 38-42, GPU-bound, all per-pixel cost - and SSAO + glow are full-screen passes.
+@export var gfx_high := false            # GRAPHICS: SSAO + glow ON (high) / OFF (low)
+# Sun shadow reach. Main used Godot's default 100 m; this branch tried 160 m (trees shading the road
+# further ahead) and went GPU-bound in fullscreen. A slider so the cost can be A/B'd on the drive.
+@export var gfx_shadow_m := 100.0        # GRAPHICS: sun shadow distance (m)
+@export var gfx_shadow_mode := 0         # GRAPHICS: sun shadows 0 LIVE / 1 HYBRID (live near, baked far) / 2 BAKED
+@export var gfx_shadow_live_m := 40.0    # GRAPHICS: HYBRID - how far the live shadows reach before the baked ones take over
 @export var tyre_audio_surface := true   # AUDIO A/B: tyre audio takes its surface from the ground
 										 # map (ON) or from the old grip threshold (OFF). Lives on
 										 # the car only because the Tab panel binds vehicle props;
@@ -173,9 +187,9 @@ class_name VehicleM2
 @export var impact_threshold := 45.0         # horizontal decel (m/s^2) above which a hit counts as a crash (braking/cornering stay below)
 @export var impact_scale := 250.0            # decel over the threshold that equals a full-severity hit
 @export var damage_gain := 0.30              # damage added by one full-severity impact (0..1)
-@export var damage_power_loss := 0.45        # fraction of engine power lost at full damage
+@export var damage_power_loss := 0.0        # fraction of engine power lost at full damage
 @export var damage_grip_loss := 0.20         # fraction of tyre grip lost at full damage
-@export var damage_steer_pull := 0.22        # steering bias (fraction of full lock) at full damage - the car pulls to one side
+@export var damage_steer_pull := 0.0        # steering bias (fraction of full lock) at full damage - the car pulls to one side
 @export var impact_punctures := false        # OFF by default: the Fz spike is unreliable (anti-roll bars inflate it past 20000, so respawn landings punctured). Wear-blowout punctures still apply.
 @export var puncture_load := 30000.0         # Fz spike (N) that punctures a tyre WHEN impact_punctures is on (post-ARB Fz can reach ~40000)
 # Longitudinal slip curve: the physical handle is WHERE grip peaks, not the raw Pacejka B.
@@ -385,6 +399,8 @@ var _steer := 0.0                 # smoothed steering (-1..1); keyboard ramps to
 var _throttle_pedal := 0.0        # virtual throttle pedal (0..1), shaped from the binary key
 var _brake_pedal := 0.0           # virtual brake pedal (0..1)
 var _steer_wheel: Node3D          # cockpit steering wheel (spins with steering input)
+const MeshMerge := preload("res://scripts/mesh_merge.gd")
+var _static_parts: Array = []     # opaque shell + cockpit pieces, merged into one mesh once built
 var _rev_segs: Array = []         # cabin rev-bar segments: {mat, col}
 var _shift_mat: StandardMaterial3D   # cabin shift-light material (flashes near the shift point)
 var _cluster: Node3D              # the gauge cluster (dashboard.gd); the rev bar mounts on it
@@ -498,8 +514,11 @@ class Wheel:
 	var tyre_wear := 0.0                # M7: wear 0 = new .. 1 = worn out
 	var punctured := false              # M7: blown / flat -> big grip loss
 	var tyre_grip := 1.0                # M7: temp * wear * puncture grip multiplier (folds into mu)
+	var sgrip := 1.0                    # the GROUND's grip under this wheel, resolved once per tick
+	                                    # (see _surface_grip)
 
 var _wheels: Array[Wheel] = []
+var _sgrip_live := false                # true only between the suspension pass and the end of the tick
 
 func _ready() -> void:
 	mass = chassis_mass
@@ -686,6 +705,12 @@ func _build_body() -> void:
 	col.shape = box; add_child(col)
 	_build_shell()
 	_build_cockpit()
+	# ~75 opaque boxes and cylinders that never move relative to the body become ONE mesh with a
+	# surface per material, plus one shadow-only copy - the same triangles in a twentieth of the
+	# draw calls (see mesh_merge.gd for the measurement). The glass stays as separate panes: they
+	# are transparent, and transparent things are sorted against each other per node.
+	MeshMerge.merge(self, _static_parts, "BodyStatic", true)
+	_static_parts.clear()
 	_build_cluster()
 	_build_revbar()
 	# NOTE: no in-cabin 3D mirror quad -- a ViewportTexture renders black on a 3D surface on Metal.
@@ -719,6 +744,8 @@ func _part(size: Vector3, pos: Vector3, mat: StandardMaterial3D, rot_deg := Vect
 	if rot_deg != Vector3.ZERO:
 		mi.rotation_degrees = rot_deg
 	add_child(mi)
+	if mat.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+		_static_parts.append(mi)
 	return mi
 
 func _cyl(radius: float, height: float, pos: Vector3, mat: StandardMaterial3D, rot_deg := Vector3.ZERO, sides := 16) -> MeshInstance3D:
@@ -731,6 +758,8 @@ func _cyl(radius: float, height: float, pos: Vector3, mat: StandardMaterial3D, r
 	if rot_deg != Vector3.ZERO:
 		mi.rotation_degrees = rot_deg
 	add_child(mi)
+	if mat.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+		_static_parts.append(mi)
 	return mi
 
 func _build_shell() -> void:
@@ -844,6 +873,7 @@ func _build_cockpit() -> void:
 	var hub := MeshInstance3D.new()
 	var hbx := BoxMesh.new(); hbx.size = Vector3(0.08, 0.08, 0.06); hub.mesh = hbx
 	hub.material_override = _mat(accent_color); _steer_wheel.add_child(hub)
+	MeshMerge.merge(_steer_wheel, [rim, hbar, lbar, hub], "SteeringWheel")   # one node that spins
 
 func _build_wheels() -> void:
 	var defs := [
@@ -852,35 +882,50 @@ func _build_wheels() -> void:
 		[Vector3(-0.82, -0.1,  1.35), false, true],
 		[Vector3( 0.82, -0.1,  1.35), false, true],
 	]
+	# All four wheels are the same shape, so they share ONE mesh (tyre, backing disc, five spokes
+	# and cap baked together, a surface per material) instead of eight nodes each. Sharing the
+	# mesh and its materials is also what lets the renderer draw the four as one instanced call.
+	var wheel_mesh := _wheel_mesh()
 	for d in defs:
 		var w := Wheel.new()
 		w.pos = d[0]; w.steer = d[1]; w.drive = d[2]
 		var vis := MeshInstance3D.new()
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = wheel_radius; cyl.bottom_radius = wheel_radius; cyl.height = 0.26; cyl.radial_segments = 24
-		vis.mesh = cyl
-		var tire := StandardMaterial3D.new(); tire.albedo_color = Color(0.05, 0.05, 0.06); tire.roughness = 0.9
-		vis.material_override = tire
-		var gold := _mat(Color(0.85, 0.68, 0.22), false, 0.85, 0.25)              # iconic gold rim
-		# dark backing disc + 5 gold spokes + centre cap = spoked rally wheel
-		var back := MeshInstance3D.new()
-		var bc := CylinderMesh.new(); bc.top_radius = 0.2; bc.bottom_radius = 0.2; bc.height = 0.27; bc.radial_segments = 24
-		back.mesh = bc; back.material_override = _mat(Color(0.1, 0.1, 0.11), false, 0.3, 0.5)
-		vis.add_child(back)
-		for s in range(5):
-			var a := float(s) * TAU / 5.0
-			var sp := MeshInstance3D.new()
-			var sbm := BoxMesh.new(); sbm.size = Vector3(0.16, 0.28, 0.04)
-			sp.mesh = sbm; sp.material_override = gold
-			sp.position = Vector3(cos(a) * 0.095, 0.0, sin(a) * 0.095)
-			sp.rotation.y = -a
-			vis.add_child(sp)
-		var cap := MeshInstance3D.new()
-		var cc := CylinderMesh.new(); cc.top_radius = 0.05; cc.bottom_radius = 0.05; cc.height = 0.29; cc.radial_segments = 12
-		cap.mesh = cc; cap.material_override = gold
-		vis.add_child(cap)
+		vis.mesh = wheel_mesh
 		add_child(vis); w.vis = vis
 		_wheels.append(w)
+
+func _wheel_mesh() -> Mesh:
+	var scratch := Node3D.new()
+	var parts: Array = []
+	var tyre := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = wheel_radius; cyl.bottom_radius = wheel_radius; cyl.height = 0.26; cyl.radial_segments = 24
+	tyre.mesh = cyl
+	var tire := StandardMaterial3D.new(); tire.albedo_color = Color(0.05, 0.05, 0.06); tire.roughness = 0.9
+	tyre.material_override = tire
+	scratch.add_child(tyre); parts.append(tyre)
+	var gold := _mat(Color(0.85, 0.68, 0.22), false, 0.85, 0.25)              # iconic gold rim
+	# dark backing disc + 5 gold spokes + centre cap = spoked rally wheel
+	var back := MeshInstance3D.new()
+	var bc := CylinderMesh.new(); bc.top_radius = 0.2; bc.bottom_radius = 0.2; bc.height = 0.27; bc.radial_segments = 24
+	back.mesh = bc; back.material_override = _mat(Color(0.1, 0.1, 0.11), false, 0.3, 0.5)
+	scratch.add_child(back); parts.append(back)
+	for s in range(5):
+		var a := float(s) * TAU / 5.0
+		var sp := MeshInstance3D.new()
+		var sbm := BoxMesh.new(); sbm.size = Vector3(0.16, 0.28, 0.04)
+		sp.mesh = sbm; sp.material_override = gold
+		sp.position = Vector3(cos(a) * 0.095, 0.0, sin(a) * 0.095)
+		sp.rotation.y = -a
+		scratch.add_child(sp); parts.append(sp)
+	var cap := MeshInstance3D.new()
+	var cc := CylinderMesh.new(); cc.top_radius = 0.05; cc.bottom_radius = 0.05; cc.height = 0.29; cc.radial_segments = 12
+	cap.mesh = cc; cap.material_override = gold
+	scratch.add_child(cap); parts.append(cap)
+	var merged := MeshMerge.merge(scratch, parts, "Wheel")
+	var mesh: Mesh = merged.mesh
+	scratch.free()
+	return mesh
 
 func _mu_load(mu0: float, Fz: float) -> float:
 	# tire grip coefficient drops as vertical load rises (load sensitivity) -> the total grip
@@ -899,9 +944,26 @@ func _mf_slope(slip: float, B: float, C: float, E: float, D: float) -> float:
 	var dphi := (1.0 - E) + E / (1.0 + u * u)
 	return D * cos(C * atan(phi)) * C / (1.0 + phi * phi) * dphi * B
 
+var _peak_u_memo := {}                  # E -> {C -> u*}; see _mf_peak_u
+
 func _mf_peak_u(C: float, E: float) -> float:
 	# solve for u = B*slip where _mf peaks (C*atan(phi(u)) = pi/2), so B can be DERIVED from a
 	# desired peak-slip location instead of hand-tuning it: B = u_star / peak_slip
+	#
+	# MEMOISED ON ITS TWO ARGUMENTS, EXACTLY. The answer is a pure function of (C, E), it is a
+	# 40-step bisection (3.3-3.6 us measured), and a tick asks for it seven times with at most three
+	# distinct pairs: (Cx, Ex) for the longitudinal curve, and the lateral shape's C twice over -
+	# once as _lat_shape computes it and once as _peak_alpha_rad reads it back out of a Vector2,
+	# which is a 32-bit float and therefore a different number. Keys are the 64-bit arguments
+	# themselves, so a hit returns the identical double the solve would have produced. On a
+	# surface BLEND the lateral C differs per wheel per tick, so the table is bounded.
+	var by_c = _peak_u_memo.get(E)
+	if by_c == null:
+		by_c = {}
+		_peak_u_memo[E] = by_c
+	var hit = by_c.get(C)
+	if hit != null:
+		return float(hit)
 	var target := tan(PI / (2.0 * maxf(C, 1.01)))
 	var lo := 0.0
 	# The bracket has to SCALE WITH C: u* grows fast as C falls (C 1.65 -> ~4, 1.40 -> ~20,
@@ -918,7 +980,11 @@ func _mf_peak_u(C: float, E: float) -> float:
 			lo = mid
 		else:
 			hi = mid
-	return 0.5 * (lo + hi)
+	var u := 0.5 * (lo + hi)
+	if by_c.size() >= 64:
+		by_c.clear()
+	by_c[C] = u
+	return u
 
 func _update_tyre(w: Wheel, Fx: float, Fy: float, v_long: float, v_lat: float, dt: float) -> void:
 	if not tyres_enabled:
@@ -1039,23 +1105,37 @@ func _launch_setup(split: float, ratio: float, t_fric: float) -> Vector2:
 		if sh <= 0.001:
 			continue
 		n += 1.0
-		var sg := 1.0
-		if w.contact and surface_source != null:
-			sg = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+		var sg := _surface_grip(w)
 		sr += lerpf(peak_slip_gravel, peak_slip_tarmac, clampf((sg - 1.15) / 0.25, 0.0, 1.0))
 		var mux := _mu_load(mu_long, w.Fz) * sg * w.tyre_grip * (1.0 - damage_grip_loss * _damage)
 		t_wheel += mux * w.Fz * wheel_radius
 	var t_need := clutch_margin * t_wheel / maxf(absf(ratio) * driveline_eff, 0.001) + t_fric
 	return Vector2(maxf(sr / maxf(n, 1.0), 0.02), _rpm_for_torque(t_need))
 
+func _surface_grip(w: Wheel) -> float:
+	# The ground's grip multiplier under one wheel (1.0 in the air or with no surface wired).
+	#
+	# ONE GROUND RESOLVE PER WHEEL PER TICK. Inside a physics tick this used to be asked again in
+	# every driveline substep, in the force pass, here for the lateral shape and in the launch
+	# setup - about 20 resolves a tick for four answers, measured at 5.6 us each on the legacy map
+	# and 12-16 us on SHAKEDOWN, where every one is a nearest-road search. Nothing it depends on
+	# can move in between: the contact point is final once the suspension pass has run, and the
+	# only state behind grip_at that changes at all is wear.gd's worn line, which moves in ITS
+	# _physics_process, after this node's. So the tick resolves it once (see _physics_process) and
+	# every reader gets that same double - an exact refactor, proven byte-identical on a driven run.
+	# Outside the tick the cached value could be one wear update stale, so it is asked for live.
+	if _sgrip_live:
+		return w.sgrip
+	if w.contact and surface_source != null:
+		return surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+	return 1.0
+
 func _lat_shape(w: Wheel) -> Vector2:
 	# (By, Cy) for the surface under this wheel. Both blend on the same grip factor the longitudinal
 	# Bx uses, so the lateral curve's peak LOCATION and its post-peak SHAPE are surface properties
 	# together. B is derived from the blended peak ANGLE using the blended C, so the peak lands on
 	# peak_alpha_* whatever the shape factor is - the two knobs stay independent.
-	var sg := 1.0
-	if w.contact and surface_source != null:
-		sg = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+	var sg := _surface_grip(w)
 	var t := clampf((sg - 1.15) / 0.25, 0.0, 1.0)
 	var c := lerpf(cy_gravel, Cy, t)
 	var a := lerpf(peak_alpha_gravel, peak_alpha_tarmac, t)
@@ -1303,6 +1383,15 @@ func _physics_process(delta: float) -> void:
 		info[w] = {"fwd": fwd, "right": right, "off": contact_off, "hit": hit_pos,
 			"v_long": pv.dot(fwd), "v_lat": pv.dot(right)}
 
+	# every contact point is final from here on: resolve the ground's grip under each wheel ONCE
+	# and let the rest of the tick read it (see _surface_grip for why that is exact)
+	for w in _wheels:
+		if w.contact and surface_source != null:
+			w.sgrip = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+		else:
+			w.sgrip = 1.0
+	_sgrip_live = true
+
 	# anti-roll bars transfer load across each axle, then apply the roll-balanced vertical load
 	_apply_arb(0, 1, _arb_f)         # front pair (wheels FL, FR)
 	_apply_arb(2, 3, _arb_r)         # rear pair (wheels RL, RR)
@@ -1472,9 +1561,7 @@ func _physics_process(delta: float) -> void:
 		for w in _wheels:
 			if not w.contact:
 				continue
-			var sgm := 1.0
-			if surface_source != null:
-				sgm = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+			var sgm: float = w.sgrip
 			mu_sum += _mu_load(mu_lat, w.Fz) * sgm * w.tyre_grip
 			mu_n += 1.0
 		var yaw_cap := (mu_sum / maxf(mu_n, 1.0)) * 9.81 / maxf(absf(v_fwd), 1.0)
@@ -1500,9 +1587,7 @@ func _physics_process(delta: float) -> void:
 				# ceiling is the torque that would just LOCK this tyre: past it the wheel stops
 				# rolling and the friction ellipse takes its lateral grip away - the opposite of
 				# help. So the aid brakes up to the limit of the contact patch and no further.
-				var sg := 1.0
-				if surface_source != null:
-					sg = surface_source.grip_at(ow.contact_point.x, ow.contact_point.z)
+				var sg: float = ow.sgrip
 				var t_lock := _mu_load(mu_long, ow.Fz) * sg * ow.tyre_grip * ow.Fz * wheel_radius
 				_esc[oi] = clampf(stability_gain * excess, 0.0, minf(t_lock, brake_torque))
 
@@ -1638,9 +1723,7 @@ func _physics_process(delta: float) -> void:
 			var vlong := 0.0
 			if info.has(w):
 				vlong = info[w]["v_long"]
-			var sgrip := 1.0
-			if w.contact and surface_source != null:
-				sgrip = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+			var sgrip: float = w.sgrip
 			var mux := _mu_load(mu_long, Fz) * sgrip * w.tyre_grip * (1.0 - damage_grip_loss * _damage)
 			# axle torque -> half per side, +/- the differential's transfer torque (A3): the
 			# transfer flows from the faster wheel of the pair toward the slower one
@@ -1752,9 +1835,7 @@ func _physics_process(delta: float) -> void:
 		var v_long: float = d["v_long"]
 		var v_lat: float = d["v_lat"]
 		var Fz: float = w.Fz
-		var sgrip := 1.0
-		if surface_source != null:
-			sgrip = surface_source.grip_at(w.contact_point.x, w.contact_point.z)
+		var sgrip: float = w.sgrip
 		var mux := _mu_load(mu_long, Fz) * sgrip * w.tyre_grip * (1.0 - damage_grip_loss * _damage)
 		var muy := _mu_load(mu_lat, Fz) * sgrip * w.tyre_grip * (1.0 - damage_grip_loss * _damage)
 		var Fx: float = fx_sum[w] / float(drive_substeps)
@@ -1876,6 +1957,7 @@ func _physics_process(delta: float) -> void:
 	_engine_temp = clampf(_engine_temp, ambient_temp, 135.0)
 
 	_prev_vel = linear_velocity     # M8: for next frame's impact detection
+	_sgrip_live = false             # the per-tick grip is only this tick's (see _surface_grip)
 
 func respawn() -> void:
 	linear_velocity = Vector3.ZERO

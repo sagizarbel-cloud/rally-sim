@@ -11,13 +11,14 @@ var _dash_cam: Camera3D           # dash-mounted forward view (rigidly attached)
 var _hood_cam: Camera3D           # bonnet view (rigidly attached to the car)
 var _rear_cam: Camera3D           # rear-facing camera feeding the cockpit rear-view mirror overlay
 var _mirror_layer: CanvasLayer    # the mirror panel; shown only in cockpit view
+var _mirror_vp: SubViewport       # the mirror's own render of the world; see _apply_mirror()
 var _status_layer: CanvasLayer    # bottom-right rev/speed/telltales; the OUTSIDE-view cluster
 var _cam_mode := 0                # 0 = chase, 1 = cockpit, 2 = dash, 3 = bonnet
 var _car                          # the vehicle (untyped so get_wheels() resolves dynamically)
 var _stage                        # RallyStage, for the base surface type (skid marks are asphalt-only)
 var _sun: DirectionalLight3D      # M10: the sun, cycled by time-of-day
 var _env: Environment
-var _sky_mat: ProceduralSkyMaterial
+var _sky_mat: ShaderMaterial      # Arc E: procedural sky WITH clouds (was ProceduralSkyMaterial)
 var _tod := 0                     # time-of-day preset index
 # --- Right-stick look. The LEFT stick steers, so looking around lives on the right one. The
 # mapping is ABSOLUTE (stick deflection = view angle) rather than accumulating, so letting go
@@ -81,10 +82,18 @@ func _ready() -> void:
 	_build_reactive_patch(car, stage)
 	_build_area_manager(car, stage)               # D5: the tunnel between the two areas
 	_build_sound(car, stage)
+	_warm_shaders()
+	if OS.get_cmdline_user_args().has("--bench"):
+		# GPU cost benchmark: replays a fixed forest path once per configuration and quits.
+		var bench: Node = load("res://scripts/bench.gd").new()
+		bench.name = "Bench"
+		bench.world = self
+		add_child(bench)
 
 func _physics_process(delta: float) -> void:
 	if _car == null:
 		return
+	_void_rescue()
 	if Input.is_action_just_pressed("time_of_day"):
 		_tod = (_tod + 1) % TOD.size()
 		_apply_tod(_tod)
@@ -310,6 +319,7 @@ func _setup_input() -> void:
 	_add_keys("ignition",   [KEY_I])      # A2: starter button - re-fires a stalled engine
 	_add_keys("hud_bigger",  [KEY_EQUAL, KEY_KP_ADD])
 	_add_keys("hud_smaller", [KEY_MINUS, KEY_KP_SUBTRACT])
+	_add_keys("hud_menu",    [KEY_H])          # HUD menu; rebindable from inside the menu (hud.gd)
 	_add_keys("drive_mode",  [KEY_T])
 	_add_keys("circuit_toggle", [KEY_B])
 	_add_keys("puncture_test", [KEY_P])   # debug: puncture a tyre to test the flat visual + vibration
@@ -375,31 +385,246 @@ func _add_button(action: String, button: JoyButton) -> void:
 # ---------------------------------------------------------------------------
 # Scene construction
 # ---------------------------------------------------------------------------
+## ARC E - THE SKY. ProceduralSkyMaterial is an empty two-colour gradient, which is a large part of
+## why the game read as a model on a table rather than a place. This is the same gradient plus a sun
+## disc and a layer of fbm cumulus projected onto a plane overhead, lit by the sun's own colour so
+## the time-of-day presets carry through. It uses no TIME, so the sky's radiance (the ambient light
+## it feeds) is re-baked only when a uniform changes - i.e. on a time-of-day switch, not per frame.
+const SKY_SHADER := """
+shader_type sky;
+render_mode use_half_res_pass;
+uniform vec3 top_col : source_color = vec3(0.34, 0.50, 0.86);
+uniform vec3 horizon_col : source_color = vec3(0.72, 0.82, 0.95);
+uniform vec3 ground_col : source_color = vec3(0.25, 0.27, 0.24);
+uniform float cloud_cover = 0.45;
+uniform float cloud_shade = 1.0;
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+			mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p) {
+	float a = 0.5;
+	float v = 0.0;
+	for (int i = 0; i < 5; i++) {
+		v += a * vnoise(p);
+		p = p * 2.03 + vec2(17.1, 9.2);
+		a *= 0.5;
+	}
+	return v;
+}
+void sky() {
+	// The clouds are soft, so they are computed in the HALF-RESOLUTION sky pass (a quarter of the
+	// pixels) and the full-resolution pass only reads that back and adds the sharp sun disc. Per-pixel
+	// cost was what made the 2026-11-17 fullscreen drive GPU-bound, and the sky covers much of it.
+	vec3 d = EYEDIR;
+	float h = d.y;
+	vec3 sun_c = LIGHT0_COLOR * LIGHT0_ENERGY;
+	float sd = dot(d, LIGHT0_DIRECTION);
+	if (AT_HALF_RES_PASS || AT_CUBEMAP_PASS) {
+		vec3 col = mix(horizon_col, top_col, pow(clamp(h, 0.0, 1.0), 0.45));
+		if (h < 0.0) {
+			col = mix(horizon_col, ground_col, clamp(-h * 6.0, 0.0, 1.0));
+		}
+		if (LIGHT0_ENABLED) {
+			col += sun_c * pow(max(sd, 0.0), 48.0) * 0.25;
+		}
+		float cov_out = 0.0;
+		if (h > 0.0) {
+			vec2 uv = d.xz / (h + 0.06);
+			float c = fbm(uv * 0.55 + vec2(3.7, 1.3));
+			float cov = smoothstep(1.0 - cloud_cover - 0.08, 1.0 - cloud_cover + 0.22, c);
+			// thicker cloud is darker underneath; the sun side of each cloud is brighter
+			float thick = smoothstep(0.4, 0.85, c);
+			vec3 lit = mix(horizon_col * 1.1, sun_c * 0.85 + horizon_col * 0.35, 0.65 - thick * 0.35);
+			lit += sun_c * pow(max(sd, 0.0), 6.0) * 0.35;
+			cov_out = cov * smoothstep(0.0, 0.12, h) * 0.92;
+			col = mix(col, lit * cloud_shade, cov_out);
+		}
+		COLOR = col;
+		ALPHA = 1.0 - cov_out;            // how much of the sun disc a cloud lets through
+		if (AT_CUBEMAP_PASS && LIGHT0_ENABLED) {
+			COLOR += sun_c * smoothstep(0.99955, 0.99975, sd) * 12.0 * ALPHA;
+			ALPHA = 1.0;
+		}
+	} else {
+		COLOR = HALF_RES_COLOR.rgb;
+		if (LIGHT0_ENABLED) {
+			COLOR += sun_c * smoothstep(0.99955, 0.99975, sd) * 12.0 * HALF_RES_COLOR.a;
+		}
+	}
+}
+"""
+
 func _build_environment() -> void:
 	_sun = DirectionalLight3D.new()
 	_sun.shadow_enabled = true
+	# Arc E: shadows reach far enough to lay the roadside spruces' shadows across the road ahead, and
+	# soft enough at the edge that the penumbra reads as sunlight rather than a stencil.
+	# Back to 100 m (Godot's default, what main used) after the fullscreen comparison - see
+	# gfx_shadow_m on the car, which drives it live.
+	_sun.directional_shadow_max_distance = 100.0
+	_sun.shadow_blur = 1.0
+	# Two cascades, not four: every shadow caster is drawn once per cascade it touches, and over a
+	# 100 m range two splits keep the near shadows sharp. Halves the shadow passes.
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	_sun.directional_shadow_split_1 = 0.25
 	add_child(_sun)
 
 	_env = Environment.new()
 	_env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	_sky_mat = ProceduralSkyMaterial.new()
+	var ssh := Shader.new()
+	ssh.code = SKY_SHADER
+	_sky_mat = ShaderMaterial.new()
+	_sky_mat.shader = ssh
 	sky.sky_material = _sky_mat
 	_env.sky = sky
 	_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	# ARC E - TONEMAPPING. The default LINEAR mapper clips: a sunlit light surface lands above 1.0
+	# and is drawn white, which is the washed-out road and grass the audit's baseline screenshots
+	# showed. Filmic rolls the highlights off instead of clipping them.
+	_env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	_env.tonemap_exposure = 0.95
+	_env.tonemap_white = 6.0
+	# ARC E - AERIAL PERSPECTIVE. Without it a hill 800 m away is as sharp and saturated as the road
+	# under the car, which flattens the depth of the whole picture. Exponential fog tinted by the sky
+	# (aerial_perspective) makes distance read as distance. The density puts ~60% haze at the
+	# streamer's 800 m road horizon, so the far end of the road window fades into the sky rather
+	# than ending.
+	_env.fog_enabled = true
+	_env.fog_density = 0.0011
+	_env.fog_aerial_perspective = 0.55
+	_env.fog_sky_affect = 0.0
+	_env.fog_sun_scatter = 0.15
+	# Screen-space extras, both behind the Tab panel's graphics switch (see _apply_gfx).
+	_env.ssao_radius = 1.2
+	_env.ssao_intensity = 1.6
+	_env.ssao_power = 1.4
+	_env.ssao_detail = 0.4
+	_env.glow_intensity = 0.35
+	_env.glow_strength = 0.9
+	_env.glow_bloom = 0.0
+	_env.glow_hdr_threshold = 1.2
+	_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 	var we := WorldEnvironment.new()
 	we.environment = _env
 	add_child(we)
 	_apply_tod(_tod)
+	_apply_gfx(false)
+
+func _warm_shaders() -> void:
+	## THE FIRST 30 SECONDS ON SHAKEDOWN STUTTERED (drive 2026-11-17): the frame log shows shaders
+	## compiling at the moment the car arrived, because the stage's ground, tree and backdrop
+	## materials are first DRAWN there, 3 km from the spawn. Draw each of them once, a couple of
+	## metres in front of the chase camera and behind the car, during the first frames - with shadows,
+	## so the shadow-pass variants compile too - then remove them.
+	if _stage_area == null or _stage_area.chunks == null or _chase_cam == null:
+		return
+	var ch = _stage_area.chunks
+	var meshes: Array = []
+	var q := QuadMesh.new()
+	q.size = Vector2(0.05, 0.05)
+	q.material = ch._mat
+	meshes.append(q)
+	if ch._backdrop != null:
+		var q2 := QuadMesh.new()
+		q2.size = Vector2(0.05, 0.05)
+		q2.material = ch._backdrop.mesh.surface_get_material(0)
+		meshes.append(q2)
+	if ch.forest != null:
+		meshes.append(ch.forest.mesh_near)
+		meshes.append(ch.forest.mesh_far)
+	var holder := Node3D.new()
+	holder.name = "ShaderWarmup"
+	_chase_cam.add_child(holder)
+	var x := -0.06
+	for m in meshes:
+		var mi := MeshInstance3D.new()
+		mi.mesh = m
+		mi.scale = Vector3.ONE * 0.05
+		mi.position = Vector3(x, 0.0, -1.5)
+		holder.add_child(mi)
+		x += 0.04
+	# a few frames is enough for the pipelines to be built; then it is gone
+	get_tree().create_timer(0.5).timeout.connect(holder.queue_free)
+
+func _apply_gfx(high: bool) -> void:
+	_env.ssao_enabled = high
+	_env.glow_enabled = high
+
+## SHADOW MODES (2026-11-18): see StageChunks.shadow_mode. The bake lives in the stage ground; the
+## world owns the sun, so it switches the shadow map and tells the ground which way the sun is.
+var _shadow_mode := 0
+
+func _sun_toward() -> Vector3:
+	# A DirectionalLight3D shines along its -Z; the sun is therefore along +Z.
+	return _sun.global_transform.basis.z.normalized()
+
+func _apply_shadow_mode() -> void:
+	_sun.shadow_enabled = _shadow_mode != 2
+	if _stage_area != null and _stage_area.chunks != null:
+		_stage_area.chunks.set_shadow_bake(_shadow_mode, _sun_toward())
+	# BAKED has no shadow map, so the car's shadow is computed by the GROUND itself: see
+	# _update_car_shadow() and StageChunks.CAR_GLSL. The sky occlusion under the car is in every mode.
+	for m in _car_ground_mats():
+		m.set_shader_parameter("car_on", 1.0 if _shadow_mode == 2 else 0.0)
+		m.set_shader_parameter("car_ao_on", 1.0)
+
+func _car_ground_mats() -> Array:
+	var out := []
+	if _stage_area != null and _stage_area.chunks != null:
+		for m in [_stage_area.chunks._mat, _stage_area.chunks._mat_baked]:
+			if m != null:
+				out.append(m)
+	return out
+
+## THE CAR'S SHADOW IN BAKED MODE (2026-11-23). First a fixed 2.4 x 4.9 m oval (sagi: "the under
+## shadow for the car is too small"), then a sun-shaped Decal - which sagi found "much darker then
+## the other shadows and also make an even darker overlap": a decal darkens EVERYTHING beneath it,
+## sky light included, and stacks on a tree shadow already there. A shadow only takes the SUN away.
+## So the ground shader now does exactly that: each ground pixel casts a ray toward the sun through
+## the car's two boxes (body and cabin) and loses the sun where it hits - min() with the trees'
+## shadow, so an overlap is no darker than either. The sky light is dimmed only right under the
+## car, where the car really hides the sky (a soft contact occlusion). All this frame needs from
+## here is the car's inverse transform. sagi liked the under-car darkening and asked for it in LIVE
+## too, so the sky occlusion runs in every mode (LIVE's ground material as well as the baked one).
+func _update_car_shadow() -> void:
+	if _car == null:
+		return
+	var inv := Projection(_car.global_transform.affine_inverse())
+	for m in _car_ground_mats():
+		m.set_shader_parameter("car_inv", inv)
 
 func _apply_tod(i: int) -> void:
 	var p: Dictionary = TOD[i]
 	_sun.rotation_degrees = p["rot"]
 	_sun.light_color = p["col"]
 	_sun.light_energy = p["energy"]
-	_sky_mat.sky_top_color = p["top"]
-	_sky_mat.sky_horizon_color = p["horizon"]
-	_env.ambient_light_energy = p["ambient"]
+	_sky_mat.set_shader_parameter("top_col", p["top"])
+	_sky_mat.set_shader_parameter("horizon_col", p["horizon"])
+	# clouds are lit by the sun; at night there is nothing to light them, so they go to silhouettes
+	_sky_mat.set_shader_parameter("cloud_shade", clampf(float(p["energy"]) / 1.1, 0.25, 1.0))
+	# Arc E: the sky now feeds real ambient (it has clouds and a bright horizon), and at the presets'
+	# old energy that flat fill swamped the sun - no shading contrast, everything pale. A clear-sky
+	# day is roughly 80% direct and 20% sky light on a horizontal surface; 0.55 of the old fill puts
+	# the shadow side back near that ratio.
+	# NIGHT is the exception (drive verdict 2026-11-17: "maybe the night shadows are too strong"). By
+	# moonlight the direct beam is weak and the sky's share of the light is much larger, so cutting
+	# the fill there made shadows near-black. Scale the cut by how strong the sun is.
+	var sun_share: float = clampf((float(p["energy"]) - 0.3) / 0.75, 0.0, 1.0)
+	_env.ambient_light_energy = float(p["ambient"]) * lerpf(0.95, 0.55, sun_share)
+	# ...and moon shadows are soft-edged and faint, not stencils: the moon is a weak, broad source.
+	_sun.shadow_opacity = lerpf(0.6, 1.0, sun_share)
+	# the haze takes the horizon's colour, so morning haze is warm and night haze is dark blue
+	_env.fog_light_color = p["horizon"]
+	_env.fog_light_energy = clampf(float(p["energy"]), 0.15, 1.0)
+	if _stage_area != null and _stage_area.chunks != null:
+		_stage_area.chunks.set_bake_strength(_sun.shadow_opacity)
+		_stage_area.chunks.set_shadow_bake(_shadow_mode, _sun_toward())
 
 func _build_ground() -> void:
 	var body := StaticBody3D.new()
@@ -487,16 +712,104 @@ func _apply_camera() -> void:
 	_cockpit_cam.current = (_cam_mode == 1)
 	_dash_cam.current = (_cam_mode == 2)
 	_hood_cam.current = (_cam_mode == 3)
-	if _mirror_layer != null:
-		_mirror_layer.visible = (_cam_mode == 1 or _cam_mode == 2)   # mirror in cockpit + dash views
+	_apply_mirror()
 	if _status_layer != null:
 		_status_layer.visible = not (_cam_mode == 1 or _cam_mode == 2)   # outside views only
 
+func _apply_mirror() -> void:
+	# The mirror is a SECOND render of the whole world, so it must only run while it is on screen.
+	# A SubViewportContainer does switch its viewport off when hidden, but only at the moment its
+	# own visibility CHANGES - and at startup the viewport is added to a container that is already
+	# hidden, so no change ever arrives and the mirror kept rendering behind the chase camera until
+	# the driver had cycled through the cockpit view once. Measured 2026-11-17 on the legacy map in
+	# chase view: 343 of 1,213 draw calls and 1.25 M of 2.55 M primitives a frame were the unseen
+	# mirror. Stating the mode here, every time the view changes, makes it not depend on that.
+	var on := (_cam_mode == 1 or _cam_mode == 2)                 # mirror in cockpit + dash views
+	if _mirror_layer != null:
+		_mirror_layer.visible = on
+	if _mirror_vp != null:
+		_mirror_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
+
 func _process(delta: float) -> void:
+	_cull_legacy_map()
+	if _car != null and _env != null:
+		var hi := bool(_car.get("gfx_high"))
+		if hi != _env.ssao_enabled:
+			_apply_gfx(hi)
+		var mode := int(_car.get("gfx_shadow_mode")) if _car.get("gfx_shadow_mode") != null else 0
+		if mode != _shadow_mode:
+			_shadow_mode = mode
+			_apply_shadow_mode()
+		var sm := clampf(float(_car.get("gfx_shadow_m")), 20.0, 400.0)
+		if _shadow_mode == 1:
+			sm = clampf(float(_car.get("gfx_shadow_live_m")), 10.0, sm)
+		if not is_equal_approx(sm, _sun.directional_shadow_max_distance):
+			_sun.directional_shadow_max_distance = sm
+	_update_car_shadow()
 	if Input.is_action_just_pressed("camera_toggle"):
 		_cam_mode = (_cam_mode + 1) % 4
 		_apply_camera()
 	_update_look(delta)
+
+## THE LEGACY MAP IS NOT DRAWN FROM DEEP INSIDE SHAKEDOWN. Measured 2026-11-18 (cloud probe, chase
+## cam 300 m into the stage, noon): of 589k primitives a frame, the legacy map 3 km away was 222k and
+## 88 draw calls - more than the whole stage ground (78k) - for a map hidden behind haze and forest.
+## Hiding it keeps its collision (visible is render-only) and it reappears before the car can reach
+## it. Kept visible within LEGACY_SHOW_DEPTH of the stage's edge, where the start clearing could
+## still look back toward it.
+## FELL OUT OF THE WORLD (2026-11-18, sagi: fell through at ~155 km/h, mid-stage on unbroken road -
+## cause still open, see CHANGELOG). Also, off the sides of the 44 m transition pad past the stage
+## edge there is nothing but the collider-less backdrop. Nothing ever caught a car that went through
+## - it fell forever. The net that covers every such hole, and logs WHERE it happened: a car that has
+## dropped VOID_DROP_M below the last height it stood at without free-falling is put back on the
+## nearest road. Nothing on a generated road falls 25 m, so this cannot fire in normal driving.
+const VOID_DROP_M := 25.0
+var _safe_y := 0.0
+var _safe_p := Vector3.ZERO
+var _have_safe := false
+
+func _void_rescue() -> void:
+	var p: Vector3 = _car.global_position
+	var vy: float = _car.linear_velocity.y
+	if not _have_safe or vy > -4.0:
+		# not falling: this is a height the car can legitimately be at
+		if not _have_safe or vy > -1.0:
+			_safe_y = p.y
+			_safe_p = p
+			_have_safe = true
+		return
+	if p.y > _safe_y - VOID_DROP_M:
+		return
+	print("VOID RESCUE: car fell from (%.1f, %.1f, %.1f) to y=%.1f at %.0f km/h" % [_safe_p.x, _safe_y, _safe_p.z, p.y, _car.linear_velocity.length() * 3.6])
+	_have_safe = false
+	if _stage_area != null and StageDef.depth_in(_stage_area._gb, _safe_p.x, _safe_p.z) > -1500.0:
+		var cl = _stage_area.gen.centreline
+		var np: Dictionary = cl.nearest_point(_safe_p.x, _safe_p.z)
+		var s: float = clampf(float(np["s"]), 0.0, cl.length() - 10.0)
+		var pt: Dictionary = cl.point_at(s)
+		var pos: Vector3 = pt["pos"]
+		var h: Vector2 = pt["heading"]
+		if StageDef.depth_in(_stage_area._gb, pos.x, pos.z) > 0.0:
+			var o := Vector3(pos.x, _stage_area.height_at(pos.x, pos.z) + 1.8, pos.z)
+			_car.respawn()   # resets engine, tyres and damage exactly as [R] does...
+			_car.global_transform = Transform3D(Basis(), o).looking_at(o + Vector3(h.x, 0.0, h.y), Vector3.UP)
+			return           # ...but on the road where you went off, not at the start
+	_car.respawn()
+
+const LEGACY_SHOW_DEPTH := 150.0
+var _legacy_shown := true
+func _cull_legacy_map() -> void:
+	if _car == null or _stage_area == null or _stage == null:
+		return
+	var p: Vector3 = _car.global_position
+	var show: bool = StageDef.depth_in(_stage_area._gb, p.x, p.z) < LEGACY_SHOW_DEPTH
+	if show == _legacy_shown:
+		return
+	_legacy_shown = show
+	(_stage as Node3D).visible = show
+	var patch := get_node_or_null("ReactivePatch") as Node3D
+	if patch != null:
+		patch.visible = show
 
 func _axis_shaped(v: float) -> float:
 	# deadzone, then rescale what is left to the full 0..1 range so the view starts moving
@@ -562,11 +875,12 @@ func _build_rearview(_car_ref: Node3D) -> void:
 	cont.scale = Vector2(-1, 1)                             # ...so the mirror image is left-right reversed
 	_mirror_layer.add_child(cont)
 	var vp := SubViewport.new()
-	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	vp.own_world_3d = false                                 # share the MAIN world (real geometry)
 	cont.add_child(vp)
+	_mirror_vp = vp
 	_rear_cam = Camera3D.new()
 	_rear_cam.fov = 72.0
 	_rear_cam.far = 600.0
 	vp.add_child(_rear_cam)
 	_rear_cam.make_current()
+	_apply_mirror()                                         # off unless an interior view is up

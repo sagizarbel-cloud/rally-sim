@@ -51,12 +51,21 @@ var _kmh_max := 280.0
 var _rpm_shown := 0.0
 var _kmh_shown := 0.0
 
+const MeshMerge := preload("res://scripts/mesh_merge.gd")
+var _mats := {}                           # colour -> the one material of that colour
+var _static: Array = []                   # every piece that never moves: merged at the end of _ready
+
 func _mat(c: Color) -> StandardMaterial3D:
 	# unshaded: the cluster reads the same at noon and at night, and never eats a light pass.
 	# (An unshaded StandardMaterial3D ignores emission - colour goes in albedo, see CLAUDE.md.)
+	# One material PER COLOUR, not per piece: nothing here ever recolours a piece, and pieces that
+	# share a material can be merged into one draw (see the end of _ready).
+	if _mats.has(c):
+		return _mats[c]
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.albedo_color = c
+	_mats[c] = m
 	return m
 
 func _box(size: Vector3, pos: Vector3, col: Color, roll_deg := 0.0, parent: Node3D = null) -> MeshInstance3D:
@@ -70,6 +79,8 @@ func _box(size: Vector3, pos: Vector3, col: Color, roll_deg := 0.0, parent: Node
 		mi.rotation.z = deg_to_rad(roll_deg)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	(parent if parent != null else self).add_child(mi)
+	if parent == null:
+		_static.append(mi)                # a piece under a pivot (a needle) moves; the rest do not
 	return mi
 
 func _disc(radius: float, thickness: float, pos: Vector3, col: Color) -> MeshInstance3D:
@@ -86,6 +97,7 @@ func _disc(radius: float, thickness: float, pos: Vector3, col: Color) -> MeshIns
 	mi.rotation_degrees = Vector3(90, 0, 0)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
+	_static.append(mi)
 	return mi
 
 func _label(txt: String, pos: Vector3, height: float, col: Color) -> Label3D:
@@ -166,6 +178,10 @@ func _ready() -> void:
 	_gear_lbl = _label("N", Vector3(dial_gap, dial_y + dial_radius * 0.06, 0.019), 0.021, C_TEXT)
 	_box(Vector3(0.040, 0.013, 0.004), Vector3(dial_gap, dial_y - dial_radius * 0.30, 0.016), C_GLOW)
 	_speed_lbl = _label("0", Vector3(dial_gap, dial_y - dial_radius * 0.30, 0.019), 0.0095, C_TEXT)
+	# the pod, screen, faces, hubs and ~30 graduation ticks: about forty nodes drawn as one mesh
+	# with a surface per colour. The needles (on their pivots) and the labels stay as they are.
+	MeshMerge.merge(self, _static, "ClusterStatic")
+	_static.clear()
 
 func _process(delta: float) -> void:
 	if car == null or _tach_needle == null:

@@ -311,18 +311,25 @@ func _physics_process(delta: float) -> void:
 	# direction (velocity-based, so it also loads ahead when reversing). Unload the rest.
 	var ct := _tile_index(car.x, car.z)
 	var reach := int(ceil(cone_reach / tile_size)) + 1
-	for dj in range(-reach, reach + 1):
-		for di in range(-reach, reach + 1):
-			var tx := ct.x + di
-			var tz := ct.y + dj
-			var off := Vector3(_min.x + (tx + 0.5) * tile_size - car.x, 0.0, _min.y + (tz + 0.5) * tile_size - car.z)
-			var d := off.length()
-			var want := d <= keep_radius
-			if not want and d <= cone_reach and spd > 0.5:
-				want = off.normalized().dot(drive_dir) >= 0.707
-			if want:
-				_ensure_tile(tx, tz)
-	_unload_far(car)
+	# AWAY FROM THE PATCH THIS WALK CAN DO NOTHING: _ensure_tile() returns at once for an index off
+	# the grid, so when every index within `reach` of the car is off it, the (2*reach+1)^2 distance
+	# tests below decide nothing. That is the car's state on the RALLY LOOP, the ASPHALT RING, the
+	# drag strip and all of SHAKEDOWN - everywhere but the centre skid-pad - and it was costing
+	# ~25 us a tick there (measured 2026-11-17). Same for the unload pass with no tile loaded.
+	if ct.x + reach >= 0 and ct.x - reach < _ntiles and ct.y + reach >= 0 and ct.y - reach < _ntiles:
+		for dj in range(-reach, reach + 1):
+			for di in range(-reach, reach + 1):
+				var tx := ct.x + di
+				var tz := ct.y + dj
+				var off := Vector3(_min.x + (tx + 0.5) * tile_size - car.x, 0.0, _min.y + (tz + 0.5) * tile_size - car.z)
+				var d := off.length()
+				var want := d <= keep_radius
+				if not want and d <= cone_reach and spd > 0.5:
+					want = off.normalized().dot(drive_dir) >= 0.707
+				if want:
+					_ensure_tile(tx, tz)
+	if not _tiles.is_empty():
+		_unload_far(car)
 
 	var wheels: Array = vehicle.get_wheels()
 	for w in wheels:

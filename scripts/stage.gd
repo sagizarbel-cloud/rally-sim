@@ -8,6 +8,9 @@ class_name RallyStage
 ## HeightMapShape3D collider + a vertex-coloured mesh (grass off-road, dirt on it).
 
 @export var size := 720.0                # square terrain side (m) - fits the circuit; the drag strip spurs out
+@export var render_tile_m := 180.0       # the ground is DRAWN in square tiles about this size (the collider is one
+                                         # piece). About the reach of the sun's far shadow cascade, so a cascade
+                                         # touches at most four tiles; smaller only buys more draw calls.
 @export var cells := 320                 # grid resolution -> cell = size/cells (~2.25 m)
 @export var hill_height := 10.0          # rolling-hill amplitude (gentler -> less air)
 @export var hill_freq := 0.004           # lower = broader, gentler hills
@@ -234,31 +237,58 @@ func _build() -> void:
 			var hd: float = heights[max(j - 1, 0) * _n + i]
 			var hu: float = heights[min(j + 1, _n - 1) * _n + i]
 			norms[idx] = Vector3(hl - hr, 2.0 * _cs, hd - hu).normalized()
-	var indices := PackedInt32Array()
-	for j in range(cells):
-		for i in range(cells):
-			var a := j * _n + i
-			var b := j * _n + i + 1
-			var c := (j + 1) * _n + i
-			var d := (j + 1) * _n + i + 1
-			indices.append(a); indices.append(b); indices.append(c)   # wound so the top is the front face
-			indices.append(b); indices.append(d); indices.append(c)
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_COLOR] = cols
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true      # Arc E: the colours are authored in sRGB; read as linear they washed out
 	mat.roughness = 1.0
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED   # terrain: render both sides (no see-through slopes)
-	mi.material_override = mat
-	add_child(mi)
+	# THE GROUND IS DRAWN AS TILES, NOT AS ONE MESH. The same vertices, normals, colours and
+	# triangles as before - the tiles only say which triangles go together - so the picture is
+	# unchanged, and the collider below is still the one height map. What changes is what the
+	# renderer can SKIP: one mesh is either all on screen or all off, so the whole map was drawn
+	# in the colour pass and again in every shadow cascade wherever the car was. Measured
+	# 2026-11-17 in chase view: 1.23 M of the frame's 1.30 M triangles were this mesh, 0.97 M of
+	# them in shadow passes that only ever look at the ground near the car.
+	var tiles: int = maxi(1, int(round(size / maxf(render_tile_m, 1.0))))
+	for tj in range(tiles):
+		var j0: int = cells * tj / tiles
+		var j1: int = cells * (tj + 1) / tiles
+		for ti in range(tiles):
+			var i0: int = cells * ti / tiles
+			var i1: int = cells * (ti + 1) / tiles
+			var tw: int = i1 - i0 + 1
+			var th: int = j1 - j0 + 1
+			var tv := PackedVector3Array(); tv.resize(tw * th)
+			var tn := PackedVector3Array(); tn.resize(tw * th)
+			var tc := PackedColorArray(); tc.resize(tw * th)
+			for j in range(th):
+				for i in range(tw):
+					var src: int = (j0 + j) * _n + (i0 + i)
+					var dst: int = j * tw + i
+					tv[dst] = verts[src]
+					tn[dst] = norms[src]
+					tc[dst] = cols[src]
+			var indices := PackedInt32Array()
+			for j in range(th - 1):
+				for i in range(tw - 1):
+					var a := j * tw + i
+					var b := j * tw + i + 1
+					var c := (j + 1) * tw + i
+					var d := (j + 1) * tw + i + 1
+					indices.append(a); indices.append(b); indices.append(c)   # wound so the top is the front face
+					indices.append(b); indices.append(d); indices.append(c)
+			var arrays := []
+			arrays.resize(Mesh.ARRAY_MAX)
+			arrays[Mesh.ARRAY_VERTEX] = tv
+			arrays[Mesh.ARRAY_NORMAL] = tn
+			arrays[Mesh.ARRAY_COLOR] = tc
+			arrays[Mesh.ARRAY_INDEX] = indices
+			var mesh := ArrayMesh.new()
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			var mi := MeshInstance3D.new()
+			mi.mesh = mesh
+			mi.material_override = mat
+			add_child(mi)
 	var shape := HeightMapShape3D.new()
 	shape.map_width = _n
 	shape.map_depth = _n

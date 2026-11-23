@@ -121,6 +121,21 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   the legacy map), `pace_notes` 0.43 in `_process` on every frame on either map, and 1.7 between
   scripts and draw on the legacy map (HUD redraw). The mirror renders the scene a second time.
   Worth a pass before Arc E adds foliage and textures to the same budget.
+- **Trees, and tree shadows, pop in close to the car after a shadow-mode switch** (sagi,
+  2026-11-23, driving 23a7965 on the Mac): after switching LIVE / HYBRID / BAKED, a very few trees
+  "seem to spawn only when really close to the vehicle", and the same happens to more than a few
+  trees' SHADOWS. Not diagnosed. Suspects, in order: the in-place re-bake (`rebake()`, `_bake_gen`)
+  swapping each stale chunk for its re-baked self - a chunk's tree nodes (`TreesShadow`,
+  `TreesFar`, near-LOD trees) may be dropped with the stale mesh and not regrown until the near
+  ring re-scans it; the LIVE shadow map's caster set changing with the mode
+  (`cast_shadow` on the far/shadow MultiMesh); and in BAKED, the sun cache (`sun_cache.gd`) only
+  mirroring a chunk's trees in `_finalise` / `_restore`, so a chunk kept across the switch would
+  have none. Deferred by sagi: fix after the Godot 4.6 migration.
+- **The tunnel's transition point can be driven out of backwards** (sagi, 2026-11-23): on reaching
+  the swap point in the tunnel, the car can turn around, drive back the way it came and fall out
+  of the world. The pad's side walls (2026-11-22, `area_manager.gd _make_portal`) close the sides
+  only. Deferred by sagi: fix after the Godot 4.6 migration. NB the map EDGE stays open by sagi's
+  decision (VOID RESCUE only); this is the tunnel, a different place - ask before walling it.
 
 ---
 
@@ -186,6 +201,14 @@ Sequenced by the user 2026-08-30: **finish Arc D and Arc C's open items, then a 
 then plan this.** (Refined 2026-11-12: the Godot 4.6 migration sits between the bug run and this -
 see "State as of 2026-11-16" above.) Not a plan yet - a captured intent, so it is not lost in chat. Six items, and they
 are NOT one arc's worth of the same kind of work:
+
+**STATUS 2026-11-17 (branch `claude/project-thread-gogg6v`, not yet driven):** E-a started (shader
+noise, wheel lines, forest floor - no textures yet), E-b done for SHAKEDOWN (`stage_forest.gd`,
+spruces streamed with the chunks, solid trunks), E-c done (sky shader with clouds), plus filmic
+tonemapping, haze, an SSAO/glow switch and the sRGB colour fix that was the real cause of the
+washed-out look. The streamer's far field is now a narrow ROAD WINDOW made safe by the forest - see
+CHANGELOG 2026-11-17. Open: the legacy map's ball-on-a-stick trees could become spruces (visual
+only), real textures/normal detail for the ground, and the drive verdict on all of it.
 
 **E-a. Procedural ground texturing.** The chunk mesh already carries a per-vertex EDGE DISTANCE for
 exactly this reason (`StageArea.sample_at()` returns it so the road edge can be thresholded per

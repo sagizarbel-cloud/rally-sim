@@ -578,13 +578,21 @@ func ground_color(x: float, z: float) -> Color:
 	# The colour the player actually SEES there - not the terrain's own colour, because wear.gd
 	# paints the driven line dark and the car lives on that line. The wear fraction is recovered
 	# from the grip the wear node reports against the stage's base grip, so no extra plumbing.
+	return _ground_color_g0(x, z, NAN)
+
+func _ground_color_g0(x: float, z: float, g0_known: float) -> Color:
+	# ground_color() for a caller that ALREADY holds stage.grip_at(x, z) - the per-wheel loop does,
+	# and resolving the same ground twice more to recover a wear fraction was two of the five
+	# ground resolves each wheel paid every tick. Pass NAN to have it looked up here. Same colour to
+	# the last bit either way: g0 is the same call's result, and wear.gd's grip_from_base() applies
+	# the same factor to it that its grip_at() does.
 	var base := Color(0.56, 0.48, 0.34)
 	if stage != null and stage.has_method("_surface_color"):
 		base = stage._surface_color(x, z)
 	var src = car.surface_source if car != null and car.get("surface_source") != null else null
 	if src != null and src != stage and src.has_method("grip_at") and src.get("wear_grip") != null:
-		var g0: float = stage.grip_at(x, z)
-		var g1: float = src.grip_at(x, z)
+		var g0: float = stage.grip_at(x, z) if is_nan(g0_known) else g0_known
+		var g1: float = src.grip_from_base(x, z, g0) if src.has_method("grip_from_base") else src.grip_at(x, z)
 		var wg: float = float(src.wear_grip)
 		if g0 > 0.001 and absf(wg) > 0.001:
 			var wn: float = clampf((g1 / g0 - 1.0) / wg, 0.0, 1.0)
@@ -633,6 +641,8 @@ func _physics_process(delta: float) -> void:
 		var w = wheels[i]
 		if not w.contact:
 			for nm in _slots.keys():
+				if _slot_cur[nm][i] == -1:
+					continue                     # nothing of this layer is emitting; see _emit()
 				for q in _slots[nm][i]:
 					(q as GPUParticles3D).emitting = false
 				_slot_cur[nm][i] = -1
@@ -643,13 +653,29 @@ func _physics_process(delta: float) -> void:
 		# so this is a measured no-op - but a threshold would have started lying the moment D6
 		# drags gravel onto tarmac, which is the whole reason the map exists.
 		var tarmac: bool = stage.ground_map.is_tarmac_at(cp.x, cp.z)
-		var grip: float = stage.grip_at(cp.x, cp.z)      # still the SMOKE POWER scale, not a class
 		var vs: float = slip_speed(w, v)
 		var sa: float = slip_frac(w, v, fz_ref)
+		# THE GROUND IS ONLY ASKED WHAT SOMETHING WILL USE. This loop used to resolve the ground FIVE
+		# times per wheel every tick - tarmac-or-not, grip, the colour, and two more grips inside
+		# ground_color() - whether or not anything was emitting, which is why the four effects cost
+		# over 200 us a tick with the car PARKED (measured 2026-11-17). The dust colour is only read
+		# by a DIRT/DUST PLUME or DIRT/GRAVEL PARTICLE emitter that is actually running, so it is
+		# fetched only when one will be; grip is the ASPHALT SMOKE power scale and the colour's wear
+		# reference, so it is fetched only for those. What reaches each emitter is unchanged.
+		var plume_t: float = 0.0 if tarmac else plume_frac(v, sa)
+		var gravel_t: float = 0.0 if tarmac else gravel_frac(v, sa)
+		var need_col: bool = _will_emit(i, "plume", plume_t, delta) \
+				or _will_emit(i, "gravel", gravel_t, delta, release_gravel)
+		var grip := 0.0                                  # still the SMOKE POWER scale, not a class
+		if tarmac or need_col:
+			grip = stage.grip_at(cp.x, cp.z)
 		# Sampled on BOTH branches: winding a plume down over tarmac used to pass Color.WHITE, which
 		# (being a live uniform) flashed the whole fading cloud white - the reported bug in its
-		# purest form. Dust is the colour of the ground it was lifted off, wherever that is.
-		var col := ground_color(cp.x, cp.z)
+		# purest form. Dust is the colour of the ground it was lifted off, wherever that is. (When
+		# neither dust layer is running the value below is never read by anything.)
+		var col := Color.WHITE
+		if need_col:
+			col = _ground_color_g0(cp.x, cp.z, grip)
 		if tarmac:
 			_emit(i, "plume", 0.0, delta, cp, kick, col, lit, 1.0, 1.0, 1.0)
 			_emit(i, "gravel", 0.0, delta, cp, kick, col.darkened(0.14), lit, gravel_d, 1.0, 1.0, release_gravel)
@@ -665,11 +691,17 @@ func _physics_process(delta: float) -> void:
 			_emit(i, "smoke", 0.0, delta, cp, kick, Color.WHITE, lit, 1.0, 1.0, 1.0)
 			_build[i] = maxf(_build[i] - delta / maxf(smoke_decay_time, 0.05), 0.0)
 			# DIRT/DUST PLUMES
-			_emit(i, "plume", plume_frac(v, sa), delta, cp, kick, col, lit,
+			_emit(i, "plume", plume_t, delta, cp, kick, col, lit,
 					float(_sz["pd"]), float(_sz["pn"]), float(_sz["pr"]))
 			# DIRT/GRAVEL PARTICLES
-			_emit(i, "gravel", gravel_frac(v, sa), delta, cp, kick, col.darkened(0.14), lit,
+			_emit(i, "gravel", gravel_t, delta, cp, kick, col.darkened(0.14), lit,
 					gravel_d, 1.0, 1.0, release_gravel)
+
+func _will_emit(i: int, layer: String, target: float, dt: float, rel: float = -1.0) -> bool:
+	# What _emit() is about to decide for this wheel and layer, without deciding it: the same
+	# smoothing step from the same state, compared against the same floor. Lets the caller skip
+	# fetching inputs that an idle emitter would never read.
+	return _smooth(_sm[layer][i], target, dt, rel) > 0.01
 
 func _emit(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: Vector3, col: Color, lit: Color, diameter: float, density: float, rise_mult: float, rel: float = -1.0) -> void:
 	var arr: Array = _sm[layer]
@@ -680,9 +712,13 @@ func _emit(i: int, layer: String, target: float, dt: float, cp: Vector3, kick: V
 	for g in range(idle.size()):
 		idle[g] = float(idle[g]) + dt
 	if amt <= 0.01:
-		for q in slots:
-			(q as GPUParticles3D).emitting = false
-		_slot_cur[layer][i] = -1
+		# _slot_cur == -1 already means every emitter of this layer and wheel is off (they are built
+		# off, and every path that turns one on records it there), so an idle layer writes nothing.
+		# It used to re-send `emitting = false` to every slot every tick - a RenderingServer call each.
+		if _slot_cur[layer][i] != -1:
+			for q in slots:
+				(q as GPUParticles3D).emitting = false
+			_slot_cur[layer][i] = -1
 		return
 	var gi := _pick_slot(layer, i, col)
 	for g in range(slots.size()):
