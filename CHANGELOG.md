@@ -20,6 +20,27 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-23 (retest clean; [L] / shadow-mode change re-bakes in place - no freeze, no thin ground)
+
+Grep words: *time of day freeze*, *[L] stutter*, *shadow mode switch freeze*, *ground reload*,
+*thin ground after switching*, *map edge*, *VOID RESCUE*.
+
+- **sagi's retest of aef8259, BAKED: no mid-stage fall** in 19 min (1043 s on SHAKEDOWN, 38 s at
+  150+ km/h, longest 10.8 s, top 218 km/h; framelog-2026-11-23T10-43-17.csv). One `VOID RESCUE`,
+  `(949.5, -0.7, -989.9) 80 km/h`: that is 0.3 m past the stage ground's NORTH edge (z1 = -990.2),
+  where sagi was looking for the end of the map - the edge itself is open to the void.
+- **The [L] / shadow-mode switch was the worst thing left.** `rebake()` unloaded every chunk and
+  primed from nothing: freezes of 1.20-1.77 s (182, 442, 497, 1022, 1107 s), and at 140-214 km/h
+  live chunks fell to 7-57 for seconds. **Now it re-bakes IN PLACE**: chunks stay (colliders too),
+  are only marked stale (`_bake_gen`), and are rebuilt nearest-first; `_have()` treats a stale chunk
+  as missing. Headless, BAKED, 170 km/h, three [L] presses: worst frame unchanged (14-24 ms), no
+  holes under the car.
+- **Measured on the way: a low sun halves the baked build rate.** BAKED at MORNING (28 deg sun)
+  holds ~90 live chunks at 170 km/h against ~195 at NOON - longer shadows reach more trees per
+  vertex. The ground under the car stays solid (shell first); it is the far field that thins.
+
+---
+
 ## 2026-11-22, evening (fell through again in BAKED at 150-170 km/h - the car's own ground was queued last; pad sides walled)
 
 Grep words: *fell through the map*, *fell through the ground*, *VOID RESCUE*, *baked shadows*,

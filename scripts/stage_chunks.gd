@@ -775,7 +775,7 @@ func _consider(k: Vector2i, p: Vector3) -> void:
 	if not _in_area(k):
 		return
 	var d := _dist_to_chunk(k, p)
-	var have: int = int(_live[k]["lod"]) if _live.has(k) else 0
+	var have: int = _have(k)
 	var want_lod := _want_lod(k, d, have)
 	if want_lod == 0 or have == want_lod:
 		return
@@ -804,7 +804,7 @@ func _next_job() -> void:
 		_q_at += 1
 		# Re-ask the one question for this one chunk. Nothing but this list's own work touches a
 		# listed chunk between scans, so this only ever skips an entry already satisfied.
-		var have: int = int(_live[k]["lod"]) if _live.has(k) else 0
+		var have: int = _have(k)
 		var want_lod := _want_lod(k, _dist_to_chunk(k, _pq), have)
 		if want_lod == 0 or have == want_lod:
 			continue
@@ -892,6 +892,9 @@ func _unload(k: Vector2i) -> void:
 	var mi: Node = rec["mi"]
 	if not is_instance_valid(mi):
 		return
+	if int(rec.get("gen", _bake_gen)) != _bake_gen:
+		mi.queue_free()           # baked for an old sun or mode: never worth restoring
+		return
 	mi.visible = false
 	var ck := Vector3i(k.x, k.y, int(rec["lod"]))
 	if _cache.has(ck):
@@ -926,7 +929,8 @@ func _start_job(k: Vector2i, lod: int) -> void:
 	var b := PackedFloat32Array(); b.resize(ax * ax)
 	var e := PackedFloat32Array(); e.resize(ax * ax)
 	var m := PackedFloat32Array(); m.resize(ax * ax)     # D6 surface mix, 0 gravel .. 1 sealed
-	_job = {"k": k, "lod": lod, "n": n, "ax": ax, "h": h, "b": b, "e": e, "m": m, "i": 0, "us": 0}
+	_job = {"k": k, "lod": lod, "n": n, "ax": ax, "h": h, "b": b, "e": e, "m": m, "i": 0, "us": 0,
+		"gen": _bake_gen}
 
 func _build_chunk(k: Vector2i, lod: int) -> void:
 	## Synchronous, used ONLY by prime(). Everything after startup goes through the budgeted path.
@@ -1404,17 +1408,33 @@ func set_bake_strength(f: float) -> void:
 	if forest != null and forest.mat_baked != null:
 		forest.mat_baked.set_shader_parameter("bake_strength", f)
 
+## RE-BAKE IN PLACE (2026-11-23). A time-of-day or shadow-mode change used to unload EVERY chunk
+## and prime from nothing: a 1.2-1.8 s freeze each time, then seconds of thin ground - measured on
+## the Mac, [L] at 140-214 km/h dropped live chunks to 7-57, and a VOID RESCUE followed. Now the
+## ground stays where it is, colliders and all; every chunk is only marked STALE (an older
+## `_bake_gen`), and a stale chunk is queued as if it were missing - nearest first, no coarse
+## penalty - so the new light sweeps outward from the car and each chunk is swapped for its
+## re-baked self in one frame. The cache is emptied: everything in it was baked for the old light.
+var _bake_gen := 0
+
+func _have(k: Vector2i) -> int:
+	## The detail a chunk has, for the work list: 0 when absent OR stale (baked for an old light).
+	if not _live.has(k):
+		return 0
+	var rec: Dictionary = _live[k]
+	if int(rec.get("gen", _bake_gen)) != _bake_gen:
+		return 0
+	return int(rec["lod"])
+
 func rebake() -> void:
 	_drain_task()
 	_job = {}
-	for k in _live.keys():
-		_unload(k)
+	_bake_gen += 1
 	for ck in _cache.keys():
 		_evict(ck)
 	_cache_order.clear()
 	_scan_valid = false
 	_win_q = -(1 << 40)
-	_needs_prime = true
 
 func _finalise() -> void:
 	var t0 := Time.get_ticks_usec()
@@ -1514,7 +1534,8 @@ func _finalise() -> void:
 	# Heights are KEPT for full-detail chunks so a collider can be attached or dropped later without
 	# rebuilding the chunk. 33x33 floats is 4.4 kB; rebuilding to gain a collider would be 15 ms.
 	_live[k] = {"mi": mi, "col": null, "lod": lod, "h": heights if lod == 1 else PackedFloat32Array(),
-		"trunks": trunks if lod == 1 else PackedVector4Array(), "tcol": null}
+		"trunks": trunks if lod == 1 else PackedVector4Array(), "tcol": null,
+		"gen": int(_job.get("gen", _bake_gen))}
 	if lod == 1:
 		_sync_collider(k)
 	# The chunk's own collider (if it is in reach) was added just above, in the same frame, so the
