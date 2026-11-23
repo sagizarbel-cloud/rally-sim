@@ -20,6 +20,36 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-23, later (BAKED shadows now match the live ones: a cached sun shadow map; car shadow from the sun)
+
+Grep words: *baked shadows wonky*, *christmas tree shadows*, *shadows stretch at low sun*, *baked
+shadow shape does not match*, *car shadow too small*, *sun cache*, *cached shadow map*.
+
+sagi on BAKED: **"when having an extreme angle- such as on afternoon or other sharp angles, the
+shadows start to stretch into a Christmas tree shape where every cell stretches horizontally to its
+length. they usually don't seem to match the cast on shadow in shape and boundaries at all ... also
+the under shadow for the car is too small"**. Side-by-side shots confirmed: live = long sharp
+stripes, baked = soft blobs in other places. Causes: (1) shade stored only per ground VERTEX (1.4 m
+grid, blended across triangles) - a long thin low-sun shadow became stacked grid bars; (2) trees
+modelled as smooth cones with an invented soft edge, not the mesh the live shadow uses; (3) the car
+got a fixed 2.4 x 4.9 m oval, dark only inside ~1.1 x 2.2 m, straight down whatever the sun.
+
+- **`sun_cache.gd`: a REAL shadow map, drawn once and kept.** An orthographic camera along the sun
+  renders the trees' depth (the same 24-triangle silhouettes the live shadow map uses, sharing the
+  chunks' MultiMesh resources) into its own world: 2048^2 RGBA16F over 320 m (0.16 m/texel), depth
+  split into coarse+fine channels. The baked ground shader compares against it with a 2x2 PCF;
+  beyond the region the per-vertex bake still applies, blended at the edge. Redrawn only when the car
+  is 40 m off centre (centred 1.5 s ahead), when new trees stream in (at most every 0.5 s), or when
+  the sun changes - not every frame like the live map (~2.6 ms/frame). Centre snapped to whole
+  texels so edges do not crawl. Cloud shots: baked now shows the same stripes as live, evening and
+  morning (/mnt/project-files/perf/baked-shadows-before-after.png). **Mac cost not measured yet.**
+- **Car shadow (world.gd `_update_car_shadow`)**: the hull of the body and cabin boxes projected
+  along the sun, as a Decal on the ground layer only (render layer 2 on stage chunks - it used to
+  darken the car itself), cached per 4-degree bucket of car-vs-sun angle; alpha 0.6 x shadow opacity
+  since a decal also darkens ambient light.
+
+---
+
 ## 2026-11-23 (retest clean; [L] / shadow-mode change re-bakes in place - no freeze, no thin ground)
 
 Grep words: *time of day freeze*, *[L] stutter*, *shadow mode switch freeze*, *ground reload*,

@@ -634,7 +634,9 @@ func _update_car_shadow() -> void:
 	_contact.size = Vector3(sz.x, 4.0, sz.y)
 	var p: Vector3 = _car.global_position + right * c.x - fwd * c.y
 	_contact.global_transform = Transform3D(Basis(right, Vector3.UP, -fwd), p + Vector3(0.0, -0.3, 0.0))
-	_contact.modulate = Color(1, 1, 1, 0.92 * _sun.shadow_opacity)
+	# A decal darkens EVERYTHING under it, ambient light included, while a shadow only takes the sun
+	# away - so at full alpha it read darker than the trees' shadows beside it.
+	_contact.modulate = Color(1, 1, 1, 0.6 * _sun.shadow_opacity)
 
 func _draw_car_shadow(u: Vector2) -> Dictionary:
 	var hull := _car_shadow_hull(u)

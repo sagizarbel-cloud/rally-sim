@@ -247,7 +247,12 @@ uniform float bake_strength = 1.0;   // the sun's shadow_opacity: night shadows 
 void light() {
 	float a = ATTENUATION;
 	if (LIGHT_IS_DIRECTIONAL) {
-		a = min(a, mix(1.0, sunvis, bake_strength));
+		// Near the car, the cached sun shadow map (SunCache): the trees' real silhouettes, sharp.
+		// Beyond it, the per-vertex bake, blended in across the cache's last few percent.
+		float ndl0 = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
+		vec2 sc = sc_vis(wpos, 0.35 * (1.0 - ndl0) / max(ndl0, 0.2));
+		float sv = mix(sunvis, sc.x, sc.y);
+		a = min(a, mix(1.0, sv, bake_strength));
 	}
 	// Burley diffuse, as Godot's own default lighting computes it (scene_forward_lights_inc), so
 	// the baked modes light a surface exactly as the live mode does. Plain Lambert lost most of a low
@@ -397,9 +402,15 @@ func _ready() -> void:
 	var shb := Shader.new()
 	shb.code = EDGE_SHADER.replace("varying vec3 wpos;", "varying vec3 wpos;\nvarying float sunvis;\nvarying float bao;") \
 			.replace("\tmix_t = UV.y;", "\tmix_t = UV.y;\n\tsunvis = COLOR.a;\n\tbao = COLOR.r;") \
-			.replace("\tSPECULAR = 0.35;\n}", "\tSPECULAR = 0.35;\n\tAO = bao;\n\tAO_LIGHT_AFFECT = 0.0;\n}") + BAKED_LIGHT
+			.replace("\tSPECULAR = 0.35;\n}", "\tSPECULAR = 0.35;\n\tAO = bao;\n\tAO_LIGHT_AFFECT = 0.0;\n}") \
+			+ SunCache.GROUND_GLSL + BAKED_LIGHT
 	_mat_baked = ShaderMaterial.new()
 	_mat_baked.shader = shb
+	sun_cache = SunCache.new()
+	sun_cache.name = "SunCache"
+	sun_cache.chunks = self
+	sun_cache.material = _mat_baked
+	add_child(sun_cache)
 	# Passed as COLOR, not Vector3: a `source_color` uniform is converted from sRGB only when it is
 	# given a Color. A Vector3 goes in raw - the second half of why the stage was washed out.
 	_set_u("grass_col", area.grass_color)
@@ -641,6 +652,8 @@ func prime(p: Vector3) -> void:
 
 func update(p: Vector3) -> void:
 	## One resumable job at a time, nearest-first, within a hard per-tick budget.
+	if sun_cache != null and _have_prev:
+		sun_cache.update(p, ((p - _prev_p) / maxf(_tick, 1e-4)).limit_length(80.0), _tick)
 	if _backdrop != null:
 		# The backdrop is 1.6x the area, so it reaches 800 m past the stage's ground on every side -
 		# which puts its northern strip over the legacy map's south half, at SHAKEDOWN's elevation,
@@ -831,6 +844,8 @@ func _restore(k: Vector2i, lod: int) -> bool:
 	mi.visible = true
 	rec["col"] = null
 	_live[k] = rec
+	if sun_cache != null:
+		sun_cache.add(k, mi)
 	_cache_hits += 1
 	_peak_chunks = maxi(_peak_chunks, _live.size())
 	if lod == 1:
@@ -883,6 +898,8 @@ func _unload(k: Vector2i) -> void:
 	## shape is cheap to rebuild from the heights we keep, and shapes are not free to hold - but the
 	## mesh is only hidden, so its GPU upload survives.
 	var rec: Dictionary = _live[k]
+	if sun_cache != null:
+		sun_cache.remove(k)
 	var col: Node = rec["col"]
 	if col != null and is_instance_valid(col):
 		col.queue_free()
@@ -1399,6 +1416,9 @@ func set_shadow_bake(mode: int, dir: Vector3) -> void:
 	var changed: bool = mode != shadow_mode or (mode > 0 and d.distance_to(sun_dir) > 1e-3)
 	sun_dir = d
 	shadow_mode = mode
+	if sun_cache != null:
+		sun_cache.set_sun(d)
+		sun_cache.set_enabled(mode == 2)
 	if changed:
 		rebake()
 
@@ -1416,6 +1436,8 @@ func set_bake_strength(f: float) -> void:
 ## penalty - so the new light sweeps outward from the car and each chunk is swapped for its
 ## re-baked self in one frame. The cache is emptied: everything in it was baked for the old light.
 var _bake_gen := 0
+const SunCache := preload("res://scripts/sun_cache.gd")
+var sun_cache                             ## SunCache: the cached sun shadow map near the car (BAKED)
 const GROUND_LAYER := 2                   ## render layer bit for "stage ground" (decal targets)
 
 func _have(k: Vector2i) -> int:
@@ -1538,6 +1560,8 @@ func _finalise() -> void:
 	_live[k] = {"mi": mi, "col": null, "lod": lod, "h": heights if lod == 1 else PackedFloat32Array(),
 		"trunks": trunks if lod == 1 else PackedVector4Array(), "tcol": null,
 		"gen": int(_job.get("gen", _bake_gen))}
+	if sun_cache != null:
+		sun_cache.add(k, mi)
 	if lod == 1:
 		_sync_collider(k)
 	# The chunk's own collider (if it is in reach) was added just above, in the same frame, so the
