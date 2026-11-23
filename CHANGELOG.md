@@ -20,6 +20,29 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-23, evening (BAKED car shadow too dark, darker again over tree shade - now takes only the sun)
+
+Grep words: *car shadow too dark*, *car shadow darker than the trees' shadows*, *double-dark overlap*,
+*decal shadow*, *contact shadow*.
+
+sagi on the decal car shadow from the entry below: "on the car shadow tho its much darker then the
+other shadows and also make an even darker overlap- an overlap should be mostly where the global
+illumination (sky diffusing) is hidden by the car and not on every shadow". Both are what a Decal
+does: it blends black over the ground's colour, so it takes the SKY light away as well as the sun
+(darker than a real shadow, which only loses the sun), and over a tree shadow it darkens ground that
+has no sun left to lose.
+
+Fix: no decal. The BAKED ground shader (`StageChunks.CAR_GLSL`) computes the car's shadow itself.
+Each ground pixel near the car (within 30 m) casts a ray toward the sun through the car's body box
+and cabin box, in the car's own frame (`car_inv`, set each frame by `world.gd _update_car_shadow()`),
+and loses the sun where the ray hits: `sv = min(tree shadow, car_sun)`. Same path as the trees'
+shadows, so the same darkness, and min() means an overlap is no darker than either shadow. Sky
+light is dimmed only right under the car (`car_ao`: a soft footprint, 45% at most, fading out within
+~1.2 m below the body), written to AO so it affects ambient light only. Cloud stills at three times of
+day: the car's shadow has the same tone as the trees' beside it, overlaps show no extra darkening,
+and at a low evening sun it is thrown ahead along the road as in LIVE. Cost: two box tests per
+ground pixel within 30 m of the car; the decal pass is gone. Not yet checked on the Mac.
+
 ## 2026-11-23, later (BAKED shadows now match the live ones: a cached sun shadow map; car shadow from the sun)
 
 Grep words: *baked shadows wonky*, *christmas tree shadows*, *shadows stretch at low sun*, *baked

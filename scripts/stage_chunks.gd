@@ -242,6 +242,46 @@ void fragment() {
 ## The light() function of the baked-shadow ground material: Lambert diffuse and a soft highlight,
 ## with the sun's visibility the DARKER of the live shadow (ATTENUATION, 1 where there is none) and
 ## the baked one. Ambient light - sky and fog - is the engine's, darkened by the baked AO.
+## The car's shadow in BAKED mode (world.gd _update_car_shadow): a ray toward the sun through the
+## car's body and cabin boxes, in the car's own frame (origin at the body box's centre, -Z forward),
+## and a soft sky occlusion under the footprint. Box sizes from vehicle_m2.gd: body_size 1.8 x 0.55 x
+## 4.2, roof top 1.03 above the origin over the cabin.
+const CAR_GLSL := """
+uniform float car_on = 0.0;
+uniform mat4 car_inv;
+uniform vec3 sun_toward = vec3(0.0, 1.0, 0.0);
+float car_box(vec3 o, vec3 d, vec3 lo, vec3 hi) {
+	// slab test; returns how far the ray passes INSIDE the box (negative: how far it misses by)
+	vec3 inv = 1.0 / (d + vec3(1e-6));
+	vec3 t0 = (lo - o) * inv;
+	vec3 t1 = (hi - o) * inv;
+	vec3 tn = min(t0, t1);
+	vec3 tf = max(t0, t1);
+	float tnear = max(max(tn.x, tn.y), max(tn.z, 0.0));
+	float tfar = min(min(tf.x, tf.y), tf.z);
+	return tfar - tnear;
+}
+float car_sun(vec3 p) {
+	if (car_on < 0.5) { return 1.0; }
+	vec3 o = (car_inv * vec4(p, 1.0)).xyz;
+	if (dot(o.xz, o.xz) > 900.0) { return 1.0; }       // > 30 m from the car: cannot be its shadow
+	vec3 d = normalize((car_inv * vec4(sun_toward, 0.0)).xyz);
+	float inside = max(car_box(o, d, vec3(-0.9, -0.3, -2.1), vec3(0.9, 0.3, 2.1)),
+		car_box(o, d, vec3(-0.7, 0.3, -0.65), vec3(0.7, 1.03, 0.55)));
+	// a few centimetres of soft edge, like the live map's filtered edge at this range
+	return 1.0 - smoothstep(-0.03, 0.12, inside);
+}
+float car_ao(vec3 p) {
+	if (car_on < 0.5) { return 1.0; }
+	vec3 o = (car_inv * vec4(p, 1.0)).xyz;
+	vec2 q = abs(o.xz) - vec2(0.9, 2.1);
+	float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);   // metres outside the footprint
+	float under = 1.0 - smoothstep(-0.5, 0.6, sd);
+	float near = 1.0 - smoothstep(0.0, 1.2, o.y + 0.85);       // only the ground just below it
+	return 1.0 - 0.55 * under * near;
+}
+"""
+
 const BAKED_LIGHT := """
 uniform float bake_strength = 1.0;   // the sun's shadow_opacity: night shadows are softer
 void light() {
@@ -251,7 +291,7 @@ void light() {
 		// Beyond it, the per-vertex bake, blended in across the cache's last few percent.
 		float ndl0 = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
 		vec2 sc = sc_vis(wpos, 0.35 * (1.0 - ndl0) / max(ndl0, 0.2));
-		float sv = mix(sunvis, sc.x, sc.y);
+		float sv = min(mix(sunvis, sc.x, sc.y), car_sun(wpos));
 		a = min(a, mix(1.0, sv, bake_strength));
 	}
 	// Burley diffuse, as Godot's own default lighting computes it (scene_forward_lights_inc), so
@@ -402,7 +442,8 @@ func _ready() -> void:
 	var shb := Shader.new()
 	shb.code = EDGE_SHADER.replace("varying vec3 wpos;", "varying vec3 wpos;\nvarying float sunvis;\nvarying float bao;") \
 			.replace("\tmix_t = UV.y;", "\tmix_t = UV.y;\n\tsunvis = COLOR.a;\n\tbao = COLOR.r;") \
-			.replace("\tSPECULAR = 0.35;\n}", "\tSPECULAR = 0.35;\n\tAO = bao;\n\tAO_LIGHT_AFFECT = 0.0;\n}") \
+			.replace("\tSPECULAR = 0.35;\n}", "\tSPECULAR = 0.35;\n\tAO = bao * car_ao(wpos);\n\tAO_LIGHT_AFFECT = 0.0;\n}") \
+			.replace("void fragment() {", CAR_GLSL + "void fragment() {") \
 			+ SunCache.GROUND_GLSL + BAKED_LIGHT
 	_mat_baked = ShaderMaterial.new()
 	_mat_baked.shader = shb
@@ -1419,6 +1460,8 @@ func set_shadow_bake(mode: int, dir: Vector3) -> void:
 	if sun_cache != null:
 		sun_cache.set_sun(d)
 		sun_cache.set_enabled(mode == 2)
+	if _mat_baked != null:
+		_mat_baked.set_shader_parameter("sun_toward", d)
 	if changed:
 		rebake()
 
