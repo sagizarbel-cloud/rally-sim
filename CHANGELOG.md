@@ -20,6 +20,57 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-23, night (ENGINE: Godot 4.4 -> 4.6.3 - measured; the car did not move, the sky light did)
+
+Grep words: *godot 4.6*, *engine upgrade*, *migration*, *looks brighter after the upgrade*, *sky
+ambient brighter*, *lap times changed after upgrade*, *baselines*.
+
+sagi: "before fixing these i want to migrate the build to godot 4.6". PR #4 merged first (sagi's
+choice), the move is its own branch. Plan: `docs/PROMPT-godot-46-migration.md` (from the Mac's
+"before PR4 drive" stash, not committed). Installed on the Mac BESIDE 4.4:
+`/Applications/Godot_4.6.3.app` (official universal build, SHA-512 matches the release sums,
+notarised, Gatekeeper accepts it). `check.sh` now looks for the 4.6.3 app first.
+
+**How it was measured.** `tools/baseline/` (new): `capture.gd` runs one scripted test per process,
+headless at a fixed 120 Hz, unchanged on either engine; `run.sh` runs the set with one binary;
+`compare.py` diffs two result directories. Tests: a standing-start drag run with 25 s of coast-down,
+the pogo statistic at 198 / 299 / 468 / 489.6 km/h (spun-up wheels, neutral, 4 s each), a constant-
+steer constant-throttle circle on the drag strip's asphalt runoff pad (r 95 m), three laps of each
+circuit behind a pure-pursuit harness, SHAKEDOWN streamer counts on arrival and after 60 s, and the
+golden ground lattice. **4.4 repeats itself bit for bit** (cloud: all eight; Mac: four re-run), so
+every difference below is the engine. Summaries: `docs/baselines-4.4/`, `docs/baselines-4.6.3/`.
+
+| quantity (Mac, M1) | 4.4 | 4.6.3 |
+|---|---|---|
+| ground lattice sha256 | 80bffdd150893337... | **identical** |
+| 0-100 / 0-160 / 0-200 km/h | 5.19 / 10.50 / 17.68 s | identical |
+| 402 m / 1000 m | 13.40 / 24.08 s | identical (traces part at 9.5 s, by 3 mm) |
+| km/h after 30 s; after 25 s coast | 226.25; 98.84 | +0.0001; -0.0001 |
+| pogo % ticks < 15% static load, 198 / 299 / 468 / 489.6 | 0 / 0 / 0.83 / 1.04 | identical |
+| skid pad: km/h, yaw rate after 30 s | 64.37, 0.5496 rad/s | 64.24, 0.5466 (paths part at 3.7 s; 8.7 m apart at 30 s) |
+| DIRT CIRCLE laps | 20.108 / 20.100 / 20.100 | identical |
+| RALLY LOOP laps | 73.267 / 73.217 / 73.200 | 73.267 / 73.233 / 73.192 |
+| ASPHALT RING laps | 54.742 / 54.225 / 54.242 | 54.725 / 54.275 / 54.283 |
+| SHAKEDOWN streamer: live/built/colliders, arrival and after 60 s | 139/144/16, 184/586/24 | identical |
+
+So: straight-line physics and the ground are the same to the millimetre; turning drifts by a few
+hundredths of a second a lap and a few metres over 30 s of circling - small, but real, and it starts
+at the spawn settle on the two hilly circuits. The cloud (Linux x86) gives the same picture (its 4.4
+lap numbers differ from the Mac's by up to 0.06 s: baselines are per platform). The pogo reference
+of 2026-08-13 (4% at 468 km/h) was a different method; these are the new reference.
+
+**The look moved: lit ground about 5-10% brighter on 4.6.3, sky itself unchanged** (cloud stills,
+SHAKEDOWN, chase view at 6 m, noon). Isolated by switching one term off at a time on both engines:
+the sun's direct light and its shadows are the same, a flat ambient COLOUR is the same, and a plain
+one-colour sky gives the same ground - the difference is how 4.6 turns OUR SKY's gradient and
+clouds into ambient light (sky ambient on a shaded patch of grass ~+20% in linear terms). Not the
+glow change (glow is off unless gfx_high), not fog, not the sky's sun disc, not the sky-reflection
+roughness-layers default (8 -> 7; forcing 8 changes nothing). Left as the engine draws it; to restore
+the 4.4 look, lower `ambient_light_sky_contribution` - sagi's call on the drive.
+
+Not checked yet: the GPU bench on 4.4 vs 4.6.3 (takes over the screen), the drive checklist in the
+plan, and the DualShock 4 on 4.6.
+
 ## 2026-11-23, later still (two bugs logged, not fixed: trees pop in after a shadow-mode switch; tunnel exit backwards)
 
 Grep words: *trees spawn close to the car*, *trees pop in*, *tree shadows pop in*, *after switching
