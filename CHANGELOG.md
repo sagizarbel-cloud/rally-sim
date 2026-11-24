@@ -20,6 +20,33 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-24, evening (ENGINE: fixed bench re-run - 4.6.3 really is ~1.5 ms / ~10% slower per frame)
+
+Grep words: *4.6 slower*, *fps dropped after the upgrade*, *bench re-run*, *per-pixel cost 4.6*.
+
+Re-run with the wall-clock bench (4e4301d): vsync_mode=0 and max_fps=0 confirmed on both, no more
+pile-up at 16.67 ms. 4.4 from /tmp/rs-bl44 (0e751f1 + the new bench.gd), 4.6.3 from /tmp/rs-bl46
+(4e4301d), 5 min idle between, Mac kept awake; drift +0.07 / +0.13 ms. Same triangles and draws.
+
+| row (2880x1800 unless noted) | 4.4 median (p5 / p95) | 4.6.3 median (p5 / p95) | change |
+|---|---|---|---|
+| baseline | 14.98 (11.99 / 17.97) - 66.8 fps | 16.45 (13.12 / 20.28) - 60.5 fps | +1.47 |
+| no sun shadows | 12.27 | 13.60 | +1.33 |
+| no trees at all | 12.71 | 14.42 | +1.71 |
+| no fog | 14.18 | 15.19 | +1.01 |
+| + SSAO | 18.14 | 19.93 | +1.79 |
+| + glow | 17.65 | 19.43 | +1.78 |
+| HYBRID | 15.49 | 17.40 | +1.91 |
+| BAKED | 12.83 | 14.64 | +1.81 |
+| 3D at 1600 lines | 12.76 | 13.96 | +1.20 |
+| 3D at 1080 lines | 8.05 (124.0 fps) | 8.40 (118.4 fps) | +0.35 |
+
+**The extra cost scales with the number of pixels** (+0.35 ms at 1080 lines, +1.20 at 1600, +1.47
+at 1800) and barely with the scene (shadows off or trees off move it by a few tenths): 4.6.3 spends
+~10% more per pixel on this M1, somewhere in the per-pixel path. Relative costs keep their order
+(shadows -2.8, trees -2.0..-2.3, SSAO +3.2..+3.5, glow +2.7..+3.0, BAKED -1.8..-2.2). Physics: see
+2026-11-23, night - tiny drift only. Not yet known WHICH per-pixel stage grew.
+
 ## 2026-11-24 (ENGINE: GPU bench 4.4 vs 4.6.3 - 4.6.3 draws ~1.4-1.9 ms slower; the bench's own clock was snapped)
 
 Grep words: *4.6 slower*, *fps dropped after the upgrade*, *16.67 ms*, *bench stuck at 60 fps*,
