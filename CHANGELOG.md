@@ -20,6 +20,39 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-24 (ENGINE: GPU bench 4.4 vs 4.6.3 - 4.6.3 draws ~1.4-1.9 ms slower; the bench's own clock was snapped)
+
+Grep words: *4.6 slower*, *fps dropped after the upgrade*, *16.67 ms*, *bench stuck at 60 fps*,
+*delta smoothing*, *first launch takes forever*.
+
+Same code (0e751f1 on 4.4, cfdffaa on 4.6.3 - only the project flag differs), Mac M1, fullscreen
+2880x1800, noon, uncapped, both runs cool (drift -0.13 / +0.00 ms). Both engines: "Metal 3.2 -
+Forward+ - Apple M1 (Apple7)", same triangles and draw calls (369k / 481 at baseline).
+
+| row | 4.4 median | 4.6.3 median |
+|---|---|---|
+| baseline | 15.23 ms (65.6 fps) | 16.67 (60.1) |
+| no sun shadows | 12.44 | 13.89 |
+| no trees at all | 12.88 | 14.47 |
+| BAKED shadows | 12.88 | 14.81 |
+| HYBRID shadows | 15.62 | 17.42 |
+| + SSAO | 18.12 | 20.00 |
+| + glow | 17.71 | 19.49 |
+| 3D at 1080 lines | 8.07 (123.9 fps) | 8.33 (118.6) |
+
+**The 4.6.3 medians sat on exactly 16.67 ms on six rows** (all three baselines among them), i.e. on
+the 60 Hz panel's refresh, while 4.4's moved freely (15.23 / 15.10 / 15.15). The bench timed frames
+with `delta`, which Godot SMOOTHS (application/run/delta_smoothing, default on) by snapping it to the
+refresh period - so those rows cannot say what the frame really cost. **Rows slower than one refresh
+cannot be inflated by that, and they show 4.6.3 1.3-1.9 ms slower (SSAO +1.88, glow +1.78, HYBRID
++1.80): that part of the regression is real.** Fix: `bench.gd` now times frames from the wall clock
+(`Time.get_ticks_usec()` between frames), re-asks for vsync off after the fullscreen switch, prints
+the vsync mode it ended with, and adds p5 per row. Re-run both engines with it before deciding.
+
+Also: the first 4.6.3 bench ran 42 min without finishing (log: "Shader cache miss"); the re-run took
+410 s - expect a long first start on 4.6. 4.6.3 warns "Image format RGBFloat not supported by
+hardware, converting to RGBAFloat" 42 times from `effects.gd _curve_tex` (harmless).
+
 ## 2026-11-23, night (ENGINE: Godot 4.4 -> 4.6.3 - measured; the car did not move, the sky light did)
 
 Grep words: *godot 4.6*, *engine upgrade*, *migration*, *looks brighter after the upgrade*, *sky
