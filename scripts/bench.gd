@@ -59,6 +59,12 @@ func _ready() -> void:
 	_vp_rid = get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(_vp_rid, true)
 	_build_configs()
+	# --bench-rows=a,b keeps only the rows whose names start with one of the given prefixes (plus
+	# their order): short A/B runs of a few rows, e.g. engine settings that need a restart
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--bench-rows="):
+			var keep: Array = Array(a.substr(13).split(","))
+			_configs = _configs.filter(func(c): return keep.any(func(k): return str(c[0]).begins_with(str(k))))
 
 func _build_configs() -> void:
 	var nop := func(): pass
@@ -96,6 +102,15 @@ func _build_configs() -> void:
 		["plain sky (Godot's built-in)",
 			func(): _swap_sky(true),
 			func(): _swap_sky(false)],
+		# ENGINE-COST diagnostics (2026-11-24): Godot 4.6.3 drew ~1.5 ms more per frame than 4.4 on
+		# the same scene, growing with the pixel count - these switch off per-pixel stages one at a
+		# time so the two engines can be compared stage by stage.
+		["tonemap linear (diag)",
+			func(): world._env.tonemap_mode = Environment.TONE_MAPPER_LINEAR,
+			func(): world._env.tonemap_mode = Environment.TONE_MAPPER_FILMIC],
+		["no sky reflections (diag)",
+			func(): world._env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED,
+			func(): world._env.reflected_light_source = Environment.REFLECTION_SOURCE_BG],
 		["no fog",
 			func(): world._env.fog_enabled = false,
 			func(): world._env.fog_enabled = true],
