@@ -20,6 +20,35 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-26 (ENGINE: 4.6.3's extra ~1.5 ms is a flat renderer base cost, not any feature we can switch)
+
+Grep words: *4.6 slower*, *specular occlusion*, *tonemap cost*, *sky reflections cost*, *per-frame base cost 4.6*.
+
+Three wall-clock bench runs on the M1 at 2880x1800 (vsync_mode=0, max_fps=0), A -> B -> C with 3 min
+idle between, under caffeinate: **A** 4.4 (/tmp/rs-bl44), **B** 4.6.3 (/tmp/rs-bl46, 7db822a),
+**C** 4.6.3 with 4.6's new default `rendering/reflections/specular_occlusion/enabled` turned off
+(temporary override.cfg, deleted afterwards). Heat drift +0.01 / +0.16 / +0.15 ms. Medians in ms:
+
+| row | A: 4.4 | B: 4.6.3 | C: 4.6.3, spec. occl. off | B - A | C - B |
+|---|---|---|---|---|---|
+| baseline | 15.01 | 16.46 | 16.38 | +1.45 | -0.08 |
+| no sun shadows | 12.42 | 13.67 | 13.59 | +1.25 | -0.08 |
+| no trees at all | 12.62 | 14.42 | 14.36 | +1.80 | -0.06 |
+| plain sky (Godot's built-in) | 14.73 | 16.16 | 16.13 | +1.43 | -0.03 |
+| tonemap linear (diag) | 15.08 | 16.66 | 16.51 | +1.58 | -0.15 |
+| no sky reflections (diag) | 14.44 | 15.78 | 15.71 | +1.34 | -0.07 |
+| no fog | 14.17 | 15.21 | 15.08 | +1.04 | -0.13 |
+| baseline (heat check) | 15.02 | 16.62 | 16.53 | +1.60 | -0.09 |
+| baseline (after re-bakes) | 15.01 | 16.62 | 16.47 | +1.61 | -0.15 |
+
+**Ruled out:** specular occlusion (off saves 0.03-0.15 ms, noise), tonemap (linear moves it +0.07 on
+4.4, +0.20 on 4.6.3), sky reflections (save 0.57 on 4.4, 0.68 on 4.6.3), and the sky, fog, sun
+shadows and trees, which each cost the same on both engines. **The 4.6.3 gap survives every row**
+(+1.04 to +1.80 ms), so it is a base cost every 4.6.3 frame pays in its Metal renderer (driver
+path, depth prepass, clustering or post passes), and it still scales with pixels (2026-11-24,
+evening). The bench cannot isolate it further; a one-frame Xcode Metal capture / Instruments
+Metal System Trace on each engine would show which pass grew.
+
 ## 2026-11-24, evening (ENGINE: fixed bench re-run - 4.6.3 really is ~1.5 ms / ~10% slower per frame)
 
 Grep words: *4.6 slower*, *fps dropped after the upgrade*, *bench re-run*, *per-pixel cost 4.6*.
