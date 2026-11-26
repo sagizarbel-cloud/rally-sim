@@ -337,23 +337,50 @@ func attach(mi: Node3D, g: Dictionary, lod: int) -> void:
 		var near := instances(xf, g["tint"], mesh_near, false, vis)
 		near.name = "TreesNear"
 		near.visibility_range_end = detail_m
-		near.visibility_range_end_margin = 10.0
 		mi.add_child(near)
 		var shadow := instances(xf, g["tint"], mesh_far, true)
 		shadow.name = "TreesShadow"
 		shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 		shadow.visibility_range_end = detail_m
-		shadow.visibility_range_end_margin = 10.0
 		mi.add_child(shadow)
 		var far := instances(xf, g["tint"], mesh_far, false, vis)
 		far.name = "TreesFar"
 		far.visibility_range_begin = detail_m
-		far.visibility_range_begin_margin = 10.0
 		mi.add_child(far)
+		# Born with NO margin, given it a few frames later - see settle() for why.
+		_fresh.append([Engine.get_frames_drawn(), near, shadow, far])
 	else:
 		var far2 := instances(xf, g["tint"], mesh_far, false, g.get("vis", PackedFloat32Array()))
 		far2.name = "TreesFar"
 		mi.add_child(far2)
+
+## THE NEAR/FAR SWAP'S DEAD BAND (fixed 2026-11-26). The near trees end and the silhouettes begin
+## at `detail_m`, each with a SWAP_MARGIN of hysteresis so a camera hovering at the line does not
+## flicker between them. But Godot's hysteresis (RendererSceneCull::_visibility_range_check) keys off
+## each instance's own last state, and a NEW instance starts as "not visible": the near set then
+## needs d < detail_m - margin to appear and the silhouettes d > detail_m + margin. A chunk BORN with
+## its trees 70-90 m from the camera drew neither - no trees and no tree shadows - until the car came
+## within 70 m. Streaming rarely builds a chunk there (it builds them out at r_detail), but a
+## shadow-mode or time-of-day switch re-bakes every chunk around a parked car at once: sagi's "trees
+## (very few) sometime seem to spawn only when really close to the vehicle", and "the same for some
+## random shadows of the trees (more then a few)". MEASURED (cloud, 640x360): 4 chunks in that band
+## at a rebake, 669 -> 666 objects drawn. So every new chunk's sets are born with no margin - each
+## draws exactly on its own side of detail_m, the first frame - and get the margin once the renderer
+## has culled them, by which time they carry a real visible/hidden state for it to hold.
+const SWAP_MARGIN := 10.0
+const SWAP_SETTLE_FRAMES := 3
+var _fresh: Array = []                   ## [frame born, near, shadow, far] awaiting their margin
+
+func settle() -> void:
+	## StageChunks.update() calls this every tick; it is a no-op unless chunks were just built.
+	var now: int = Engine.get_frames_drawn()
+	while not _fresh.is_empty() and now - int(_fresh[0][0]) >= SWAP_SETTLE_FRAMES:
+		var e: Array = _fresh.pop_front()
+		for n in [1, 2]:
+			if is_instance_valid(e[n]):
+				(e[n] as GeometryInstance3D).visibility_range_end_margin = SWAP_MARGIN
+		if is_instance_valid(e[3]):
+			(e[3] as GeometryInstance3D).visibility_range_begin_margin = SWAP_MARGIN
 
 func trunk_body(trunks: PackedVector4Array) -> StaticBody3D:
 	## One static body per chunk holding all its trunks, built complete BEFORE it enters the tree so

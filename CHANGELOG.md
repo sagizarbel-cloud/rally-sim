@@ -20,6 +20,33 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-26, later (FIX: trees and tree shadows popping in near the car after a shadow-mode switch)
+
+Grep words: *trees spawn close to the car*, *trees pop in*, *tree shadows pop in*, *after switching
+shadow mode*, *missing trees after time of day change*, *visibility range dead band*, *70-90 m*.
+
+The bug logged 2026-11-23 ("the trees (very few) sometime seem to spawn only when really close to
+the vehicle ... the same for some random shadows of the trees (more then a few)"). Not the re-bake
+dropping trees: a headless probe of every live chunk across LIVE -> HYBRID -> BAKED -> LIVE found
+every chunk with trees still carrying its tree nodes, and no full-detail chunk made coarser.
+
+**Cause: the near/far swap's hysteresis has a dead band for NEW trees.** A full-detail chunk carries
+`TreesNear` and `TreesShadow` up to `detail_m` (80 m) and `TreesFar` (silhouettes) beyond it, each
+with a 10 m margin. Godot (`RendererSceneCull::_visibility_range_check`, read in the 4.4 source)
+applies the margin against each instance's OWN last state, and a new instance starts as hidden - so
+a new near set needs the camera within 70 m and a new silhouette set needs it beyond 90 m. A chunk
+born with its trees 70-90 m away drew no trees and cast no tree shadows until the car came within
+70 m. Streaming builds chunks out at `r_detail` (155-230 m), so it almost never happens while
+driving; a re-bake (shadow mode or time of day) rebuilds every chunk around the car at once, which
+puts a ring of them there.
+
+**Fix** (`stage_forest.gd attach()` / `settle()`): a new chunk's three tree sets are born with NO
+margin - each draws on its own side of 80 m from the first frame - and get the 10 m margin three
+drawn frames later, once they hold a real state for it to keep. The anti-flicker hysteresis is
+unchanged after that. MEASURED (cloud, lavapipe, 640x360, parked 40 m into SHAKEDOWN, rebake): 4
+chunks had trees in the band; objects drawn 669 streamed-in vs **666 after the re-bake before the
+fix, 669 after it**. Awaiting sagi's drive verdict.
+
 ## 2026-11-26 (ENGINE: 4.6.3's extra ~1.5 ms is a flat renderer base cost, not any feature we can switch)
 
 Grep words: *4.6 slower*, *specular occlusion*, *tonemap cost*, *sky reflections cost*, *per-frame base cost 4.6*.

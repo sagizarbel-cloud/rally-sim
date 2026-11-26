@@ -122,15 +122,11 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   scripts and draw on the legacy map (HUD redraw). The mirror renders the scene a second time.
   Worth a pass before Arc E adds foliage and textures to the same budget.
 - **Trees, and tree shadows, pop in close to the car after a shadow-mode switch** (sagi,
-  2026-11-23, driving 23a7965 on the Mac): after switching LIVE / HYBRID / BAKED, a very few trees
-  "seem to spawn only when really close to the vehicle", and the same happens to more than a few
-  trees' SHADOWS. Not diagnosed. Suspects, in order: the in-place re-bake (`rebake()`, `_bake_gen`)
-  swapping each stale chunk for its re-baked self - a chunk's tree nodes (`TreesShadow`,
-  `TreesFar`, near-LOD trees) may be dropped with the stale mesh and not regrown until the near
-  ring re-scans it; the LIVE shadow map's caster set changing with the mode
-  (`cast_shadow` on the far/shadow MultiMesh); and in BAKED, the sun cache (`sun_cache.gd`) only
-  mirroring a chunk's trees in `_finalise` / `_restore`, so a chunk kept across the switch would
-  have none. Deferred by sagi: fix after the Godot 4.6 migration.
+  2026-11-23) - **FIXED 2026-11-26, awaiting the drive verdict.** Cause: the near/far tree swap's
+  10 m hysteresis margin gave freshly built trees a dead band 70-90 m from the camera where neither
+  the near model, the silhouette nor the shadow silhouette drew (Godot starts a new instance as
+  "hidden"); a re-bake builds every chunk around a parked car at once. New chunks' tree sets are now
+  born with no margin and given it a few frames later (`StageForest.settle()`). CHANGELOG 2026-11-26.
 - **The tunnel's transition point can be driven out of backwards** (sagi, 2026-11-23): on reaching
   the swap point in the tunnel, the car can turn around, drive back the way it came and fall out
   of the world. The pad's side walls (2026-11-22, `area_manager.gd _make_portal`) close the sides
