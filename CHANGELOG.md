@@ -20,6 +20,27 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-26, later still (FIX: turning round at the tunnel's transition point fell out of the world)
+
+Grep words: *turn around in the tunnel*, *fell out of the tunnel*, *drive back through the swap*,
+*reverse in the tunnel*, *tunnel open end*, *one-way gate*.
+
+The bug logged 2026-11-23 ("when reaching the transition point of the tunnel, the user can just
+circle back and fall out of it"). **Cause:** the swap gate (400 m into each 800 m tube) was ONE-WAY.
+After a swap `_armed` stayed false until the car left every tube, so a car that turned round - or
+simply reversed - at the arrival gate drove on into the arrival tube's far half, which nothing swaps
+out of, and off its open end into the void. Reproduced headless: in from the calibration map,
+reverse at the gate, and the car went on to 501 m deep in the stage-start tube with 1 transition.
+
+**Fix, no wall** (sagi asked to be consulted before walling the tunnel): the gate is now a plane
+crossed in EITHER direction - a swap fires whenever the car crosses `gate_depth` going deeper, or is
+found past it on arriving in a tube from outside - so no car can be deeper than the gate in any tube.
+Turning back returns the car to the tube it CAME from (`_came_from`), so reversing out of the
+finish tunnel's arrival leads back to the finish, not on to the calibration map. After the fix, the
+same probe: calibration -> stage start -> reverse -> back in the calibration tube at 299 m, heading
+out; finish -> stage start -> reverse -> back in the finish tube. The swap's rigid motion is
+unchanged, so it should look as seamless backwards as forwards. Awaiting sagi's drive verdict.
+
 ## 2026-11-26, later (FIX: trees and tree shadows popping in near the car after a shadow-mode switch)
 
 Grep words: *trees spawn close to the car*, *trees pop in*, *tree shadows pop in*, *after switching

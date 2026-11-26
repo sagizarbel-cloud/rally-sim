@@ -127,11 +127,12 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   the near model, the silhouette nor the shadow silhouette drew (Godot starts a new instance as
   "hidden"); a re-bake builds every chunk around a parked car at once. New chunks' tree sets are now
   born with no margin and given it a few frames later (`StageForest.settle()`). CHANGELOG 2026-11-26.
-- **The tunnel's transition point can be driven out of backwards** (sagi, 2026-11-23): on reaching
-  the swap point in the tunnel, the car can turn around, drive back the way it came and fall out
-  of the world. The pad's side walls (2026-11-22, `area_manager.gd _make_portal`) close the sides
-  only. Deferred by sagi: fix after the Godot 4.6 migration. NB the map EDGE stays open by sagi's
-  decision (VOID RESCUE only); this is the tunnel, a different place - ask before walling it.
+- **The tunnel's transition point can be driven out of backwards** (sagi, 2026-11-23) - **FIXED
+  2026-11-26, awaiting the drive verdict, NO wall added.** Cause: the gate was one-way - after a swap
+  nothing could swap again until the car left every tube, so turning round or reversing at the
+  arrival gate drove into that tube's far half and off its open 800 m end. The gate is now a plane
+  crossed in either direction (`area_manager.gd _physics_process`), and turning back returns the car
+  to the tube it came from. NB the map EDGE stays open by sagi's decision (VOID RESCUE only).
 
 ---
 
