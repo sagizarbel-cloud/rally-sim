@@ -697,6 +697,8 @@ func prime(p: Vector3) -> void:
 
 func update(p: Vector3) -> void:
 	## One resumable job at a time, nearest-first, within a hard per-tick budget.
+	if forest != null:
+		forest.settle()
 	if sun_cache != null and _have_prev:
 		sun_cache.update(p, ((p - _prev_p) / maxf(_tick, 1e-4)).limit_length(80.0), _tick)
 	if _backdrop != null:

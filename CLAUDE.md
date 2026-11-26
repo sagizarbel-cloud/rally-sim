@@ -1,6 +1,6 @@
 # Rally Sim — project instructions
 
-Native Apple-Silicon (M1) realistic rally sim, **Godot 4.4 + Jolt**, built procedurally in code (no `.tscn` editing for gameplay). Full milestone state, decisions, and working patterns live in **`docs/ROADMAP.md` — read it first.**
+Native Apple-Silicon (M1) realistic rally sim, **Godot 4.4 + Jolt** (4.6.3 is installed beside it but ON HOLD since 2026-11-26: ~1.5 ms/frame slower on the M1, see `CHANGELOG.md`), built procedurally in code (no `.tscn` editing for gameplay). Full milestone state, decisions, and working patterns live in **`docs/ROADMAP.md` — read it first.**
 
 ## Verify every code change (headless)
 After editing `.gd` files, run **`./check.sh`** (or the command below). It must print no errors:

@@ -2,7 +2,7 @@
 
 _Last updated: 2026-07-28. Living document — future sessions should read this first, then verify against current code._
 
-Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt**, built procedurally in code, grounded in real vehicle-dynamics literature. Design philosophy: **improve realism and fun through physical functions, not by tuning magic-number constants.**
+Native Apple-Silicon (M1) realistic rally sim in **Godot 4.4 + Jolt** (4.6.3 was tried 2026-11-23..26 and put ON HOLD: physics identical, but every frame draws ~1.5 ms / ~10% slower on the M1 and no switchable feature explains it - `CHANGELOG.md` 2026-11-26; the migration is commit `cfdffaa`, baselines in `docs/baselines-4.6.3/`), built procedurally in code, grounded in real vehicle-dynamics literature. Design philosophy: **improve realism and fun through physical functions, not by tuning magic-number constants.**
 
 **ACTIVE PLANS:** `docs/PLAN-drivetrain-suspension.md` (Arcs A/B/C — drivetrain, suspension, steering feel) and `docs/PLAN-stages-ground-map.md` (**Arc D — the ground map & real point-to-point stages**, planned 2026-08-13). **Arc C1 was accepted 2026-08-24, which unblocked Arc D; D1 (the ground map) is DONE and drive-verified 2026-08-27 — "all four hold", i.e. nothing about the car changed, which was the pass condition. D2 is DONE and drive-verified 2026-08-28 — lap/sector detection is now arc-length triggers on a per-circuit `Centreline` rather than `atan2` crossings and radius bands, `Centreline` handles open (point-to-point) roads, and timing/pace notes/wear no longer know the road is polar. **D3 is DONE and DRIVE-VERIFIED 2026-08-30 — "road is drivable and feels like a road", pace notes correct, corner rhythm accepted; five defects found and fixed on the verdict, including a §0 repeatability violation where stage parameters travelled in a float32 `Vector4` so "same seed = same stage" was simply not true (CHANGELOG 2026-08-30)** — the project now has **SHAKEDOWN**, a generated point-to-point stage on the fourth `[B]` entry, routed from stage parameters under real road-design constraints (minimum radius from design speed, maximum grade, AASHTO vertical curves) and living in its own area with the legacy map untouched. It grips, sounds, throws dust and gets pace notes without a line changing in `stage.gd`, `sound.gd`, `effects.gd`, `roughness.gd` or `wear.gd` — which is what D1's ground map and D2's centrelines were for. **D4 (chunked terrain, streaming and LOD) is BUILT and probe-verified 2026-08-30, awaiting its drive verdict** — SHAKEDOWN's ground is streamed as chunks on a global lattice instead of one 720 m slab, which lifts the stage to **4779 m timed / 4905 m of road**. Seam continuity and order independence pass EXACTLY (0.000000000 m step, 0 differing vertices), and §8 risk 6 was asserted at the new length and holds. **The plan's central assumption was wrong and the measurement is worth keeping:** the collider cook is 0.11 ms of a 16 ms chunk — 96% of the cost is `Centreline.nearest_point()` per vertex — so the spike is avoided by time-slicing the build under a hard per-tick budget, not by cooking ahead. See `CHANGELOG.md` 2026-08-30 (later). Two follow-ups landed 2026-08-28 ahead of it: the tyre audio now takes its surface from the ground map (the rally loop was being mixed as 40% tarmac), and `Centreline.nearest_point()` was fixed — it was returning the wrong sample at ~10% of road-edge positions, scrambling C1's washboard phase by up to 6 ridges exactly where washboard is masked to.** **D5 (the area manager and the connecting tunnel) is BUILT and probe-verified 2026-08-31, awaiting its drive verdict** — the two worlds are joined by a tunnel used as a PORTAL, because the stage's start line is 4149 m from the calibration map and a tunnel's two mouths need not be adjacent. The calibration bed is never unloaded (a cold rebuild costs 494 ms), so §1.1 is now structural. All four probes pass over 10 round trips — and the entry worth reading is that they ALL passed while the swap was flinging the car into open air beyond the far portal, because none of them could see where the car was. `scripts/ground_map.gd` is now the single authority for what the ground is at any (x, z) — every surface question (grip, road class, deformability, colour, audio) resolves through it.
 
@@ -122,20 +122,17 @@ sprawl. Each names why it was deferred, because "later" without a reason becomes
   scripts and draw on the legacy map (HUD redraw). The mirror renders the scene a second time.
   Worth a pass before Arc E adds foliage and textures to the same budget.
 - **Trees, and tree shadows, pop in close to the car after a shadow-mode switch** (sagi,
-  2026-11-23, driving 23a7965 on the Mac): after switching LIVE / HYBRID / BAKED, a very few trees
-  "seem to spawn only when really close to the vehicle", and the same happens to more than a few
-  trees' SHADOWS. Not diagnosed. Suspects, in order: the in-place re-bake (`rebake()`, `_bake_gen`)
-  swapping each stale chunk for its re-baked self - a chunk's tree nodes (`TreesShadow`,
-  `TreesFar`, near-LOD trees) may be dropped with the stale mesh and not regrown until the near
-  ring re-scans it; the LIVE shadow map's caster set changing with the mode
-  (`cast_shadow` on the far/shadow MultiMesh); and in BAKED, the sun cache (`sun_cache.gd`) only
-  mirroring a chunk's trees in `_finalise` / `_restore`, so a chunk kept across the switch would
-  have none. Deferred by sagi: fix after the Godot 4.6 migration.
-- **The tunnel's transition point can be driven out of backwards** (sagi, 2026-11-23): on reaching
-  the swap point in the tunnel, the car can turn around, drive back the way it came and fall out
-  of the world. The pad's side walls (2026-11-22, `area_manager.gd _make_portal`) close the sides
-  only. Deferred by sagi: fix after the Godot 4.6 migration. NB the map EDGE stays open by sagi's
-  decision (VOID RESCUE only); this is the tunnel, a different place - ask before walling it.
+  2026-11-23) - **FIXED 2026-11-26, awaiting the drive verdict.** Cause: the near/far tree swap's
+  10 m hysteresis margin gave freshly built trees a dead band 70-90 m from the camera where neither
+  the near model, the silhouette nor the shadow silhouette drew (Godot starts a new instance as
+  "hidden"); a re-bake builds every chunk around a parked car at once. New chunks' tree sets are now
+  born with no margin and given it a few frames later (`StageForest.settle()`). CHANGELOG 2026-11-26.
+- **The tunnel's transition point can be driven out of backwards** (sagi, 2026-11-23) - **FIXED
+  2026-11-26, awaiting the drive verdict, NO wall added.** Cause: the gate was one-way - after a swap
+  nothing could swap again until the car left every tube, so turning round or reversing at the
+  arrival gate drove into that tube's far half and off its open 800 m end. The gate is now a plane
+  crossed in either direction (`area_manager.gd _physics_process`), and turning back returns the car
+  to the tube it came from. NB the map EDGE stays open by sagi's decision (VOID RESCUE only).
 
 ---
 

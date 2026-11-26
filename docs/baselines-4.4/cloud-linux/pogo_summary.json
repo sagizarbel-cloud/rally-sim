@@ -1,0 +1,23 @@
+{
+  "198.0": {
+    "mean_load_frac": 0.999736830494808,
+    "min_load_frac": 0.444672681543123,
+    "pct_low": 0.0
+  },
+  "299.0": {
+    "mean_load_frac": 0.999719304682332,
+    "min_load_frac": 0.209573257129454,
+    "pct_low": 0.0
+  },
+  "468.0": {
+    "mean_load_frac": 1.00233797070511,
+    "min_load_frac": 0.0,
+    "pct_low": 0.833333333333333
+  },
+  "489.6": {
+    "mean_load_frac": 1.00347403877738,
+    "min_load_frac": 0.0,
+    "pct_low": 1.04166666666667
+  },
+  "engine": "4.4-stable (official)"
+}

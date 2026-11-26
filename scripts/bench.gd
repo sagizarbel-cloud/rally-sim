@@ -31,6 +31,11 @@ var _t := 0.0
 var _s := 0.0
 var _s0 := 0.0
 var _frames := PackedFloat32Array()
+## Frame time is read from the wall clock between frames, NOT from `delta`. `delta` is SMOOTHED
+## (application/run/delta_smoothing, on by default), which snaps it to the display's refresh period
+## whenever frames run near it: the 2026-11-24 4.6.3 bench reported 16.67 ms exactly on six rows,
+## and a refresh-snapped number cannot say whether a frame took 15 ms or 17.
+var _last_us := 0
 var _cpu := PackedFloat32Array()
 var _prims := 0.0
 var _draws := 0.0
@@ -54,6 +59,12 @@ func _ready() -> void:
 	_vp_rid = get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(_vp_rid, true)
 	_build_configs()
+	# --bench-rows=a,b keeps only the rows whose names start with one of the given prefixes (plus
+	# their order): short A/B runs of a few rows, e.g. engine settings that need a restart
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--bench-rows="):
+			var keep: Array = Array(a.substr(13).split(","))
+			_configs = _configs.filter(func(c): return keep.any(func(k): return str(c[0]).begins_with(str(k))))
 
 func _build_configs() -> void:
 	var nop := func(): pass
@@ -91,6 +102,15 @@ func _build_configs() -> void:
 		["plain sky (Godot's built-in)",
 			func(): _swap_sky(true),
 			func(): _swap_sky(false)],
+		# ENGINE-COST diagnostics (2026-11-24): Godot 4.6.3 drew ~1.5 ms more per frame than 4.4 on
+		# the same scene, growing with the pixel count - these switch off per-pixel stages one at a
+		# time so the two engines can be compared stage by stage.
+		["tonemap linear (diag)",
+			func(): world._env.tonemap_mode = Environment.TONE_MAPPER_LINEAR,
+			func(): world._env.tonemap_mode = Environment.TONE_MAPPER_FILMIC],
+		["no sky reflections (diag)",
+			func(): world._env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED,
+			func(): world._env.reflected_light_source = Environment.REFLECTION_SOURCE_BG],
 		["no fog",
 			func(): world._env.fog_enabled = false,
 			func(): world._env.fog_enabled = true],
@@ -161,13 +181,17 @@ func _process(delta: float) -> void:
 			_phase = 2
 			_t = 0.0
 			_frames.clear()
+			_last_us = 0
 			_cpu.clear()
 			_prims = 0.0
 			_draws = 0.0
 			_n_info = 0
 	elif _phase == 2:
 		_t += delta
-		_frames.append(delta * 1000.0)
+		var now := Time.get_ticks_usec()
+		if _last_us > 0:
+			_frames.append(float(now - _last_us) / 1000.0)
+		_last_us = now
 		_cpu.append(RenderingServer.viewport_get_measured_render_time_cpu(_vp_rid) + Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0)
 		_prims += RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
 		_draws += RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)
@@ -186,6 +210,9 @@ func _begin() -> void:
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = 0
+	# macOS can recreate the window on the switch to fullscreen; ask again once it has happened,
+	# and record what the window really ended up with (the report prints it)
+	(func() -> void: DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)).call_deferred()
 	_s0 = float(area.gen.timed_start_s) + S_OFFSET
 	print("BENCH start: renderer=%s  window=%s  stage seed path s=%.0f..%.0f m" % [
 		ProjectSettings.get_setting("rendering/renderer/rendering_method"), str(get_tree().root.size),
@@ -220,17 +247,18 @@ func _finish_config() -> void:
 	var n := f.size()
 	var med: float = f[n / 2]
 	var p95: float = f[int(n * 0.95)]
+	var p5: float = f[int(n * 0.05)]
 	var mean := 0.0
 	for x in f:
 		mean += x
 	mean /= float(n)
-	var r := {"name": _configs[_ci][0], "frames": n, "median_ms": med, "p95_ms": p95,
+	var r := {"name": _configs[_ci][0], "frames": n, "median_ms": med, "p95_ms": p95, "p5_ms": p5, "min_ms": f[0],
 		"avg_fps": 1000.0 / mean, "cpu_ms": c[c.size() / 2],
 		"prims_k": _prims / float(maxi(_n_info, 1)) / 1000.0, "draws": _draws / float(maxi(_n_info, 1)),
 		"render": str(_render_size())}
 	_results.append(r)
-	print("BENCH %-32s median %6.2f ms  p95 %6.2f ms  avg %5.1f fps  cpu %5.2f ms  %5.0fk tris  %4.0f draws  %s" % [
-		r["name"], med, p95, r["avg_fps"], r["cpu_ms"], r["prims_k"], r["draws"], r["render"]])
+	print("BENCH %-32s median %6.2f ms  p5 %6.2f  p95 %6.2f ms  avg %5.1f fps  cpu %5.2f ms  %5.0fk tris  %4.0f draws  %s" % [
+		r["name"], med, p5, p95, r["avg_fps"], r["cpu_ms"], r["prims_k"], r["draws"], r["render"]])
 	(_configs[_ci][2] as Callable).call()
 	_next_config()
 
@@ -241,10 +269,12 @@ func _report() -> void:
 	lines.append("Rally Sim GPU benchmark  %s" % Time.get_datetime_string_from_system())
 	lines.append("renderer=%s  window=%s  path: SHAKEDOWN s=%.0f.. at %.0f m/s, noon, chase cam, uncapped" % [
 		ProjectSettings.get_setting("rendering/renderer/rendering_method"), str(get_tree().root.size), _s0, SPEED])
-	lines.append("%-32s %9s %9s %8s %9s %8s %7s %s" % ["config", "median", "p95", "avg fps", "vs base", "cpu", "tris", "draws"])
+	lines.append("engine=%s  vsync_mode=%d (0 = disabled)  max_fps=%d  frame time = wall clock between frames" % [
+		Engine.get_version_info()["string"], DisplayServer.window_get_vsync_mode(), Engine.max_fps])
+	lines.append("%-32s %9s %9s %9s %8s %9s %8s %7s %s" % ["config", "median", "p5", "p95", "avg fps", "vs base", "cpu", "tris", "draws"])
 	for r in _results:
-		lines.append("%-32s %7.2fms %7.2fms %8.1f %+8.2fms %6.2fms %6.0fk %5.0f  %s" % [
-			r["name"], r["median_ms"], r["p95_ms"], r["avg_fps"], float(r["median_ms"]) - base,
+		lines.append("%-32s %7.2fms %7.2fms %7.2fms %8.1f %+8.2fms %6.2fms %6.0fk %5.0f  %s" % [
+			r["name"], r["median_ms"], r["p5_ms"], r["p95_ms"], r["avg_fps"], float(r["median_ms"]) - base,
 			r["cpu_ms"], r["prims_k"], r["draws"], r["render"]])
 	var again: Dictionary = _results[-1]
 	for r in _results:

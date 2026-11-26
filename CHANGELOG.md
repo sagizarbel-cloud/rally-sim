@@ -20,6 +20,199 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 ---
 
+## 2026-11-26, later still (FIX: turning round at the tunnel's transition point fell out of the world)
+
+Grep words: *turn around in the tunnel*, *fell out of the tunnel*, *drive back through the swap*,
+*reverse in the tunnel*, *tunnel open end*, *one-way gate*.
+
+The bug logged 2026-11-23 ("when reaching the transition point of the tunnel, the user can just
+circle back and fall out of it"). **Cause:** the swap gate (400 m into each 800 m tube) was ONE-WAY.
+After a swap `_armed` stayed false until the car left every tube, so a car that turned round - or
+simply reversed - at the arrival gate drove on into the arrival tube's far half, which nothing swaps
+out of, and off its open end into the void. Reproduced headless: in from the calibration map,
+reverse at the gate, and the car went on to 501 m deep in the stage-start tube with 1 transition.
+
+**Fix, no wall** (sagi asked to be consulted before walling the tunnel): the gate is now a plane
+crossed in EITHER direction - a swap fires whenever the car crosses `gate_depth` going deeper, or is
+found past it on arriving in a tube from outside - so no car can be deeper than the gate in any tube.
+Turning back returns the car to the tube it CAME from (`_came_from`), so reversing out of the
+finish tunnel's arrival leads back to the finish, not on to the calibration map. After the fix, the
+same probe: calibration -> stage start -> reverse -> back in the calibration tube at 299 m, heading
+out; finish -> stage start -> reverse -> back in the finish tube. The swap's rigid motion is
+unchanged, so it should look as seamless backwards as forwards. Awaiting sagi's drive verdict.
+
+## 2026-11-26, later (FIX: trees and tree shadows popping in near the car after a shadow-mode switch)
+
+Grep words: *trees spawn close to the car*, *trees pop in*, *tree shadows pop in*, *after switching
+shadow mode*, *missing trees after time of day change*, *visibility range dead band*, *70-90 m*.
+
+The bug logged 2026-11-23 ("the trees (very few) sometime seem to spawn only when really close to
+the vehicle ... the same for some random shadows of the trees (more then a few)"). Not the re-bake
+dropping trees: a headless probe of every live chunk across LIVE -> HYBRID -> BAKED -> LIVE found
+every chunk with trees still carrying its tree nodes, and no full-detail chunk made coarser.
+
+**Cause: the near/far swap's hysteresis has a dead band for NEW trees.** A full-detail chunk carries
+`TreesNear` and `TreesShadow` up to `detail_m` (80 m) and `TreesFar` (silhouettes) beyond it, each
+with a 10 m margin. Godot (`RendererSceneCull::_visibility_range_check`, read in the 4.4 source)
+applies the margin against each instance's OWN last state, and a new instance starts as hidden - so
+a new near set needs the camera within 70 m and a new silhouette set needs it beyond 90 m. A chunk
+born with its trees 70-90 m away drew no trees and cast no tree shadows until the car came within
+70 m. Streaming builds chunks out at `r_detail` (155-230 m), so it almost never happens while
+driving; a re-bake (shadow mode or time of day) rebuilds every chunk around the car at once, which
+puts a ring of them there.
+
+**Fix** (`stage_forest.gd attach()` / `settle()`): a new chunk's three tree sets are born with NO
+margin - each draws on its own side of 80 m from the first frame - and get the 10 m margin three
+drawn frames later, once they hold a real state for it to keep. The anti-flicker hysteresis is
+unchanged after that. MEASURED (cloud, lavapipe, 640x360, parked 40 m into SHAKEDOWN, rebake): 4
+chunks had trees in the band; objects drawn 669 streamed-in vs **666 after the re-bake before the
+fix, 669 after it**. Awaiting sagi's drive verdict.
+
+## 2026-11-26 (ENGINE: 4.6.3's extra ~1.5 ms is a flat renderer base cost, not any feature we can switch)
+
+Grep words: *4.6 slower*, *specular occlusion*, *tonemap cost*, *sky reflections cost*, *per-frame base cost 4.6*.
+
+**Decision (sagi, 2026-11-26): stay on Godot 4.4 for now.** The project flag, `check.sh`, CLAUDE.md
+and README go back to 4.4; the baseline tools (`tools/baseline/`), the wall-clock bench and its
+diagnostic rows, and both sets of baselines stay, so a later engine move can be re-measured with
+one command. To retry 4.6: re-apply the engine switch from commit `cfdffaa` and re-run the bench.
+
+Three wall-clock bench runs on the M1 at 2880x1800 (vsync_mode=0, max_fps=0), A -> B -> C with 3 min
+idle between, under caffeinate: **A** 4.4 (/tmp/rs-bl44), **B** 4.6.3 (/tmp/rs-bl46, 7db822a),
+**C** 4.6.3 with 4.6's new default `rendering/reflections/specular_occlusion/enabled` turned off
+(temporary override.cfg, deleted afterwards). Heat drift +0.01 / +0.16 / +0.15 ms. Medians in ms:
+
+| row | A: 4.4 | B: 4.6.3 | C: 4.6.3, spec. occl. off | B - A | C - B |
+|---|---|---|---|---|---|
+| baseline | 15.01 | 16.46 | 16.38 | +1.45 | -0.08 |
+| no sun shadows | 12.42 | 13.67 | 13.59 | +1.25 | -0.08 |
+| no trees at all | 12.62 | 14.42 | 14.36 | +1.80 | -0.06 |
+| plain sky (Godot's built-in) | 14.73 | 16.16 | 16.13 | +1.43 | -0.03 |
+| tonemap linear (diag) | 15.08 | 16.66 | 16.51 | +1.58 | -0.15 |
+| no sky reflections (diag) | 14.44 | 15.78 | 15.71 | +1.34 | -0.07 |
+| no fog | 14.17 | 15.21 | 15.08 | +1.04 | -0.13 |
+| baseline (heat check) | 15.02 | 16.62 | 16.53 | +1.60 | -0.09 |
+| baseline (after re-bakes) | 15.01 | 16.62 | 16.47 | +1.61 | -0.15 |
+
+**Ruled out:** specular occlusion (off saves 0.03-0.15 ms, noise), tonemap (linear moves it +0.07 on
+4.4, +0.20 on 4.6.3), sky reflections (save 0.57 on 4.4, 0.68 on 4.6.3), and the sky, fog, sun
+shadows and trees, which each cost the same on both engines. **The 4.6.3 gap survives every row**
+(+1.04 to +1.80 ms), so it is a base cost every 4.6.3 frame pays in its Metal renderer (driver
+path, depth prepass, clustering or post passes), and it still scales with pixels (2026-11-24,
+evening). The bench cannot isolate it further; a one-frame Xcode Metal capture / Instruments
+Metal System Trace on each engine would show which pass grew.
+
+## 2026-11-24, evening (ENGINE: fixed bench re-run - 4.6.3 really is ~1.5 ms / ~10% slower per frame)
+
+Grep words: *4.6 slower*, *fps dropped after the upgrade*, *bench re-run*, *per-pixel cost 4.6*.
+
+Re-run with the wall-clock bench (4e4301d): vsync_mode=0 and max_fps=0 confirmed on both, no more
+pile-up at 16.67 ms. 4.4 from /tmp/rs-bl44 (0e751f1 + the new bench.gd), 4.6.3 from /tmp/rs-bl46
+(4e4301d), 5 min idle between, Mac kept awake; drift +0.07 / +0.13 ms. Same triangles and draws.
+
+| row (2880x1800 unless noted) | 4.4 median (p5 / p95) | 4.6.3 median (p5 / p95) | change |
+|---|---|---|---|
+| baseline | 14.98 (11.99 / 17.97) - 66.8 fps | 16.45 (13.12 / 20.28) - 60.5 fps | +1.47 |
+| no sun shadows | 12.27 | 13.60 | +1.33 |
+| no trees at all | 12.71 | 14.42 | +1.71 |
+| no fog | 14.18 | 15.19 | +1.01 |
+| + SSAO | 18.14 | 19.93 | +1.79 |
+| + glow | 17.65 | 19.43 | +1.78 |
+| HYBRID | 15.49 | 17.40 | +1.91 |
+| BAKED | 12.83 | 14.64 | +1.81 |
+| 3D at 1600 lines | 12.76 | 13.96 | +1.20 |
+| 3D at 1080 lines | 8.05 (124.0 fps) | 8.40 (118.4 fps) | +0.35 |
+
+**The extra cost scales with the number of pixels** (+0.35 ms at 1080 lines, +1.20 at 1600, +1.47
+at 1800) and barely with the scene (shadows off or trees off move it by a few tenths): 4.6.3 spends
+~10% more per pixel on this M1, somewhere in the per-pixel path. Relative costs keep their order
+(shadows -2.8, trees -2.0..-2.3, SSAO +3.2..+3.5, glow +2.7..+3.0, BAKED -1.8..-2.2). Physics: see
+2026-11-23, night - tiny drift only. Not yet known WHICH per-pixel stage grew.
+
+## 2026-11-24 (ENGINE: GPU bench 4.4 vs 4.6.3 - 4.6.3 draws ~1.4-1.9 ms slower; the bench's own clock was snapped)
+
+Grep words: *4.6 slower*, *fps dropped after the upgrade*, *16.67 ms*, *bench stuck at 60 fps*,
+*delta smoothing*, *first launch takes forever*.
+
+Same code (0e751f1 on 4.4, cfdffaa on 4.6.3 - only the project flag differs), Mac M1, fullscreen
+2880x1800, noon, uncapped, both runs cool (drift -0.13 / +0.00 ms). Both engines: "Metal 3.2 -
+Forward+ - Apple M1 (Apple7)", same triangles and draw calls (369k / 481 at baseline).
+
+| row | 4.4 median | 4.6.3 median |
+|---|---|---|
+| baseline | 15.23 ms (65.6 fps) | 16.67 (60.1) |
+| no sun shadows | 12.44 | 13.89 |
+| no trees at all | 12.88 | 14.47 |
+| BAKED shadows | 12.88 | 14.81 |
+| HYBRID shadows | 15.62 | 17.42 |
+| + SSAO | 18.12 | 20.00 |
+| + glow | 17.71 | 19.49 |
+| 3D at 1080 lines | 8.07 (123.9 fps) | 8.33 (118.6) |
+
+**The 4.6.3 medians sat on exactly 16.67 ms on six rows** (all three baselines among them), i.e. on
+the 60 Hz panel's refresh, while 4.4's moved freely (15.23 / 15.10 / 15.15). The bench timed frames
+with `delta`, which Godot SMOOTHS (application/run/delta_smoothing, default on) by snapping it to the
+refresh period - so those rows cannot say what the frame really cost. **Rows slower than one refresh
+cannot be inflated by that, and they show 4.6.3 1.3-1.9 ms slower (SSAO +1.88, glow +1.78, HYBRID
++1.80): that part of the regression is real.** Fix: `bench.gd` now times frames from the wall clock
+(`Time.get_ticks_usec()` between frames), re-asks for vsync off after the fullscreen switch, prints
+the vsync mode it ended with, and adds p5 per row. Re-run both engines with it before deciding.
+
+Also: the first 4.6.3 bench ran 42 min without finishing (log: "Shader cache miss"); the re-run took
+410 s - expect a long first start on 4.6. 4.6.3 warns "Image format RGBFloat not supported by
+hardware, converting to RGBAFloat" 42 times from `effects.gd _curve_tex` (harmless).
+
+## 2026-11-23, night (ENGINE: Godot 4.4 -> 4.6.3 - measured; the car did not move, the sky light did)
+
+Grep words: *godot 4.6*, *engine upgrade*, *migration*, *looks brighter after the upgrade*, *sky
+ambient brighter*, *lap times changed after upgrade*, *baselines*.
+
+sagi: "before fixing these i want to migrate the build to godot 4.6". PR #4 merged first (sagi's
+choice), the move is its own branch. Plan: `docs/PROMPT-godot-46-migration.md` (from the Mac's
+"before PR4 drive" stash, not committed). Installed on the Mac BESIDE 4.4:
+`/Applications/Godot_4.6.3.app` (official universal build, SHA-512 matches the release sums,
+notarised, Gatekeeper accepts it). `check.sh` now looks for the 4.6.3 app first.
+
+**How it was measured.** `tools/baseline/` (new): `capture.gd` runs one scripted test per process,
+headless at a fixed 120 Hz, unchanged on either engine; `run.sh` runs the set with one binary;
+`compare.py` diffs two result directories. Tests: a standing-start drag run with 25 s of coast-down,
+the pogo statistic at 198 / 299 / 468 / 489.6 km/h (spun-up wheels, neutral, 4 s each), a constant-
+steer constant-throttle circle on the drag strip's asphalt runoff pad (r 95 m), three laps of each
+circuit behind a pure-pursuit harness, SHAKEDOWN streamer counts on arrival and after 60 s, and the
+golden ground lattice. **4.4 repeats itself bit for bit** (cloud: all eight; Mac: four re-run), so
+every difference below is the engine. Summaries: `docs/baselines-4.4/`, `docs/baselines-4.6.3/`.
+
+| quantity (Mac, M1) | 4.4 | 4.6.3 |
+|---|---|---|
+| ground lattice sha256 | 80bffdd150893337... | **identical** |
+| 0-100 / 0-160 / 0-200 km/h | 5.19 / 10.50 / 17.68 s | identical |
+| 402 m / 1000 m | 13.40 / 24.08 s | identical (traces part at 9.5 s, by 3 mm) |
+| km/h after 30 s; after 25 s coast | 226.25; 98.84 | +0.0001; -0.0001 |
+| pogo % ticks < 15% static load, 198 / 299 / 468 / 489.6 | 0 / 0 / 0.83 / 1.04 | identical |
+| skid pad: km/h, yaw rate after 30 s | 64.37, 0.5496 rad/s | 64.24, 0.5466 (paths part at 3.7 s; 8.7 m apart at 30 s) |
+| DIRT CIRCLE laps | 20.108 / 20.100 / 20.100 | identical |
+| RALLY LOOP laps | 73.267 / 73.217 / 73.200 | 73.267 / 73.233 / 73.192 |
+| ASPHALT RING laps | 54.742 / 54.225 / 54.242 | 54.725 / 54.275 / 54.283 |
+| SHAKEDOWN streamer: live/built/colliders, arrival and after 60 s | 139/144/16, 184/586/24 | identical |
+
+So: straight-line physics and the ground are the same to the millimetre; turning drifts by a few
+hundredths of a second a lap and a few metres over 30 s of circling - small, but real, and it starts
+at the spawn settle on the two hilly circuits. The cloud (Linux x86) gives the same picture (its 4.4
+lap numbers differ from the Mac's by up to 0.06 s: baselines are per platform). The pogo reference
+of 2026-08-13 (4% at 468 km/h) was a different method; these are the new reference.
+
+**The look moved: lit ground about 5-10% brighter on 4.6.3, sky itself unchanged** (cloud stills,
+SHAKEDOWN, chase view at 6 m, noon). Isolated by switching one term off at a time on both engines:
+the sun's direct light and its shadows are the same, a flat ambient COLOUR is the same, and a plain
+one-colour sky gives the same ground - the difference is how 4.6 turns OUR SKY's gradient and
+clouds into ambient light (sky ambient on a shaded patch of grass ~+20% in linear terms). Not the
+glow change (glow is off unless gfx_high), not fog, not the sky's sun disc, not the sky-reflection
+roughness-layers default (8 -> 7; forcing 8 changes nothing). Left as the engine draws it; to restore
+the 4.4 look, lower `ambient_light_sky_contribution` - sagi's call on the drive.
+
+Not checked yet: the GPU bench on 4.4 vs 4.6.3 (takes over the screen), the drive checklist in the
+plan, and the DualShock 4 on 4.6.
+
 ## 2026-11-23, later still (two bugs logged, not fixed: trees pop in after a shadow-mode switch; tunnel exit backwards)
 
 Grep words: *trees spawn close to the car*, *trees pop in*, *tree shadows pop in*, *after switching

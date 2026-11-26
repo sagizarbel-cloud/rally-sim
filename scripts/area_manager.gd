@@ -83,7 +83,9 @@ var light_range := 46.0
 
 var _portals: Array = []
 var _current := Area.CALIBRATION
-var _armed := true
+var _prev_tube := -1                ## the tube the car was in last tick (-1: none)
+var _prev_depth := 0.0               ## ...and how deep, in that tube's own frame
+var _came_from := -1                 ## the tube the last swap came FROM, while still in its arrival tube
 var _transitions := 0
 
 # ---------------------------------------------------------------- build
@@ -106,7 +108,8 @@ func rebuild() -> void:
 		if is_instance_valid(b):
 			b.queue_free()
 	_portals.clear()
-	_armed = true
+	_prev_tube = -1
+	_came_from = -1
 	_build_portals()
 
 func _build_portals() -> void:
@@ -429,13 +432,32 @@ func _physics_process(_d: float) -> void:
 	# nothing. Asking the world instead of a stored flag is what makes every route in behave alike.
 	var here := _tube_containing(car.global_position)
 	if here < 0:
-		_armed = true                      # outside every tube: a swap cannot bounce you back
+		_prev_tube = -1
+		_came_from = -1                    # left every tube: the next tunnel starts fresh
 		return
-	if not _armed:
+	var depth: float = -(_local_in(here, car.global_position).z)
+	# THE GATE IS A PLANE YOU CROSS, IN EITHER DIRECTION (2026-11-26). It used to be one-way: after a
+	# swap the manager stayed disarmed until the car left every tube, so a car that turned round (or
+	# just reversed) at the arrival gate drove on, deeper, into the arrival tube's FAR half - which
+	# nothing ever swaps out of - and off its open end at 800 m into the void. sagi: "when reaching
+	# the transition point of the tunnel, the user can just circle back and fall out of it". Now a
+	# swap fires whenever the car crosses the gate going deeper, or is found past it on arriving in
+	# a tube from outside. A car can therefore never be deeper than the gate in any tube, and the far
+	# half is unreachable without a wall. No bounce: a swap leaves the car just SHALLOWER than the
+	# gate in its new tube, and it has to move to cross it again.
+	var crossed: bool = depth >= gate_depth and (_prev_tube != here or _prev_depth < gate_depth)
+	_prev_tube = here
+	_prev_depth = depth
+	if not crossed:
 		return
-	if -(_local_in(here, car.global_position).z) < gate_depth:
-		return
-	_swap(here, int(_portals[here]["links_to"]))
+	# Turning back at the gate returns you WHERE YOU CAME FROM, not wherever this tube's link points:
+	# the finish tunnel arrives in the stage-start tube, and reversing out of it there must lead back
+	# to the finish, not on to the calibration map.
+	var to: int = _came_from if _came_from >= 0 else int(_portals[here]["links_to"])
+	_swap(here, to)
+	_came_from = here
+	_prev_tube = _tube_containing(car.global_position)
+	_prev_depth = -(_local_in(_prev_tube, car.global_position).z) if _prev_tube >= 0 else 0.0
 
 func _tube_containing(p: Vector3) -> int:
 	for i in range(_portals.size()):
@@ -479,7 +501,6 @@ func _swap(from: int, to: int) -> void:
 	if chase_camera != null:
 		chase_camera.global_transform = motion * chase_camera.global_transform
 	_current = int(_portals[to]["area"])
-	_armed = false
 	_transitions += 1
 	emit_signal("area_changed", _current)
 
