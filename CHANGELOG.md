@@ -24,6 +24,11 @@ recognised by the numbers drifting back rather than by the symptom returning in 
 
 Grep words: *4.6 slower*, *specular occlusion*, *tonemap cost*, *sky reflections cost*, *per-frame base cost 4.6*.
 
+**Decision (sagi, 2026-11-26): stay on Godot 4.4 for now.** The project flag, `check.sh`, CLAUDE.md
+and README go back to 4.4; the baseline tools (`tools/baseline/`), the wall-clock bench and its
+diagnostic rows, and both sets of baselines stay, so a later engine move can be re-measured with
+one command. To retry 4.6: re-apply the engine switch from commit `cfdffaa` and re-run the bench.
+
 Three wall-clock bench runs on the M1 at 2880x1800 (vsync_mode=0, max_fps=0), A -> B -> C with 3 min
 idle between, under caffeinate: **A** 4.4 (/tmp/rs-bl44), **B** 4.6.3 (/tmp/rs-bl46, 7db822a),
 **C** 4.6.3 with 4.6's new default `rendering/reflections/specular_occlusion/enabled` turned off

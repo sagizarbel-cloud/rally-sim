@@ -29,11 +29,11 @@ procedurally detected pace notes through the OS text-to-speech; and a live tunin
 the physical parameters.
 
 ## Requirements
-- **Godot 4.6 or newer** (the project is on 4.6.3; Jolt is built in). Free: https://godotengine.org/download
+- **Godot 4.4 or newer** (needed for the native Jolt physics backend). Free: https://godotengine.org/download
   - Apple-Silicon build runs natively on Metal — no translation layers.
 
 ## Run it
-1. Install Godot 4.6+ (the standard, non-.NET build is fine).
+1. Install Godot 4.4+ (the standard, non-.NET build is fine).
 2. Open Godot → **Import** → select `rally-sim/project.godot`.
 3. Press **F5** (Play).
 4. (Optional) Confirm the Jolt backend is active: **Project → Project Settings → Physics → 3D → Physics Engine** should read **Jolt Physics**. If it says "Godot Physics", the project still runs — just re-select Jolt.

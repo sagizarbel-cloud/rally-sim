@@ -5,18 +5,15 @@ set -u
 # Override with:  GODOT=/path/to/godot ./check.sh   (default = this Mac's install)
 # Search the known install locations rather than hard-coding one. The app moved from Downloads to
 # /Applications on 2026-08-29 and the gate went quiet - see below for why that was dangerous.
-# 2026-11-23: the project moved to Godot 4.6.3, installed BESIDE 4.4 (kept for A/B comparisons) -
-# so the 4.6 app comes first, or the gate would quietly check the project with the old engine.
 if [ -z "${GODOT:-}" ]; then
 	for _g in \
-		"/Applications/Godot_4.6.3.app/Contents/MacOS/Godot" \
 		"/Applications/Godot.app/Contents/MacOS/Godot" \
 		"/Users/sgyzrbl/Downloads/Godot.app/Contents/MacOS/Godot" \
 		"$HOME/Applications/Godot.app/Contents/MacOS/Godot"; do
 		if [ -x "$_g" ]; then GODOT="$_g"; break; fi
 	done
 fi
-GODOT="${GODOT:-/Applications/Godot_4.6.3.app/Contents/MacOS/Godot}"
+GODOT="${GODOT:-/Applications/Godot.app/Contents/MacOS/Godot}"
 PROJ="/Users/sgyzrbl/rally-sim"
 MARKER="$PROJ/.last_check"
 cd "$PROJ" || exit 0
